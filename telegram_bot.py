@@ -11,6 +11,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
+from telegram_go import build_go_callback_handler, build_go_handler
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 
 logging.basicConfig(
@@ -108,6 +109,10 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
+    # Not exposed via setMyCommands anywhere in this repo, so it stays out
+    # of the Telegram command menu / autocomplete for regular Orna users.
+    app.add_handler(build_go_handler())
+    app.add_handler(build_go_callback_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.
