@@ -32,7 +32,16 @@ class OllamaError(RuntimeError):
     """Raised when the local Ollama server can't be reached or replies unusably."""
 
 
-async def _chat_json(system: str, user: str) -> dict:
+async def _chat_json(system: str, user: str, retries: int = 1) -> dict:
+    try:
+        return await _chat_json_once(system, user)
+    except OllamaError:
+        if retries <= 0:
+            raise
+        return await _chat_json(system, user, retries - 1)
+
+
+async def _chat_json_once(system: str, user: str) -> dict:
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
