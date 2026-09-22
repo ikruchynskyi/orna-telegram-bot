@@ -384,8 +384,39 @@ def _harvest_meta(soup: BeautifulSoup) -> _PageMeta:
 
     Handles both English ("Place:" / "Type:" / "Tier:" / "Rarity:") and
     Ukrainian ("Тип:" twice — first=Place, second=Type — / "Ранг:" / "Рідкість:").
+
+    Site markup (as of Sept 2026) renders these as `<dl class="entry-facts">
+    <dt>Label</dt><dd>Value</dd></dl>` pairs with no colon at all, so that's
+    tried first; the colon-based regexes on flattened text stay as a fallback
+    for any page that still uses the older inline "Label: value" format.
     """
     meta = _PageMeta()
+
+    dt_dd_label_map = {
+        "place": "place",
+        "type": "type_str",
+        "tier": "tier", "ранг": "tier",
+        "rarity": "rarity", "рідкість": "rarity",
+    }
+    tip_values: List[str] = []
+    for dt in soup.select("dl.entry-facts dt"):
+        dd = dt.find_next_sibling("dd")
+        if dd is None:
+            continue
+        label = _normalize_label(dt.get_text(strip=True))
+        value = dd.get_text(strip=True)
+        if label == "тип":
+            tip_values.append(value)
+            continue
+        attr = dt_dd_label_map.get(label)
+        if attr and not getattr(meta, attr):
+            setattr(meta, attr, value)
+    if tip_values:
+        if not meta.place:
+            meta.place = tip_values[0]
+        if not meta.type_str and len(tip_values) >= 2:
+            meta.type_str = tip_values[1]
+
     page_text = soup.get_text(separator="\n")
 
     # English labels
