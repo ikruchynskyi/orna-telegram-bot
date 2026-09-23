@@ -111,8 +111,8 @@ def _translations() -> dict:
 
 def refresh_cache() -> None:
     """Force a re-download next time either file is needed."""
-    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache
-    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = None
+    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache
+    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = None
     for name in ("codex.json", "translations.en.json"):
         _cache_path(name).unlink(missing_ok=True)
 
@@ -293,6 +293,7 @@ class EffectMatch:
     code: str
     chance: Optional[str] = None
     tier: Optional[int] = None
+    sort_value: Optional[str] = None  # set when query_records was called with sort_by
 
 
 
@@ -304,6 +305,36 @@ class EffectMatch:
 _CMP_OPS = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operator.le,
             "=": operator.eq, "==": operator.eq, "!=": operator.ne}
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+_stat_field_cache: Optional[dict] = None
+
+
+def _all_stat_fields() -> dict:
+    """normalized (lowercase, spaces/hyphens->underscore) -> real stats key,
+    from translations['stats'] - the authoritative list of every stat name
+    the game data uses (attack/magic/... plus long-tail ones like
+    follower_stats, crit_damage, multi-target_damage)."""
+    global _stat_field_cache
+    if _stat_field_cache is None:
+        keys = _translations().get("stats", {}).keys()
+        _stat_field_cache = {k.lower().replace(" ", "_").replace("-", "_"): k for k in keys}
+    return _stat_field_cache
+
+
+def _resolve_stat_field(field: str, record_keys=()) -> Optional[str]:
+    """LLM-provided field name -> real stats dict key. Tries an exact
+    (normalized) match first, then fuzzy match, so minor spelling/plural
+    drift from the model (e.g. 'follower_stat' vs 'follower_stats') still
+    resolves."""
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    fields = _all_stat_fields()
+    if norm in fields:
+        return fields[norm]
+    pool = list(fields.keys()) + list(record_keys)
+    close = difflib.get_close_matches(norm, pool, n=1, cutoff=0.6)
+    if not close:
+        return None
+    return fields.get(close[0], close[0])
 
 
 def _parse_number(raw) -> Optional[float]:
@@ -334,7 +365,9 @@ def _eval_condition(record: dict, cond: dict) -> bool:
     field = cond.get("field") or ""
 
     if kind == "stat":
-        val = _parse_number((record.get("stats") or {}).get(field))
+        stats = record.get("stats") or {}
+        real_field = field if field in stats else _resolve_stat_field(field, stats.keys())
+        val = _parse_number(stats.get(real_field))
         target = _parse_number(cond.get("value"))
         op = _CMP_OPS.get(cond.get("cmp", ">"))
         return val is not None and target is not None and op is not None and op(val, target)
@@ -371,26 +404,48 @@ def _eval_condition(record: dict, cond: dict) -> bool:
     return False
 
 
-def query_records(conditions: list, combinator: str = "and", category: Optional[str] = None, limit: int = 50) -> list:
+def query_records(conditions: list, combinator: str = "and", category: Optional[str] = None,
+                   limit: int = 50, sort_by: Optional[str] = None, sort_dir: str = "desc",
+                   offset: int = 0) -> list:
     """Generic multi-attribute search: evaluate `conditions` (see
     _eval_condition) against every record, combined with AND/OR. Returns
     EffectMatch-shaped results (field/code/chance left blank - only
-    category/id/name/tier apply to a multi-attribute query result)."""
-    if not conditions:
+    category/id/name/tier/sort_value apply to a multi-attribute query
+    result).
+
+    `sort_by`, when given, ranks matches by that stat (resolved the same
+    fuzzy way as a "stat" condition's field) instead of codex.json's own
+    order - lets "the item with the biggest mag" work as sort_by="magic"
+    with no filter conditions at all (conditions may be empty in that
+    case). Records missing that stat entirely are excluded, since there's
+    nothing to rank them by. `offset` skips the top N ranked results
+    (e.g. the 2nd-highest)."""
+    if not conditions and not sort_by:
         return []
     combine = any if combinator == "or" else all
     codex = _codex()["main"]
     categories = [category] if category and category in codex else list(codex.keys())
 
-    results: list = []
+    matched: list = []
     for cat in categories:
         for record in codex.get(cat, {}).values():
-            if combine(_eval_condition(record, c) for c in conditions):
-                results.append(EffectMatch(
-                    category=record["category"], id=record["id"],
-                    name=display_name(record["category"], record["id"]),
-                    field="", code="", tier=record.get("tier"),
-                ))
-                if len(results) >= limit:
-                    return results
-    return results
+            if conditions and not combine(_eval_condition(record, c) for c in conditions):
+                continue
+            sort_value = None
+            if sort_by:
+                stats = record.get("stats") or {}
+                real_field = sort_by if sort_by in stats else _resolve_stat_field(sort_by, stats.keys())
+                sort_value = _parse_number(stats.get(real_field)) if real_field else None
+                if sort_value is None:
+                    continue
+            matched.append((sort_value, EffectMatch(
+                category=record["category"], id=record["id"],
+                name=display_name(record["category"], record["id"]),
+                field="", code="", tier=record.get("tier"),
+                sort_value=f"{sort_value:g}" if sort_value is not None else None,
+            )))
+
+    if sort_by:
+        matched.sort(key=lambda pair: pair[0], reverse=(sort_dir != "asc"))
+    results = [m for _, m in matched]
+    return results[offset:offset + limit]

@@ -182,8 +182,9 @@ async def parse_conditions(text: str) -> Dict:
     conditions for orna_aussies.query_records. A separate, focused call
     from route_query (see its docstring for why) - this one's whole job
     is producing a list of:
-      {"kind":"stat","field":"<hp|mana|attack|magic|defense|resistance|
-       dexterity|ward|crit|foresight>","cmp":">|<|>=|<=|=","value":<number>}
+      {"kind":"stat","field":"<snake_case stat name, any real Orna stat -
+       not just the common ones, e.g. follower_stats, crit_damage>",
+       "cmp":">|<|>=|<=|=","value":<number, may be negative>}
       {"kind":"effect","field":"immunities|causes|gives|","value":"<text,
        e.g. 'stunned' or 'T Mag 3'>"}
       {"kind":"text","field":"description|name|","value":"<substring>"}
@@ -191,36 +192,54 @@ async def parse_conditions(text: str) -> Dict:
        item_type|family|element>","cmp":"=|>|<|>=|<=","value":"<text or number>"}
 
     Returns {"conditions": [...], "combinator": "and"|"or", "category":
-    "<one of _ORNA_CATEGORIES or empty>"}. Never returns an empty
-    conditions list (orna_aussies.query_records treats that as "nothing
-    matches") - falls back to one {"kind":"text"} condition on the raw
-    text if the model can't be reached or returns nothing usable, so a
-    genuinely-asked query doesn't just dead-end silently.
+    "<one of _ORNA_CATEGORIES or empty>", "sort_by": "<stat field or
+    empty>", "sort_dir": "asc"|"desc"}. Never returns an empty conditions
+    list with no sort_by either (orna_aussies.query_records treats that
+    as "nothing matches") - falls back to one {"kind":"text"} condition
+    on the raw text if the model can't be reached or returns nothing
+    usable, so a genuinely-asked query doesn't just dead-end silently.
     """
     system = (
         "Parse an Orna RPG database search into structured conditions. Reply with "
         'strict JSON: {"conditions": [...], "combinator": "and"|"or", "category": '
         '"<one of items, monsters, bosses, raids, followers, classes, spells, '
-        'buildings, dungeons, or empty>"}.\n'
+        'buildings, dungeons, or empty>", "sort_by": "<stat field or empty>", '
+        '"sort_dir": "asc"|"desc"}.\n'
         "Each condition is one of:\n"
-        '  {"kind":"stat","field":"<hp|mana|attack|magic|defense|resistance|'
-        'dexterity|ward|crit|foresight>","cmp":">|<|>=|<=|=","value":<number>} - a '
-        'numeric stat threshold, e.g. "magic > 250", "crit above 3%" (strip the % '
-        "sign, value is just the number).\n"
+        '  {"kind":"stat","field":"<snake_case stat name>","cmp":">|<|>=|<=|=",'
+        '"value":<number, may be negative>} - a numeric stat threshold, e.g. '
+        '"magic > 250", "crit chance above 3%" (strip the % sign, value is just '
+        "the number). field is NOT limited to a fixed list - Orna items have "
+        "dozens of stats beyond the obvious ones (hp, mana, attack, magic, "
+        "defense, resistance, dexterity, ward, foresight, crit, crit_chance, "
+        "crit_damage, follower_stats, summon_stats, view_distance, gold_bonus, "
+        "exp_bonus, healing, life_siphon, dodge_chance, accuracy, ...) - infer the "
+        "best snake_case field name straight from the user's wording (e.g. "
+        '"follower stats" -> "follower_stats", "summon stats" -> "summon_stats").\n'
+        '  IMPORTANT crit distinction: "crit" or "crit chance" -> field "crit" or '
+        '"crit_chance" (how often you crit). "crit damage" -> field "crit_damage" '
+        "(a SEPARATE stat - how much extra damage a crit does). Never conflate the "
+        "two.\n"
+        '  Negative values: a stat CAN be asked as negative, e.g. "items with '
+        'negative defense" or "defense below 0" -> {"kind":"stat","field":'
+        '"defense","cmp":"<","value":0}. But "what lowers defense" / "what '
+        'reduces attack" (asking for a DEBUFF effect, not an item\'s own stat) is '
+        'usually "kind":"effect" instead - see below.\n'
         '  {"kind":"effect","field":"immunities|causes|gives|","value":"<effect '
         "text>\"} - immunity to / causes / grants a NAMED status or buff/debuff "
-        '(e.g. value "stunned" or "T Mag 3" - a specific effect name, never a bare '
-        'number). field: "immunities" for "immune"/"resistant to", "causes" for '
-        'inflicts-on-enemy, "gives" for grants/self-or-team buffs, empty if '
-        "unclear.\n"
-        "IMPORTANT: if the request has a NUMBER/threshold on a base stat (magic, "
-        'attack, defense, crit%, etc.) it is ALWAYS "kind":"stat", even if the '
-        'wording uses "gives"/"has"/"with" - e.g. "what gives magic over 220" and '
-        '"items with magic > 220" are BOTH {"kind":"stat","field":"magic",'
-        '"cmp":">","value":220}, NOT an effect lookup for a "Mag Up" buff. Reserve '
-        '"kind":"effect" for when the request names an actual status/buff by name '
-        "(stunned, poisoned, Mag Up, T. Att Down, ...) with no numeric stat "
-        "threshold attached.\n"
+        '(e.g. value "stunned", "T Mag 3", or "Def Down" - a specific effect name, '
+        "never a bare number). field: \"immunities\" for \"immune\"/\"resistant "
+        'to", "causes" for inflicts-on-enemy (e.g. "what lowers enemy defense" -> '
+        'value "Def Down", field "causes"), "gives" for grants/self-or-team buffs, '
+        "empty if unclear.\n"
+        "IMPORTANT: if the request has a NUMBER/threshold on a stat (magic, "
+        'attack, crit damage, follower stats, etc.) it is ALWAYS "kind":"stat", '
+        'even if the wording uses "gives"/"has"/"with" - e.g. "what gives magic '
+        'over 220" and "items with magic > 220" are BOTH {"kind":"stat","field":'
+        '"magic","cmp":">","value":220}, NOT an effect lookup for a "Mag Up" buff. '
+        'Reserve "kind":"effect" for when the request names an actual status/buff '
+        "by name (stunned, poisoned, Mag Up, T. Att Down, ...) with no numeric "
+        "stat threshold attached.\n"
         '  {"kind":"text","field":"description|name|","value":"<substring>"} - the '
         "name or description should contain this text.\n"
         '  {"kind":"attr","field":"<tier|rarity|useable_by|place|type|item_type|'
@@ -230,11 +249,27 @@ async def parse_conditions(text: str) -> Dict:
         '"and" unless the user clearly says "or"/"either".\n'
         '"category": set only if the user named a specific category (e.g. "which '
         'spells..." -> "spells"), else empty to search everything.\n'
+        '"sort_by"/"sort_dir": set these (instead of, or together with, '
+        "conditions) when the user asks for a RANKING rather than a plain filter - "
+        '"the item with the biggest mag", "most powerful mag item", "weakest '
+        'defense follower", "top crit damage weapon". sort_by is the stat field '
+        "(same naming rules as a stat condition's field - any real Orna stat, "
+        'e.g. "magic", "crit_damage", "follower_stats"). sort_dir is "desc" for '
+        'biggest/highest/most/best/strongest, "asc" for smallest/lowest/least/'
+        'worst/weakest. conditions can be EMPTY when the ask is pure ranking with '
+        'no other filter (e.g. "item with the biggest mag" -> conditions: [], '
+        'sort_by: "magic", sort_dir: "desc") - only add a condition too if the '
+        'user also gave an explicit filter (e.g. "best mag item that also gives T '
+        'Mag 3" -> one effect condition PLUS sort_by "magic"). Leave sort_by empty '
+        "for a plain filter query with no ranking language.\n"
         'Example: "mag > 250 and crit > 3%" -> conditions: '
         '[{"kind":"stat","field":"magic","cmp":">","value":250},'
-        '{"kind":"stat","field":"crit","cmp":">","value":3}], combinator: "and".'
+        '{"kind":"stat","field":"crit","cmp":">","value":3}], combinator: "and".\n'
+        'Example: "what is the item with the biggest mag" -> conditions: [], '
+        'sort_by: "magic", sort_dir: "desc".'
     )
-    fallback = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and", "category": ""}
+    fallback = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and",
+                "category": "", "sort_by": "", "sort_dir": "desc"}
     try:
         data = await _chat_json(system, text)
     except OllamaError:
@@ -243,12 +278,15 @@ async def parse_conditions(text: str) -> Dict:
     raw_conditions = data.get("conditions")
     conditions = [c for c in raw_conditions if isinstance(c, dict) and c.get("kind") in _CONDITION_KINDS] \
         if isinstance(raw_conditions, list) else []
-    if not conditions:
+    sort_by = str(data.get("sort_by") or "").strip()
+    if not conditions and not sort_by:
         return fallback
 
     combinator = data.get("combinator") if data.get("combinator") in ("and", "or") else "and"
     category = data.get("category") if data.get("category") in _ORNA_CATEGORIES else ""
-    return {"conditions": conditions, "combinator": combinator, "category": category}
+    sort_dir = data.get("sort_dir") if data.get("sort_dir") in ("asc", "desc") else "desc"
+    return {"conditions": conditions, "combinator": combinator, "category": category,
+            "sort_by": sort_by, "sort_dir": sort_dir}
 
 
 async def extract_quantities(text: str, resources: List[str]) -> Dict[str, int]:

@@ -145,7 +145,12 @@ def _result_list_keyboard(entries: list[dict], key: str, page: int = 0) -> Inlin
     rows = []
     for i, e in enumerate(chunk):
         tier = e.get("tier")
-        label = f"{e['name']} (★{tier})" if tier else e["name"]
+        sort_value = e.get("sort_value")
+        label = e["name"]
+        if sort_value is not None:
+            label = f"{label} ({sort_value})"
+        elif tier:
+            label = f"{label} (★{tier})"
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"orna|open|{key}|{start + i}")])
     nav = []
     if page > 0:
@@ -217,6 +222,29 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
             logger.info("orna: %r found nothing, %r did - using that", query, collapsed)
             query, results = collapsed, retry_results
 
+    # route_query sends anything not obviously a stat/effect/attribute query
+    # down this name-lookup path, but some of those are really a description
+    # substring (e.g. "strange sword" only appears in "Bladeless"'s
+    # description, not its name) - a plain name search here dead-ends, so
+    # fall back to a description-text query_records search before giving up.
+    if not results:
+        try:
+            desc_matches = await asyncio.to_thread(
+                query_records, [{"kind": "text", "field": "description", "value": query}],
+            )
+        except Exception:
+            desc_matches = []
+        if desc_matches:
+            logger.info("orna: %r found nothing by name, found %d by description", query, len(desc_matches))
+            desc_entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier} for m in desc_matches]
+            key = _remember({"entries": desc_entries, "lang": lang})
+            await message.reply_text(
+                f"🔎 <b>{html.escape(query)}</b> (за описом) — {len(desc_entries)} результат(и)",
+                parse_mode="HTML",
+                reply_markup=_result_list_keyboard(desc_entries, key),
+            )
+            return
+
     if not results:
         await message.reply_text(f"У кодексі нічого не знайдено за запитом: {html.escape(query)}", parse_mode="HTML")
         return
@@ -255,12 +283,15 @@ async def _run_query_search(message, text: str) -> None:
     try:
         parsed = await parse_conditions(text)
     except OllamaError:
-        parsed = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and", "category": ""}
+        parsed = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and",
+                  "category": "", "sort_by": "", "sort_dir": "desc"}
 
     conditions = parsed["conditions"]
+    sort_by = parsed.get("sort_by") or None
     try:
         matches = await asyncio.to_thread(
             query_records, conditions, parsed.get("combinator", "and"), parsed.get("category") or None,
+            50, sort_by, parsed.get("sort_dir", "desc"),
         )
     except Exception as e:
         logger.warning("orna: query search failed for %r", text, exc_info=True)
@@ -274,9 +305,13 @@ async def _run_query_search(message, text: str) -> None:
     # playorna urls, not aussiescodex - tapping a result should show the
     # full stats/facts/sections in chat via _send_entry, same as a name
     # search; the aussiescodex "Assess" link lives on that entry view.
-    entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier} for m in matches]
+    entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
+                "sort_value": m.sort_value} for m in matches]
     joiner = " AND " if parsed.get("combinator", "and") == "and" else " OR "
-    summary = joiner.join(_describe_condition(c) for c in conditions)
+    summary = joiner.join(_describe_condition(c) for c in conditions) if conditions else ""
+    if sort_by:
+        rank_label = f"{'найбільший' if parsed.get('sort_dir', 'desc') == 'desc' else 'найменший'} {sort_by}"
+        summary = f"{summary} — {rank_label}" if summary else rank_label
     suffix = " (показано перші 50)" if len(entries) >= 50 else ""
 
     key = _remember({"entries": entries, "lang": "en"})

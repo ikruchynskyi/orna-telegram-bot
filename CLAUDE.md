@@ -285,6 +285,64 @@ re-commit ~3MB of upstream data on every game patch. If this changes
 again, update both `CACHE_TTL_SECONDS` in `orna_aussies.py` and this
 note together.
 
+**A `kind: "stat"` condition's `field` is NOT restricted to a fixed
+enum - `translations.en.json`'s `stats` dict (~155 keys) is the real
+vocabulary, and it's much wider than the obvious `hp`/`attack`/`magic`/
+etc.: things like `follower_stats`, `summon_stats`, `crit_damage`
+(distinct from `crit`/`crit_chance`), `view_distance`, `multi-target_damage`
+all live there too.** An earlier version of `parse_conditions`'s prompt
+hardcoded a 10-field enum, which silently broke any query for a stat
+outside that list (reported live: "follower stats > 10%" → "nothing
+found", even though 19 items actually have it). The fix has two halves
+that both matter: the prompt now tells the model to infer any reasonable
+snake_case field name instead of picking from a closed list, **and**
+`orna_aussies._eval_condition`'s `"stat"` branch fuzzy-resolves whatever
+field name comes back (`_resolve_stat_field`, exact-normalized match
+first, then `difflib.get_close_matches` against `translations['stats']`
+keys) - so small drift like singular/plural or an extra space still
+lands on the right key. Verified against live data (`follower_stats`,
+`crit_damage` vs `crit`, negative thresholds like `defense < -50` - all
+real in the data) and against 3 repeated real-model calls per phrasing
+before deploying, same as every other prompt change this session.
+
+**"What lowers X" is ambiguous between an effect (a debuff that reduces
+a stat) and a stat condition (an item whose own stat is negative) - the
+prompt disambiguates by whether the ask targets an enemy/buff-by-name
+vs the item's own numbers.** "What lowers enemy defense" → `kind:
+"effect"`, `field: "causes"`, value `"Def Down"` (routes through the
+existing effect-code resolver, which already has `def_d`/`def_dd` etc.
+in `translations['status']`). "Items with negative defense" → `kind:
+"stat"`, `field: "defense"`, `cmp: "<"`, `value: 0` - `_parse_number`
+already handled negative values fine (`"-130"` → `-130.0`), the gap was
+purely that the prompt never told the model negative stat values were a
+legitimate thing to ask for.
+
+**Ranking queries ("the item with the biggest mag", "weakest defense
+follower") are a `sort_by`/`sort_dir` pair on `query_records`, not a new
+condition kind.** `parse_conditions` now returns `sort_by`/`sort_dir`
+alongside `conditions` - conditions can be empty when the ask is pure
+ranking with no other filter. `query_records` resolves `sort_by`
+through the same fuzzy field resolver as a stat condition, drops records
+missing that stat entirely (nothing to rank them by), sorts, then slices
+by `offset`/`limit`. `EffectMatch.sort_value` carries the formatted
+number through to the results list UI so the ranked value is visible
+without opening each entry (`(410)` next to the item name, replacing the
+tier star for that result set). Verified: top-5 magic items, bottom-5
+defense items, and offset-by-1 all checked directly against live data,
+plus repeated real-model calls confirming `sort_by`/`sort_dir` come back
+correctly for several phrasings including one that combines a filter
+condition with a sort.
+
+**A codex name search that turns up nothing falls back to an
+aussiescodex description-substring search before giving up** (`
+_run_codex_search`, after the existing "rainsong" space-collapse retry).
+Covers requests like "strange sword" that only match an item's
+*description* ("Bladeless"'s), not its name - `route_query` naturally
+sends these down the name-lookup ("codex") path since there's no
+stat/effect/attribute language to trigger "query" intent, so the name
+search has to be the one that recovers rather than trying to get the
+classifier prompt to somehow guess this belongs to the other path.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers
