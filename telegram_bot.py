@@ -17,7 +17,7 @@ from telegram import (
 )
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
-from telegram_resources import build_resource_conversation
+from telegram_resources import build_reminder_callback_handler, build_resource_conversation
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
 from telegram_remind import build_remind_handler, reschedule_pending
 from telegram_orna import build_orna_callback_handler, build_orna_handler, build_update_codex_handler
@@ -199,6 +199,9 @@ def main():
     # through to assess/resources below) for every other chat/message.
     app.add_handler(build_go_continue_handler())
     app.add_handler(build_remind_handler())
+    # "🔔 remind me" buttons on a resource report - public, not gated like
+    # /remind itself (see telegram_remind.schedule_reminder's docstring).
+    app.add_handler(build_reminder_callback_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.

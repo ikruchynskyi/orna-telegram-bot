@@ -51,7 +51,10 @@ glue around three live, unmocked external services.
 - `telegram_remind.py` — hidden `/remind` command (same allowlist as
   `/go`): schedules a one-off reminder via PTB's `JobQueue`, persisted to
   `reminders.json` so it survives the frequent `launchctl` reloads this
-  repo's development involves.
+  repo's development involves. `schedule_reminder` is a separate public,
+  UNGATED entry point onto the same scheduling/persistence machinery -
+  `telegram_resources.py`'s "remind me when this resource lands" buttons
+  use it directly, without going through the gated command.
 - `usage_stats.py` — usage counters (questions per command, LLM calls per
   model), persisted to `usage_stats.json` for the same reload-survival
   reason as `reminders.json`. Viewed via the hidden `/stats` command
@@ -59,9 +62,6 @@ glue around three live, unmocked external services.
 - `orna_assess.py` — pure math: upgrade-projection from OCR'd stats.
 - `orna_proofs.py` — pure math: guild-proof pricing, ported from
   OrnaCodex's `ProofView.vue`. See the docstring for the formula.
-- `orna_calendar.py` — builds Google Calendar "add event" prefill links.
-  All-day events by design — the exact daily shop-reset time and the
-  user's timezone are both unknown, so a timed event would just be wrong.
 - `orna_material_names_uk.py` / `.json` / `orna_scrape_material_names.py` —
   static EN↔UK material name table + the script that generates it.
 - `telegram_go.py` — hidden `/go` command, deliberately unrelated to Orna.
@@ -686,11 +686,33 @@ other.
 send_report_blocks` packs per-material report blocks into as few Telegram
 messages as fit under ~3500 chars, splitting on block boundaries so an
 `<a>`/`<b>` tag never gets cut mid-message, with a line-level fallback for a
-single oversized block. This replaced an earlier design that sent a second
-message with all calendar links concatenated — that could exceed Telegram's
-4096-char cap and silently fail to send, which is why calendar links are
-now embedded as per-row `<a href>`s in the main report instead of a
-separate message.
+single oversized block.
+
+**Resource reports offer "🔔 remind me" buttons instead of Google Calendar
+links - deliberately in one separate follow-up message, not per-row.**
+`build_report` returns `(blocks, bundles)`: the text blocks as before, plus
+one `ReminderBundle` per (guild, date) - materials landing at the same
+guild on the same day share one bundle/button/reminder, since that's one
+shop visit. `send_report_blocks(message, blocks, bundles)` sends the text
+first, then - if there are any bundles - one more message with a button
+per bundle; tapping one calls `telegram_remind.schedule_reminder` (a
+public, UNGATED entry point separate from the gated `/remind` command,
+since this needs to work for every guild member) to fire a message at
+00:05 server-local on the occurrence date. Buttons live in their own
+message rather than inline per report row because report blocks get
+packed several-per-message to fit Telegram's length cap - a button
+"belonging" to one row of a multi-block message has no single
+well-defined message to attach to, so one follow-up panel sidesteps that
+entirely. State (which bundle a tap refers to) lives in an in-memory
+`_REMINDER_STATE` dict keyed by a short id in `callback_data`, same
+pattern as `telegram_orna._STATE`/`telegram_go._SESSIONS`; a `"scheduled"`
+set per state entry guards against a double-tap creating two identical
+reminders. Replaced the earlier `orna_calendar.py` (deleted) design
+outright, per explicit ask - a reminder the bot actually delivers beats a
+link out to a separate app the user has to remember to check, and sidesteps
+the same-day-timezone ambiguity that design's own comment already flagged
+(the new fire time inherits that same ambiguity, documented on
+`_bundle_fire_at`, rather than pretending it's precise).
 
 ## Verifying changes
 

@@ -8,8 +8,12 @@ how many of each, then replies with:
   - every guild that will sell each material, and when (next occurrence)
   - how many of that guild's proofs are needed to buy the requested amount
     (math ported from OrnaCodex's ProofView.vue — see orna_proofs.py)
-  - a Google Calendar link per guild/day so the user doesn't have to
-    remember to come back (see orna_calendar.py)
+  - a "🔔 remind me" button per guild/day, so the bot itself pings the user
+    right when that guild's rotation lands instead of relying on them to
+    come back and check (see schedule_reminder in telegram_remind.py -
+    replaced an earlier "add to Google Calendar" link with this, since a
+    reminder actually delivered by the bot beats a link out to a separate
+    app the user has to remember to check)
 
 A plain "/need <resources>" command is also accepted as a shortcut into the
 same flow, for when free-text detection isn't wanted.
@@ -25,8 +29,9 @@ Pipeline per free-text message:
      guild-proof costs, and reply.
 
 Register with:
-    from telegram_resources import build_resource_conversation
+    from telegram_resources import build_resource_conversation, build_reminder_callback_handler
     application.add_handler(build_resource_conversation())
+    application.add_handler(build_reminder_callback_handler())
 """
 from __future__ import annotations
 
@@ -34,11 +39,13 @@ import asyncio
 import datetime
 import html
 import logging
+import uuid
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -46,13 +53,43 @@ from telegram.ext import (
     filters,
 )
 
-from orna_calendar import MaterialNeed, build_calendar_link
 from orna_codex import fetch_material_meta
 from orna_proofs import GUILD_PROOFS, base_exchange_rate, proofs_needed
 from orna_sheets import GUILD_NAMES, fetch_sheet_data
 from telegram_nlp import OllamaError, extract_quantities, extract_resources
+from telegram_remind import schedule_reminder
 
 logger = logging.getLogger(__name__)
+
+
+class MaterialNeed(NamedTuple):
+    name: str
+    qty: int
+    proofs: int
+
+
+class ReminderBundle(NamedTuple):
+    """Everything landing at one guild on one day - a reminder covers the
+    whole bundle (one shop visit), not one material at a time."""
+    guild: str
+    occurrence: datetime.date
+    materials: List[MaterialNeed]
+
+
+# callback_data can't carry a whole bundle list, so a report message's
+# "remind me" buttons reference a short-lived key into this dict instead -
+# same pattern as telegram_orna._STATE / telegram_go._SESSIONS. "scheduled"
+# guards against a double-tap creating two identical reminders.
+_REMINDER_STATE: Dict[str, dict] = {}
+_REMINDER_STATE_MAX = 200
+
+
+def _remember_bundles(bundles: List[ReminderBundle]) -> str:
+    if len(_REMINDER_STATE) >= _REMINDER_STATE_MAX:
+        _REMINDER_STATE.pop(next(iter(_REMINDER_STATE)), None)
+    key = uuid.uuid4().hex[:10]
+    _REMINDER_STATE[key] = {"bundles": bundles, "scheduled": set()}
+    return key
 
 # ConversationHandler state: waiting for the user to reply with quantities.
 AWAITING_QUANTITIES = 1
@@ -173,8 +210,8 @@ async def handle_quantities(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop(_PENDING_KEY, None)
 
     await message.reply_text("Рахую…")
-    blocks = await build_report(collected, sheet_values)
-    await send_report_blocks(message, blocks)
+    blocks, bundles = await build_report(collected, sheet_values)
+    await send_report_blocks(message, blocks, bundles)
     return ConversationHandler.END
 
 
@@ -218,36 +255,63 @@ def _pack_chunks(units: List[str], limit: int, sep: str = "\n\n") -> List[str]:
     return chunks
 
 
-async def send_report_blocks(message, blocks: List[str]) -> None:
-    """Send report blocks (one per material) as as few HTML messages as fit.
+async def send_report_blocks(
+    message, blocks: List[str], bundles: Optional[List[ReminderBundle]] = None
+) -> None:
+    """Send report blocks (one per material) as as few HTML messages as fit,
+    then - if `bundles` is given and non-empty - one more message with a
+    "🔔 remind me" button per (guild, date) bundle.
 
     Chunking normally happens on block boundaries only, so an <a>/<b> tag
     never gets split across messages; a single oversized block (many guilds
     x many bundled materials) falls back to splitting on its own lines
     rather than failing to send at all.
+
+    Buttons live in one separate consolidated message rather than inline
+    per report row, on purpose: report blocks get packed several-per-message
+    to fit Telegram's length cap (see _pack_chunks), so a button "belonging"
+    to one row of a multi-block message has no single well-defined message
+    to attach to. One follow-up panel sidesteps that entirely and reads
+    better anyway - "here's what you can get reminders for" in one place.
     """
     for chunk_text in _pack_chunks(blocks, _MAX_MESSAGE_LEN):
         await message.reply_text(
             chunk_text, parse_mode="HTML", disable_web_page_preview=True
         )
 
+    if bundles:
+        key = _remember_bundles(bundles)
+        rows = [
+            [InlineKeyboardButton(
+                f"🔔 {b.guild} — {'сьогодні' if b.occurrence <= datetime.date.today() else f'за {(b.occurrence - datetime.date.today()).days} дн.'}",
+                callback_data=f"needrem|{key}|{i}",
+            )]
+            for i, b in enumerate(bundles)
+        ]
+        await message.reply_text(
+            "Поставити нагадування, коли ресурс зʼявиться в гільдії:",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+
 
 async def build_report(
     quantities: Dict[str, int], sheet_values: List[List[str]]
-) -> List[str]:
+) -> Tuple[List[str], List[ReminderBundle]]:
     """
     Build one HTML report block per requested material: tier/rarity, and
     every guild that sells it with the next date, days away, and proofs
-    needed — the date itself links to a Google Calendar "add event" draft
-    for that guild visit (materials sharing a guild+date are bundled into
-    one shared link, since that's one shop visit).
+    needed. Also returns one ReminderBundle per (guild, date) - materials
+    landing at the same guild on the same day are bundled together, since
+    that's one shop visit worth one reminder, not one per material -
+    for the caller to offer as "🔔 remind me" buttons via
+    send_report_blocks.
     """
     today = datetime.date.today()
     by_name = {row[0]: row for row in sheet_values if row}
 
-    # Pass 1: work out every material's guild/date/proof rows first — we
-    # can't build calendar links until every material's rows are in, since
-    # a later material might land on the same guild+date as an earlier one.
+    # Pass 1: work out every material's guild/date/proof rows first — a
+    # later material might land on the same guild+date as an earlier one,
+    # and bundles need to be complete before returning them.
     Row = Tuple[str, str, str, Optional[int], Optional[str], datetime.date]  # guild, date_str, when, proofs, currency, occurrence
     per_material: List[Tuple[str, List[str], List[Row]]] = []
     bundles: Dict[Tuple[str, datetime.date], List[MaterialNeed]] = defaultdict(list)
@@ -298,15 +362,7 @@ async def build_report(
                 material_rows.append((guild, date_str, when, None, None, occurrence))
         per_material.append((name, header, material_rows))
 
-    # Pass 2: now that every material's bundle is complete, build one
-    # calendar link per (guild, date) — shared by every row that lands there.
-    links: Dict[Tuple[str, datetime.date], str] = {
-        key: build_calendar_link(key[0], GUILD_PROOFS[key[0]].currency, key[1], materials)
-        for key, materials in bundles.items()
-    }
-
-    # Pass 3: render, embedding each row's date as a link into its shared
-    # calendar event where one exists.
+    # Pass 2: render (plain text now - no more per-row calendar link).
     blocks: List[str] = []
     for name, header, material_rows in per_material:
         lines = list(header)
@@ -314,20 +370,63 @@ async def build_report(
             date_esc = html.escape(date_str)
             padded_date = f"{date_esc:<14}"
             if proofs is not None:
-                link = links.get((guild, occurrence))
-                date_field = (
-                    f'<a href="{html.escape(link)}">{date_esc}</a>' + padded_date[len(date_esc):]
-                    if link
-                    else padded_date
-                )
                 lines.append(
-                    f"    {guild:<12}{date_field}{when:<10}{proofs} × {html.escape(currency)}"
+                    f"    {guild:<12}{padded_date}{when:<10}{proofs} × {html.escape(currency)}"
                 )
             else:
                 lines.append(f"    {guild:<12}{padded_date}{when}")
         blocks.append("\n".join(lines))
 
-    return blocks
+    reminder_bundles = [
+        ReminderBundle(guild=key[0], occurrence=key[1], materials=materials)
+        for key, materials in bundles.items()
+    ]
+    return blocks, reminder_bundles
+
+
+def _bundle_fire_at(occurrence: datetime.date) -> datetime.datetime:
+    """Fire just after midnight, server-local time, on the occurrence date.
+    Neither the exact daily shop-reset time nor the user's own timezone is
+    known (same ambiguity the old Google Calendar all-day-event design
+    accepted) - this is the closest deterministic approximation of "the day
+    it becomes available" without either piece of information."""
+    return datetime.datetime.combine(occurrence, datetime.time(0, 5))
+
+
+def _bundle_text(bundle: ReminderBundle) -> str:
+    items = ", ".join(f"{m.qty}x {m.name}" for m in bundle.materials)
+    return f"🎁 Гільдія {bundle.guild}: {items}"
+
+
+async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    parts = (query.data or "").split("|")
+    if len(parts) != 3 or parts[0] != "needrem":
+        return
+    key, idx_str = parts[1], parts[2]
+    state = _REMINDER_STATE.get(key)
+    if state is None:
+        await query.answer("Ця сесія застаріла — сформуйте звіт ще раз.", show_alert=True)
+        return
+    idx = int(idx_str) if idx_str.isdigit() else -1
+    bundles: List[ReminderBundle] = state["bundles"]
+    if not (0 <= idx < len(bundles)):
+        return
+    if idx in state["scheduled"]:
+        await query.answer("Вже встановлено.", show_alert=True)
+        return
+
+    bundle = bundles[idx]
+    schedule_reminder(
+        context.application, query.message.chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence),
+    )
+    state["scheduled"].add(idx)
+    await query.answer("✅ Нагадування встановлено!", show_alert=True)
+
+
+def build_reminder_callback_handler() -> CallbackQueryHandler:
+    return CallbackQueryHandler(handle_reminder_button, pattern=r"^needrem\|")
 
 
 async def cancel_resource_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

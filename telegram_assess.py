@@ -929,17 +929,18 @@ async def assess_item_screenshot(
     # found, hand off entirely instead of trying to parse it as an item.
     if looks_like_offerings_screen(ocr_text):
         try:
-            blocks = await build_offerings_report(ocr_text)
+            report = await build_offerings_report(ocr_text)
         except Exception as e:
             logger.exception("offerings report failed")
             await msg.reply_text(f"Не вдалося обробити пожертви: {e}")
             return ConversationHandler.END
-        if blocks is None:
+        if report is None:
             await msg.reply_text(
                 "Побачив «NEEDED OFFERINGS», але не зміг розпізнати жодного рядка ресурсу."
             )
             return ConversationHandler.END
-        await send_report_blocks(msg, blocks)
+        blocks, bundles = report
+        await send_report_blocks(msg, blocks, bundles)
         return ConversationHandler.END
 
     # Anguish-eligible items show a second "alternate stats" block below the

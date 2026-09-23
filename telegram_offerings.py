@@ -18,7 +18,7 @@ Each row below the header reads like:
 The shortfall (need - have) per material is computed, OCR'd names are
 resolved to the sheet's canonical spelling, and the result is handed
 straight to telegram_resources.build_report for the familiar
-guild-availability / proof-cost breakdown + calendar links.
+guild-availability / proof-cost breakdown + "remind me" reminder bundles.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 from orna_material_names_uk import UK_TO_EN
 from orna_sheets import fetch_sheet_data
 from telegram_nlp import OllamaError, extract_resources
-from telegram_resources import build_report, send_report_blocks
+from telegram_resources import ReminderBundle, build_report, send_report_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,12 @@ async def resolve_material_name(raw: str, known: List[str]) -> Optional[str]:
     return found[0] if found else None
 
 
-async def build_offerings_report(ocr_text: str) -> Optional[List[str]]:
+async def build_offerings_report(ocr_text: str) -> Optional[Tuple[List[str], List[ReminderBundle]]]:
     """
     Parse an offerings screenshot's OCR text and return the report as a list
-    of HTML blocks (see telegram_resources.build_report / send_report_blocks),
-    or None if no offering rows were found in the OCR text at all.
+    of HTML blocks plus reminder bundles (see telegram_resources.build_report
+    / send_report_blocks), or None if no offering rows were found in the OCR
+    text at all.
     """
     rows = parse_offering_lines(ocr_text)
     if not rows:
@@ -176,9 +177,9 @@ async def build_offerings_report(ocr_text: str) -> Optional[List[str]]:
         )
 
     if not shortfalls:
-        return [("\n".join(notes) if notes else "Бракує ресурсів немає — все зібрано.")]
+        return [("\n".join(notes) if notes else "Бракує ресурсів немає — все зібрано.")], []
 
-    blocks = await build_report(shortfalls, sheet_values)
+    blocks, bundles = await build_report(shortfalls, sheet_values)
     if notes:
         blocks = ["\n\n".join(notes), *blocks]
-    return blocks
+    return blocks, bundles

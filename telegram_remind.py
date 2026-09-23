@@ -87,6 +87,21 @@ def _schedule(app: Application, reminder_id: str, chat_id: int, text: str, fire_
     app.job_queue.run_once(_fire, when=delay, data=(reminder_id, chat_id, text), name=reminder_id)
 
 
+def schedule_reminder(app: Application, chat_id: int, text: str, fire_at: datetime) -> str:
+    """Public, UNGATED entry point for other modules to schedule a
+    reminder without going through the /remind command (which stays
+    GO_ALLOWED_USER_IDS-gated) - e.g. a "remind me when this resource
+    lands" button on the resource report, which needs to work for every
+    guild member, not just the admin allowlist. Same persistence /
+    reschedule-on-restart guarantees as a /remind-created one."""
+    reminder_id = uuid.uuid4().hex[:8]
+    store = _load()
+    store[reminder_id] = {"chat_id": chat_id, "text": text, "fire_at": fire_at.isoformat()}
+    _save(store)
+    _schedule(app, reminder_id, chat_id, text, fire_at)
+    return reminder_id
+
+
 async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     usage_stats.record_command("remind")
     message = update.effective_message
@@ -143,11 +158,7 @@ async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text("Give it something to remind you about, e.g. /remind 20m check the oven")
         return
 
-    reminder_id = uuid.uuid4().hex[:8]
-    store = _load()
-    store[reminder_id] = {"chat_id": message.chat_id, "text": text, "fire_at": fire_at.isoformat()}
-    _save(store)
-    _schedule(context.application, reminder_id, message.chat_id, text, fire_at)
+    reminder_id = schedule_reminder(context.application, message.chat_id, text, fire_at)
     await message.reply_text(f"⏰ [{reminder_id}] Will remind you at {fire_at.strftime('%Y-%m-%d %H:%M')}: {text}")
 
 
