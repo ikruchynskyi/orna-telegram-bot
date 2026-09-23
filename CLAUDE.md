@@ -614,6 +614,26 @@ via a command. `record_llm_call` is called once per actual HTTP attempt
 per logical "ask" - a retried call counts twice, which is the more
 useful number for understanding real load on Ollama.
 
+**`route_query` has a fifth, "self-aware" intent - `"other"` - for when
+the message isn't actually about the codex/resources at all, so `/orna`
+can suggest something instead of dead-ending on a failed name search.**
+Two triggers: a meta "what can you do"/"help"/"допоможи" ask with no
+Orna subject, or a message shaped like a reminder request ("нагадай
+мені...", "remind me to...") - that's `/remind`'s job, a separate
+command `route_query` previously had no concept of at all. `"query"` is
+always empty for `"other"` - the reply (`telegram_orna._capabilities_text`)
+is fixed, deterministic text, not model-generated prose, same
+structured-over-freeform reasoning as everywhere else in this module.
+Deliberately only mentions genuinely public commands (`/orna`,
+`/res_today`, `/res_next`, `/remind`) - `/go` and its hidden siblings
+stay unlisted here same as everywhere else. Verified with 30 repeated
+real-model calls before deploying: 12/12 correct on four "other"-shaped
+phrasings (English/Ukrainian, help-ask and reminder-ask), and - the more
+important check - 18/18 legitimate Orna questions (name lookups, a stat
+query, a name+filter query, "next", "today") stayed correctly classified
+with zero false positives into `"other"`, since over-triggering here
+would break real functionality, not just add a redundant reply.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

@@ -87,6 +87,27 @@ def _remember(state: dict) -> str:
     return key
 
 
+def _capabilities_text() -> str:
+    """Fixed, deterministic reply for route_query's "other" intent -
+    deliberately NOT model-generated prose (same reasoning as every
+    other structured-over-freeform choice in this codebase). Only
+    mentions genuinely public commands - /go and its hidden siblings
+    stay unlisted here same as everywhere else."""
+    return (
+        "Я вмію відповідати на питання про Orna:\n"
+        "• /orna <назва> — знайти предмет/боса/клас/спел у кодексі "
+        "(напр. /orna balor sword)\n"
+        "• /orna <питання> — пошук за характеристиками чи ефектами "
+        '(напр. "mag > 250", "що дає імунітет до оглушення", '
+        '"шоломи для мага, крім зброї")\n'
+        "• /orna що сьогодні — ресурси, доступні сьогодні\n"
+        "• /orna <ресурс> — коли з'явиться ресурс\n"
+        "• /res_today, /res_next — те саме окремими командами\n"
+        "• /remind <час> <текст> — поставити нагадування (це окрема команда, "
+        "не /orna)"
+    )
+
+
 # -----------------------------------------------------------------------------
 # "today" / "next" - same data the existing /res_today, /res_next serve
 # -----------------------------------------------------------------------------
@@ -443,7 +464,18 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         routed = await route_query(text)
     except OllamaError:
         routed = {"intent": "codex", "query": text}
-    intent, query = routed.get("intent", "codex"), routed.get("query") or text
+    intent = routed.get("intent", "codex")
+
+    if intent == "other":
+        # self-aware fallback: the request isn't actually about the codex/
+        # resources at all (a meta "what can you do" ask, or shaped like a
+        # reminder - a different command's job) - see route_query's
+        # docstring. Better to say so than to dead-end on a "codex" name
+        # search for text that was never a name.
+        await message.reply_text(_capabilities_text())
+        return
+
+    query = routed.get("query") or text
 
     if intent == "today":
         await message.reply_text(await _today_text())

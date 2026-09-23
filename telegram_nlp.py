@@ -136,13 +136,24 @@ _ORNA_CATEGORIES = (
 async def route_query(text: str) -> Dict[str, str]:
     """
     Classify a free-text /orna message (English or Ukrainian) into one of
-    four intents, translating to English along the way in one round trip.
+    five intents, translating to English along the way in one round trip.
 
-    Returns {"intent": "today"|"next"|"codex"|"query", "query": "<English
-    text>"}. For "query", "query" is passed to plan_queries (a
+    Returns {"intent": "today"|"next"|"codex"|"query"|"other", "query":
+    "<English text>"}. For "query", "query" is passed to plan_queries (a
     separate call - keeps each prompt's schema simple rather than one
     mega-prompt doing classification and structured condition extraction
     at once, which proved less reliable during development).
+
+    "other" is the self-aware fallback: the request isn't actually about
+    Orna's codex/resources at all - it's a meta "what can you do"/"help"
+    ask, or it's shaped like a reminder request (a job /remind, a
+    completely separate command, actually does). Without this, either
+    kind of message used to fall through to "codex" and dead-end on "no
+    results" - "other" lets the caller reply with a real answer (a
+    capability list, or a nudge toward /remind) instead of guessing.
+    "query" is always empty for "other" - the reply text is fixed,
+    written by the caller, not model-generated prose (same reasoning as
+    every other structured-over-freeform choice in this module).
 
     Falls back to {"intent": "codex", "query": text} if the model can't be
     reached - codex search's own "no results" reply is a safer default
@@ -151,7 +162,7 @@ async def route_query(text: str) -> Dict[str, str]:
     system = (
         'You route a Telegram message about the mobile RPG "Orna" (English or '
         'Ukrainian) into exactly one intent. Reply with strict JSON: {"intent": '
-        '"today"|"next"|"codex"|"query", "query": "<English text>"}.\n'
+        '"today"|"next"|"codex"|"query"|"other", "query": "<English text>"}.\n'
         '"today": asks what crafting materials/resources are available today, no '
         'specific material named. "query" empty.\n'
         '"next": asks about a SPECIFIC named crafting material and when/where it '
@@ -175,15 +186,27 @@ async def route_query(text: str) -> Dict[str, str]:
         'building, dungeon, or general Orna info by NAME ALONE (no class/slot/'
         'attribute restriction attached) - "query" is the translated English '
         "search text.\n"
-        'Always translate Ukrainian in "query" to English. For "today", "query" '
-        "can be empty."
+        '"other": the message ISN\'T actually asking about the Orna codex/'
+        'resources at all. Two cases: (1) a META question about the bot itself - '
+        '"what can you do", "help", "допоможи", "що ти вмієш" - no Orna subject '
+        "at all, just asking about capabilities. (2) shaped like a REMINDER "
+        'request - contains an explicit ask to be reminded/notified later '
+        '("нагадай мені...", "remind me to...", "notify me in 2 hours about...") '
+        "- that's a different command's job (/remind), not this one's. "
+        '"query" is ALWAYS empty for "other" - do not write a reply, just '
+        "classify. Be conservative: only use \"other\" when the message clearly "
+        "matches one of these two cases - anything with an actual Orna subject "
+        '(an item, a stat, an effect, a material) stays in "today"/"next"/'
+        '"codex"/"query" as usual, even if oddly phrased.\n'
+        'Always translate Ukrainian in "query" to English. For "today" and '
+        '"other", "query" can be empty.'
     )
     try:
         data = await _chat_json(system, text)
     except OllamaError:
         return {"intent": "codex", "query": text}
-    intent = data.get("intent") if data.get("intent") in ("today", "next", "codex", "query") else "codex"
-    query = str(data.get("query") or text).strip()
+    intent = data.get("intent") if data.get("intent") in ("today", "next", "codex", "query", "other") else "codex"
+    query = "" if intent == "other" else str(data.get("query") or text).strip()
     return {"intent": intent, "query": query}
 
 
