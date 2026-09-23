@@ -208,10 +208,19 @@ async def parse_conditions(text: str) -> Dict:
         'numeric stat threshold, e.g. "magic > 250", "crit above 3%" (strip the % '
         "sign, value is just the number).\n"
         '  {"kind":"effect","field":"immunities|causes|gives|","value":"<effect '
-        "text>\"} - immunity to / causes / grants a status or stat buff/debuff, "
-        'e.g. value "stunned" or "T Mag 3". field: "immunities" for '
-        '"immune"/"resistant to", "causes" for inflicts-on-enemy, "gives" for '
-        'grants/self-or-team buffs, empty if unclear.\n'
+        "text>\"} - immunity to / causes / grants a NAMED status or buff/debuff "
+        '(e.g. value "stunned" or "T Mag 3" - a specific effect name, never a bare '
+        'number). field: "immunities" for "immune"/"resistant to", "causes" for '
+        'inflicts-on-enemy, "gives" for grants/self-or-team buffs, empty if '
+        "unclear.\n"
+        "IMPORTANT: if the request has a NUMBER/threshold on a base stat (magic, "
+        'attack, defense, crit%, etc.) it is ALWAYS "kind":"stat", even if the '
+        'wording uses "gives"/"has"/"with" - e.g. "what gives magic over 220" and '
+        '"items with magic > 220" are BOTH {"kind":"stat","field":"magic",'
+        '"cmp":">","value":220}, NOT an effect lookup for a "Mag Up" buff. Reserve '
+        '"kind":"effect" for when the request names an actual status/buff by name '
+        "(stunned, poisoned, Mag Up, T. Att Down, ...) with no numeric stat "
+        "threshold attached.\n"
         '  {"kind":"text","field":"description|name|","value":"<substring>"} - the '
         "name or description should contain this text.\n"
         '  {"kind":"attr","field":"<tier|rarity|useable_by|place|type|item_type|'

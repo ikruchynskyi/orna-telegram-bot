@@ -276,13 +276,15 @@ edits the message's keyboard in place either way; the `page` handler
 branches on a `link_mode` flag stored alongside the entries to pick the
 right keyboard builder.
 
-**aussiescodex.com's `codex.json`/`translations.en.json` are committed to
-the repo, not just cached at runtime.** `orna_aussies` still caches both
-to `.aussies_cache/` with a 24h TTL for normal operation, but unlike
-`reminders.json` (genuinely per-deployment state, gitignored), these are
-upstream reference data the user explicitly wants version-controlled -
-don't add `.aussies_cache/` back to `.gitignore` without checking with
-them first.
+**aussiescodex.com's `codex.json`/`translations.en.json` are fetched
+dynamically and cached to disk, gitignored (`.aussies_cache/`), with a
+1-week TTL.** Briefly committed these to the repo instead in an earlier
+round of this work, per an explicit ask - reverted back to gitignored
+dynamic fetch on a follow-up ask in the same conversation, since a
+week-long TTL keeps them close enough to current without needing to
+re-commit ~3MB of upstream data on every game patch. If this changes
+again, update both `CACHE_TTL_SECONDS` in `orna_aussies.py` and this
+note together.
 
 ## Things that aren't obvious from reading one file at a time
 

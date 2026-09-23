@@ -37,9 +37,10 @@ items/bosses/followers/spells (verified: every other category 404s
 there, and its own nav doesn't link them either), so build_url falls
 back to playorna.com for monsters/raids/classes/buildings/dungeons.
 
-Network: httpx. Both files (~2.2MB + ~0.8MB) are cached on disk with a
-TTL, not re-downloaded on every query - the game's data doesn't change
-hour to hour.
+Network: httpx. Both files (~2.2MB + ~0.8MB) are cached on disk
+(.aussies_cache/, gitignored) with a 1-week TTL, not re-downloaded on
+every query - the game's data doesn't change day to day, and a week is a
+reasonable staleness bound against Orna's own patch cadence.
 """
 from __future__ import annotations
 
@@ -69,7 +70,7 @@ HEADERS = {
 HTTP_TIMEOUT = 30.0
 
 CACHE_DIR = Path(__file__).parent / ".aussies_cache"
-CACHE_TTL_SECONDS = 24 * 3600
+CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _cache_path(name: str) -> Path:
