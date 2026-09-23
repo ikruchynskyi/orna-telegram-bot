@@ -25,10 +25,21 @@ glue around three live, unmocked external services.
 - `telegram_resources.py` — the natural-language "what do I need"
   `ConversationHandler`, and the shared report builder (`build_report`,
   `send_report_blocks`) both this and `telegram_offerings.py` use.
-- `telegram_nlp.py` — Ollama REST client (`/api/chat`, `format="json"`).
-  Three calls: extract resource names from free text, extract quantities
-  from a reply, and route/translate a free-text `/orna` request. All three
-  set `"think": True` — see the note below on why that isn't optional.
+- `ollama_client.py` — shared low-level Ollama `/api/chat` client
+  (`think: True` + `format="json"` + tolerant JSON recovery + cloud→local
+  fallback), extracted from what used to be near-duplicate copies in
+  `telegram_nlp.py` and `telegram_go.py`. `chat_json` is one HTTP attempt;
+  `chat_json_with_fallback` tries Ollama Cloud first, falls back to local
+  on failure (mid-turn image-drop retry included). Raises `OllamaError` if
+  the parsed JSON isn't a dict — see the note below on why that check
+  matters, not just format compliance.
+- `telegram_nlp.py` — the two remaining local-only structured-extraction
+  calls: which materials a free-text message refers to, and what quantity
+  of each (used by `telegram_resources.py`'s conversation and `/orna`'s
+  `need` tool). Both call `ollama_client.chat_json` directly, local host
+  only, with a retry-once wrapper. `/orna`'s own routing/condition-parsing
+  used to live here (`route_query`/`plan_queries`) but was retired when
+  `/orna` became a real ReAct loop — see its section below.
 - `orna_sheets.py` — Google Sheets access for the Material Forecast tab.
 - `orna_codex.py` — two layers over playorna.com's codex: the original
   item-specific scraper (stats for assess, material tier/rarity for proof
@@ -45,9 +56,25 @@ glue around three live, unmocked external services.
   "mag > 250 and crit > 3%" or "what gives immunity to X" as a real search
   instead of guessing. Also cached to disk (`.aussies_cache/`), 24h TTL.
   See the `/orna` section.
-- `telegram_orna.py` — `/orna <text>`, a unified natural-language entry
-  point that routes into today's-resources / when's-it-available / codex
-  browsing / effect search. See its own section below.
+- `telegram_orna.py` — `/orna <text>`, a real ReAct loop (today/next/need/
+  search_codex/query/events/open_entry/knowledge_search/web_search/
+  calculate/assess/ask/finish tools) over Orna's data. See its own section
+  below — this is now the second most complex module in the repo after
+  `telegram_go.py`, and deliberately mirrors that file's loop design.
+- `orna_calendar.py` — scrapes `playorna.com/calendar/`'s live event list
+  (no `codex-bootstrap` JSON there, unlike every other codex page — plain
+  server-rendered `article.event-card` HTML). Filters to live/upcoming
+  events by real parsed datetimes, not left to the model — see the `/orna`
+  section for the live bug this fixes. Cached to disk like
+  `orna_aussies.py` but with a 6h TTL, not 1 week.
+- `orna_knowledge.py` / `orna_knowledge.txt` / `orna_scrape_knowledge.py` —
+  a curated community-knowledge reference (flattened text, fuzzy-searched)
+  for what playorna's codex genuinely doesn't track at all — most notably
+  per-boss elemental damage resistances/immunities. Static generated file
+  + the script that (re)generates it, same pattern as
+  `orna_material_names_uk.json`/`orna_scrape_material_names.py`. See the
+  `/orna` section for sources and why this is flattened text rather than
+  typed tables.
 - `telegram_remind.py` — hidden `/remind` command (same allowlist as
   `/go`): schedules a one-off reminder via PTB's `JobQueue`, persisted to
   `reminders.json` so it survives the frequent `launchctl` reloads this
@@ -93,7 +120,15 @@ check for real via `POST https://ollama.com/api/show {"model": "..."}`
 (with the same bearer token) rather than guessing from the name — it
 returns a `capabilities` list (`vision`, `tools`, `thinking`, ...) plus
 param count, and has already caught one wrong assumption during
-development (see the multimodal note below).
+development (see the multimodal note below). `_call_model` now delegates
+the actual cloud→local fallback mechanics to `ollama_client.
+chat_json_with_fallback` (shared with `/orna`'s loop — see its section) —
+`/go` still passes its own `GO_MODEL`/timeout defaults, so this delegation
+changed nothing about `/go`'s own behavior, just removed a duplicate
+implementation. `/orna`'s loop deliberately uses a SHORTER model-call
+timeout than `/go`'s (unchanged 90s read) — see the `/orna` section's
+reliability notes for why a step-budgeted loop and a single-shot-per-turn
+design want different timeout tradeoffs.
 
 **Model-authored replies go through `_markdown_to_html` + Telegram's HTML
 parse mode - nothing tells the model to write Markdown, but it does
@@ -212,22 +247,97 @@ Unlike `/go`, this is a real, visible feature for the Orna users the bot
 otherwise serves — introduced *alongside* the existing `/res_today`,
 `/res_next`, `/need`, and the free-text auto-detect flow rather than
 replacing them (a deliberate choice made with the user: zero risk to what
-guild members already rely on while `/orna` is proven out; the old
-commands can be retired later).
+guild members already rely on while `/orna` is proven out; `/res_today`/
+`/res_next` now delegate to `/orna`'s own `_today_text`/`_next_text`
+rather than keeping a second copy — see below — so at this point only the
+free-text `ConversationHandler` flow in `telegram_resources.py` is a
+genuinely separate implementation).
 
-**One LLM call routes and translates in a single round trip, then the LLM
-is out of the picture entirely.** `telegram_nlp.route_query` classifies a
-free-text message (English or Ukrainian) into `"today"` / `"next"` /
-`"codex"` and translates the relevant part to English, all in one prompt —
-this only became reliable after the `"think": True` fix above; the
-combined classify-and-translate ask was actually the *first* thing that
-surfaced the flakiness during development, and got no more reliable from
-simplifying the prompt or splitting it into separate calls until the real
-cause (`think: False`) was found and fixed. `"today"` and `"next"` reuse
-the exact same Google Sheet data `/res_today`/`/res_next` already serve;
-`"next"` falls through to codex search if the named thing isn't a known
-Material Forecast material (a boss, a non-shop item — codex search's own
-"no results" is a better dead end than a hard failure).
+### Architecture: a real ReAct loop, not a routing pipeline
+
+Through 2026-09-22, `/orna` was a bounded two-call pipeline: one LLM call
+(`route_query`) classified + translated the request, a second
+(`plan_queries`) turned a `"query"`-intent request into one or more
+structured condition blocks — deliberately **not** a ReAct loop at the
+time, the tradeoff being weighed explicitly against giving `/orna` the
+same multi-step loop `/go` has: rejected because looping a local-only
+model seemed likely to multiply flakiness across steps for what's usually
+a one-item lookup. Rebuilt 2026-09-23 into a genuine ReAct loop — ReAct
+tools: `today`/`next`/`need`/`search_codex`/`query`/`events`/`open_entry`/
+`knowledge_search`/`web_search`/`calculate`/`assess`/`ask`/`finish`, one
+action per turn via a JSON action schema (`{"thought","action",
+"action_input","args"}`), not native Ollama tool-calling — deliberately
+mirroring `/go`'s own `_advance`/session/step-budget design rather than
+inventing a second loop shape. What changed the calculus from the
+2026-09-22 rejection: `/orna` now also gets Ollama Cloud access (see
+below), and several live bugs (a bad codex-name guess, a follower-vs-item
+schema gap, a "how do I beat X" question the old pipeline had no path to
+answer at all) turned out to be exactly the shape a loop self-corrects —
+observe a dead end, reason, try something else — that a one-shot parse
+structurally can't recover from.
+
+**Session/step design**, in `telegram_orna.py`'s `OrnaSession`/
+`_ORNA_SESSIONS`/`_advance`/`_call_step_model`:
+- `MAX_STEPS = 16`. Only the first `CLOUD_STEPS = 8` turns are allowed to
+  try Ollama Cloud at all (still falling back to local mid-turn if the
+  cloud call itself fails, same as `/go`) — turns past that skip the cloud
+  attempt entirely, local only, since a request still running this long
+  is already the unusual case and spending more cloud quota/cost on it
+  isn't worth it when local can still finish the reasoning for free.
+- `LOOP_TIMEOUT_SECONDS = 300` — a hard wall-clock ceiling on the whole
+  request (`asyncio.wait_for` around the loop), regardless of step count.
+  This is the actual guarantee the loop always replies within a bounded
+  time no matter what any single step does; a hung/slow chain gets cut
+  off here with a "took too long, try again" message instead of the user
+  waiting indefinitely with no way to tell a slow loop from a stuck one.
+- `_call_step_model` retries a failed model call once before giving up
+  (matches `telegram_nlp`'s retry-once convention) — live incident
+  (2026-09-23): a long multi-tool-call request died on one empty-content
+  response from the local model; discarding every step of reasoning
+  already done over what's often a transient blip was a bad trade.
+- **`/orna`'s own model-call timeout (`STEP_MODEL_TIMEOUT`, 45s read) is
+  deliberately shorter than `/go`'s unchanged 90s** (`ollama_client.
+  DEFAULT_TIMEOUT`, still `/go`'s default via its own call). A step-
+  budgeted loop treats a slow/hanging call as pure waste — it can retry,
+  fall back to local, or just move on — where `/go`'s single-shot-per-
+  turn design tolerates waiting out a genuinely-slow-but-working cloud
+  response better. Live incident (2026-09-23): before this, one step
+  could spend ~2.5 minutes (a full 90s cloud timeout, then a slow empty
+  local response) before failing — see `concurrent_updates` below for why
+  that alone was enough to lock up the *entire* bot for every user, not
+  just the one slow request.
+- Logging is deliberately light (no `exc_info=True`) at every
+  intermediate retry/fallback point, with the full traceback logged once
+  — at the point the loop actually gives up — not at every layer.
+  Verified live: one failed step used to produce 4 redundant full
+  tracebacks (cloud→local fallback ×2 attempts, the retry warning, the
+  final give-up) for what is really one event.
+- Every non-`ask`/`finish` tool call posts its own rich Telegram message
+  immediately (same as `/go`'s `youtube` action) and returns a *short*
+  text observation to the model — `finish` is always just a closing
+  sentence, never where the actual data lives, so the model never has to
+  retype a guild/date table or a stat block from memory. Dead-end tool
+  calls (0 results) deliberately do **not** post their own "nothing
+  found" message anymore — live bug: several dead-end messages plus a
+  step-budget-exhausted message cluttered the chat for one request that
+  should have been a single clean answer; a `query`/`search_codex` dead
+  end is often just one step in the model retrying with a different
+  spelling or field, and only a genuinely final "nothing anywhere"
+  belongs in the user's chat (that's `finish()`'s job).
+- Any tool that produces a ranked number (`query`'s `sort_by`) includes
+  that number directly in its text observation as `"[sort_by=value]"`,
+  not just in the posted message's button labels — live bug: the model
+  couldn't see button labels as text, so it `open_entry`'d items just to
+  re-read a number it already had, wasting steps on a multi-slot
+  calculation.
+- Codex/query dead ends get the same mechanical retries `search_codex`
+  always had (trailing-number-strip, space-collapse) plus two added
+  2026-09-23: collapsing consecutive duplicated letters, and dropping a
+  leading word — both aimed at Ukrainian→English transliteration slips
+  ("клятий ортаніт" → "Cursed Ortannite"/"Ortannite", real name
+  "Ortanite"; note "Cursed X" can also be a REAL item name, e.g. "Cursed
+  Ortanite" the boss-family material, so the model tries the plain name
+  first but isn't told to assume a modifier is always spurious).
 
 **Every codex page - regardless of category - is one universal JSON
 schema, no per-category parsing needed.** Confirmed by fetching real pages
@@ -258,35 +368,37 @@ edits the existing message's keyboard in place, since that's genuinely
 the same list, not a new one.
 
 **Generic multi-attribute query ("mag > 250 and crit > 3%", "what gives
-immunity to stunned", "items with 'dragon' in the description") is a
-two-step LLM pipeline into one generic evaluator, not per-query-shape
-code.** `telegram_nlp.route_query` first classifies + translates (as
-before); when it returns intent `"query"`, a *second*, separately-focused
-call (`parse_conditions`) turns the already-English text into a flat list
-of typed conditions (`kind`: `"stat"` for a numeric threshold, `"effect"`
-for immunity/causes/gives, `"text"` for a description/name substring,
-`"attr"` for a flat field like rarity/tier), plus an `"and"`/`"or"`
-combinator and an optional category. Splitting classification from
-condition-extraction into two focused prompts was a deliberate choice —
-one mega-prompt doing both proved less reliable during development, the
-same lesson as the `"think"` fix above but about prompt *scope* rather
-than a request parameter. `orna_aussies.query_records` then evaluates
-every condition against every record with `_eval_condition` and combines
-with `all`/`any` — a single generic evaluator, not bespoke code per query
-shape, so a new `kind` is the only thing a new query type needs.
-`resolve_codes` (used by `kind: "effect"` conditions) first tries a small
-rule-based parser for the team/stat/direction/magnitude pattern
-(`_parse_buff_query` — e.g. "T Mag 3" → `t__mag_uuu`) before falling back
-to fuzzy string matching against `translations.en.json`'s ~220 simple
-status names ("stunned", "paralyzed", ...). **Team and non-team tiers are
-genuinely asymmetric in the real game data** — e.g. non-team "Att Down"
-only goes to tier 1, but "T. Att Down" goes to tier 3 — so the
-valid-tiers cache (`_build_stem_directions`) keys on `(team, stat)`, not
-just `stat`; an earlier version merged them into one set per stat and
-silently offered a non-team tier that doesn't exist. Verified directly
-against the live data before and after that fix, not just by reading the
-code. Results are capped at 50 (`query_records`'s `limit`) since a single
-loose condition like "mag > 250" alone can match hundreds of records.
+immunity to stunned", "items with 'dragon' in the description") is the
+loop's `query` tool over one generic evaluator, not per-query-shape
+code.** The model builds `{"conditions": [...], "combinator": "and"|"or",
+"category": ..., "sort_by": ..., "sort_dir": ...}` itself as the tool's
+`args` (this used to be a dedicated second LLM call, `parse_conditions`/
+`plan_queries`, back when `/orna` was a fixed pipeline — the condition
+*vocabulary* below is unchanged, only which call produces it changed).
+`orna_aussies.query_records` evaluates every condition against every
+record with `_eval_condition` and combines with `all`/`any` — a single
+generic evaluator, not bespoke code per query shape, so a new `kind` is
+the only thing a new query type needs. `resolve_codes` (used by
+`kind: "effect"` conditions) first tries a small rule-based parser for the
+temp/stat/direction/magnitude pattern (`_parse_buff_query` — e.g. "T Mag
+3" → `t__mag_uuu`) before falling back to fuzzy string matching against
+`translations.en.json`'s ~220 simple status names ("stunned", "paralyzed",
+...). **The "T." prefix means "Temp[orary]", not "Team"** — verified
+directly against playorna's own served icon filenames (`"T. Def ↑"` →
+`defense_up_temp.png`, vs. plain `"Def ↑"` → `defense_up.png`, same
+pairing for Res) after this was wrongly assumed to mean "Team" since
+before 2026-09-23; `_TEMP_RE` (formerly `_TEAM_RE`) still accepts `"team"`
+as an input synonym since that's the natural guess a player makes from
+the abbreviation, it just isn't what the code internally means by it.
+**Temp and non-temp tiers are genuinely asymmetric in the real game
+data** — e.g. non-temp "Att Down" only goes to tier 1, but "T. Att Down"
+goes to tier 3 — so the valid-tiers cache (`_build_stem_directions`) keys
+on `(is_temp, stat)`, not just `stat`; an earlier version merged them
+into one set per stat and silently offered a non-temp tier that doesn't
+exist. Verified directly against the live data before and after that
+fix, not just by reading the code. Results are capped at 50
+(`query_records`'s `limit`) since a single loose condition like
+"mag > 250" alone can match hundreds of records.
 
 **Query results use the exact same rich rendering as a name search -
 stats/facts/sections in chat, not just a link out.** First version made
@@ -294,9 +406,10 @@ query results plain `url=` link buttons straight to aussiescodex.com,
 skipping the fetch+render entirely; reverted on the same day, per
 explicit feedback, once it was clear having the stats actually visible in
 the chat (not just a link to tap through to) was the valuable part.
-`_run_query_search` now builds playorna-shaped entries and reuses
-`_result_list_keyboard`/`_send_entry` exactly like a "codex" name search
-does. aussiescodex only earns a place as a single **"📊 Assess"** link
+`_run_query_tool` (the loop's `query` tool) builds playorna-shaped entries
+and reuses `_result_list_keyboard`/`_send_entry` exactly like a
+`search_codex` name search does. aussiescodex only earns a place as a
+single **"📊 Assess"** link
 button on the entry view (`orna_aussies.has_aussies_page` gates it - only
 4 of 9 categories have a page there, its URL segment for spells is
 `orna-skills` not `orna-spells`, both verified by checking a real page's
@@ -319,8 +432,8 @@ enum - `translations.en.json`'s `stats` dict (~155 keys) is the real
 vocabulary, and it's much wider than the obvious `hp`/`attack`/`magic`/
 etc.: things like `follower_stats`, `summon_stats`, `crit_damage`
 (distinct from `crit`/`crit_chance`), `view_distance`, `multi-target_damage`
-all live there too.** An earlier version of `parse_conditions`'s prompt
-hardcoded a 10-field enum, which silently broke any query for a stat
+all live there too.** An earlier version of the condition-extraction
+prompt hardcoded a 10-field enum, which silently broke any query for a stat
 outside that list (reported live: "follower stats > 10%" → "nothing
 found", even though 19 items actually have it). The fix has two halves
 that both matter: the prompt now tells the model to infer any reasonable
@@ -348,7 +461,7 @@ legitimate thing to ask for.
 
 **Ranking queries ("the item with the biggest mag", "weakest defense
 follower") are a `sort_by`/`sort_dir` pair on `query_records`, not a new
-condition kind.** `parse_conditions` now returns `sort_by`/`sort_dir`
+condition kind.** The `query` tool's `args` carries `sort_by`/`sort_dir`
 alongside `conditions` - conditions can be empty when the ask is pure
 ranking with no other filter. `query_records` resolves `sort_by`
 through the same fuzzy field resolver as a stat condition, drops records
@@ -366,11 +479,11 @@ condition with a sort.
 aussiescodex description-substring search before giving up** (`
 _run_codex_search`, after the existing "rainsong" space-collapse retry).
 Covers requests like "strange sword" that only match an item's
-*description* ("Bladeless"'s), not its name - `route_query` naturally
-sends these down the name-lookup ("codex") path since there's no
-stat/effect/attribute language to trigger "query" intent, so the name
-search has to be the one that recovers rather than trying to get the
-classifier prompt to somehow guess this belongs to the other path.
+*description* ("Bladeless"'s), not its name - the model naturally reaches
+for `search_codex` first for a bare name-shaped ask since there's no
+stat/effect/attribute language to suggest `query`, so the name search has
+to be the one that recovers rather than expecting the model to somehow
+guess this belongs to the other tool.
 
 **`kind: "attr"` reaches every real flat field, not a hand-picked
 subset - cross-checked directly against aussiescodex.com's own advanced
@@ -437,28 +550,30 @@ only gives tier-1 T. Mag ↑, not tier 2. Root causes, both fixed:
    digit or roman numeral, so `"++"` silently fell back to magnitude 1.
    Now `↑↑`/`↓↓` (arrow count = magnitude) and `+`/`-` runs are parsed the
    same way, with word/digit as the remaining fallback. Fixing this also
-   surfaced a real regression risk: loosening `_TEAM_RE`'s trailing
-   `\s+` to `\s*` (needed so `"t.mag"`, no space, is recognized as a team
+   surfaced a real regression risk: loosening `_TEMP_RE`'s (then
+   `_TEAM_RE`, see the terminology-correction note above) trailing
+   `\s+` to `\s*` (needed so `"t.mag"`, no space, is recognized as a temp
    prefix) broke `"team ..."` inputs, because the alternation
    `(?:t\.?|team)` tried the single-letter `"t"` branch first and
    matched just that, leaving a mangled `"eam attack..."` behind.
    Reordering to `(?:team|t\.?)` (longest/most-specific alternative
    first) fixed both without reintroducing the old requirement for a
    space after `t.`.
-2. Even with (1) fixed, `parse_conditions` itself was only reliably
-   preserving `"++"` into its `value` output about 5/8 of the time -
-   the rest either invented a wrong tier number, silently dropped the
-   tier, or (once) fabricated a nonexistent `"t_mag"` stat field. Added
-   explicit prompt guidance: tier shorthand is always `kind:"effect"`,
-   never `"stat"`, and must be copied into `value` character-for-character,
-   not re-notated or guessed. Verified 8/8 after the prompt change.
+2. Even with (1) fixed, the condition-extraction prompt itself was only
+   reliably preserving `"++"` into its `value` output about 5/8 of the
+   time - the rest either invented a wrong tier number, silently dropped
+   the tier, or (once) fabricated a nonexistent `"t_mag"` stat field.
+   Added explicit prompt guidance: tier shorthand is always
+   `kind:"effect"`, never `"stat"`, and must be copied into `value`
+   character-for-character, not re-notated or guessed. Verified 8/8
+   after the prompt change.
 
 **A trailing stray number on an otherwise-valid codex name falls back to
 the name with the number stripped** (`_run_codex_search`, alongside the
 existing "rainsong" space-collapse and description-substring fallbacks).
 Live bug: "/orna solarite 12345" found nothing even though "Solarite" by
-itself has 2 results - `route_query` passes the number through verbatim
-since it has no way to know it's noise rather than part of the name.
+itself has 2 results - the model passed the number through verbatim since
+it had no way to know it's noise rather than part of the name.
 
 **`/orna` (plus `res_today`/`res_next`/`remind`) are now registered via
 `set_my_commands` in a `post_init` hook (`telegram_bot.py`), in EVERY
@@ -498,48 +613,30 @@ and local-fallback paths) traced to two compounding issues, both fixed.**
    three synthetic cases (clean JSON, JSON+trailing duplicate object,
    preamble text+JSON) before deploying.
 
-**`parse_conditions` was replaced by `plan_queries`, which can return
-several independent query blocks and/or one button-only clarifying
-question - deliberately NOT a full ReAct loop, after weighing it against
-one for "search multiple items"/"more complex questions".** The
-considered alternative was giving `/orna` the same multi-step
-search/open/ask loop `telegram_go.py` already has; rejected because that
-loop's reliability is carried by a stronger/cloud-fallback model and
-still needs real engineering (step limits, session TTLs) to stay
-sane - looping that same machinery over local Ollama, which already
-needed `think: True` and multiple verification passes just for reliable
-*single-shot* structured output, would multiply the flakiness across
-steps and add real latency to what's usually a simple one-item lookup.
-Instead `plan_queries` stays a single call (a second one only on the
-rare clarify round-trip) that can fan out into multiple blocks:
-- **Multi-query**: `"queries"` is normally one block, but the prompt
-  allows more when the ask genuinely names several separate lookups that
-  don't collapse into one AND/OR filter (e.g. "best mag item for thieves
-  and for mages" → two blocks, one per class, each with its own
-  `useable_by` condition + `sort_by: "magic"`). `telegram_orna._execute_queries`
-  runs each block through the same `query_records`/`_result_list_keyboard`
-  path as before and sends one results message per block, labeled from
-  the block's own `"label"`.
-- **Clarification**: modeled directly on `/go`'s `"ask"` action and the
-  same reasoning - button-only, never free text, because a local model's
-  own clarifying questions are exactly as unreliable as everything else
-  it produces, so a free-text follow-up would just compound that
-  uncertainty rather than resolve it. The prompt is deliberately
-  conservative about *when* to ask (only when a missing detail would
-  materially change the results and no reasonable default exists -
-  "good gear for my class" asks, "legendary items" or "mag > 250" don't)
-  since over-asking is its own UX cost. `clarified=True` on the
-  follow-up call (after a button tap) forbids asking a second time,
-  mirroring `/go`'s "don't ask more than once" rule - this is what keeps
-  it a single bounded round-trip instead of needing loop/session state
-  the way `/go` does.
-- A real bug surfaced during verification, fixed alongside this: the
-  natural class nickname a player types ("mage") often isn't a literal
-  substring of the stored `useable_by` value ("magic_users" contains
-  "magi", not "mage") - `_USEABLE_BY_ALIASES` in `orna_aussies.py` maps
-  common nicknames (mage/mages, warrior(s), thief/thieves/rogue(s),
-  summoner(s)) onto a substring that's actually present, applied only to
-  the `useable_by` field specifically.
+**Multi-part requests ("best mag item for thieves and for mages", "legs
+and head for mage, mag > 50") are the loop calling `query` more than
+once, not a batched multi-block schema.** Before the 2026-09-23 loop
+rewrite, this was `plan_queries`'s job - one call returning several
+independent condition *blocks* in one shot, deliberately built that way
+instead of a full ReAct loop specifically because looping local-only
+Ollama seemed likely to multiply flakiness across steps. The loop
+supersedes this entirely: the prompt's `_AGGREGATE_RULE`/multi-part
+example tells the model to call `query` (or `search_codex`) once PER
+distinct thing, observe each result, then `finish` once with a wrap-up -
+more genuinely ReAct-shaped (the model can react to one slot's result
+before deciding how to search the next) and no separate batching schema
+to maintain. `ask`'s button-only, never-free-text, don't-ask-twice design
+carried over unchanged from the old pipeline (which itself modeled it on
+`/go`'s own "ask" action) - a local model's own clarifying questions are
+exactly as unreliable as everything else it produces, so a free-text
+follow-up would just compound that uncertainty rather than resolve it.
+A real bug surfaced during the original `plan_queries` verification and
+still applies: the natural class nickname a player types ("mage") often
+isn't a literal substring of the stored `useable_by` value ("magic_users"
+contains "magi", not "mage") - `_USEABLE_BY_ALIASES` in `orna_aussies.py`
+maps common nicknames (mage/mages, warrior(s), thief/thieves/rogue(s),
+summoner(s)) onto a substring that's actually present, applied only to
+the `useable_by` field specifically.
 
 **"This item grants a spell/skill when equipped" needed a whole new
 `kind:"ability"` condition - it has THREE different real encodings in
@@ -581,6 +678,21 @@ nothing, and the user separately confirmed they expected "Hyades Wreath"
    an explicit example distinguishing a spell/skill's own name from an
    obvious stat-buff word (Up/Down/a tier number/a status ailment).
 
+A **fourth** encoding turned up later (2026-09-23, during the ReAct
+rewrite, fixing the live "which follower gives earth sigil" report):
+followers don't have `stats["+spell"]`/`"ability"` at all - a spell grant
+lives in `record["bestial_bond"]`, a list of bond tiers each holding
+`{name, type, chance?}` entries, where `type == "ABILITY"` means `name`
+is a spell/skill slug (e.g. `earth-sigil-2` on both Ancient Jinn and
+Anubis). `_eval_condition`'s `"ability"` branch now also scans
+`bestial_bond` tiers for `ABILITY` entries; its `"effect"` branch
+similarly scans `bestial_bond` tiers with `type == "BOND"` (a status-code
+proc) when `field` is `""`/`"gives"`. `type == "BONUS"` entries (passive
+%s like `orn_bonus`) are deliberately left unwired - no report has asked
+for these yet, and they'd need a new condition shape, not a fit into
+`"ability"`/`"effect"` - marked with a `# ponytail:` comment in
+`orna_aussies.py` noting the gap.
+
 **`/update_codex` (hidden, `telegram_orna.py`) force-refetches
 aussiescodex's `codex.json`/`translations.en.json` right now, ignoring
 the 1-week TTL** - `orna_aussies.refetch_now()` calls the existing
@@ -598,16 +710,18 @@ mage") is `"query"` intent, not `"codex"` - was being misrouted.** Live
 report: `/orna last martyr речі на мага` found nothing (translated and
 searched literally as a codex NAME, which obviously doesn't exist),
 while `/orna last martyr` alone correctly found the 16-item set via
-`codex_search`. The gap: `route_query`'s prompt described `"query"` only
-in terms of stat/effect/attribute asks, never mentioning that a name
-fragment PLUS a restriction is really two conditions ANDed together
-(`kind:"text"` on name + an attr condition) - exactly what
+`codex_search`. The gap (this predates the ReAct rewrite but the fix still
+applies to the loop's own tool-choice prompt): the routing guidance only
+described `query` in terms of stat/effect/attribute asks, never mentioning
+that a name fragment PLUS a restriction is really two conditions ANDed
+together (`kind:"text"` on name + an attr condition) - exactly what
 `orna_aussies.query_records` already handled fine once routed there
 correctly (verified directly: `"last martyr"` as a name-text condition
-+ `useable_by="mage"` correctly narrows 16 results down to 4). Added an
-explicit rule + example; verified 9/9 across 3 phrasings that a
-fragment+filter request now goes to `"query"` while a bare fragment
-(`"last martyr"` alone) still correctly stays `"codex"`.
++ `useable_by="mage"` correctly narrows 16 results down to 4). The
+system prompt's condition rules carry an explicit rule + example for this;
+verified 9/9 across 3 phrasings that a fragment+filter request calls
+`query` while a bare fragment (`"last martyr"` alone) still correctly
+calls `search_codex`.
 
 **`kind:"attr"` conditions support `"cmp":"!="` for exclusion language
 ("not X", "except X", "excluding X") - previously silently ignored.**
@@ -628,10 +742,12 @@ negated result set afterward, and the positive (`"="`) path unchanged.
 text)` at the top of every slash-command handler (a thin wrapper around
 `record_command` that pulls `user_id`/`username`/`first_name` straight
 off the `Update` so call sites don't each repeat that extraction),
-`record_llm_call(model, backend)` at the two actual LLM call sites
-(`telegram_nlp._chat_json_once` - always `"local"`, `telegram_go.
-_chat_json` - `"cloud"` or `"local"` depending on which `host` it was
-actually given), all persisted to `usage_stats.json` (gitignored, same
+`record_llm_call(model, backend)` inside `ollama_client.chat_json` itself
+(the one place both cloud and local calls now actually go through -
+`"cloud"` when `host == OLLAMA_CLOUD_HOST`, `"local"` otherwise; this
+used to be called separately from `telegram_nlp._chat_json_once` and
+`telegram_go._chat_json` before those collapsed into the shared client),
+all persisted to `usage_stats.json` (gitignored, same
 reload-survival reasoning as `reminders.json`). Deliberately scoped to
 slash commands only - the free-text conversation entry points in
 `telegram_assess.py`/`telegram_resources.py` aren't instrumented yet, so
@@ -662,50 +778,199 @@ questions with timestamps. All three still gated by the same
 explicitly an admin surface, storing per-user activity logs is only
 appropriate because of that gate.
 
-**`route_query` has a fifth, "self-aware" intent - `"other"` - for when
-the message isn't actually about the codex/resources at all, so `/orna`
-can suggest something instead of dead-ending on a failed name search.**
-Two triggers: a meta "what can you do"/"help"/"допоможи" ask with no
-Orna subject, or a message shaped like a reminder request ("нагадай
-мені...", "remind me to...") - that's `/remind`'s job, a separate
-command `route_query` previously had no concept of at all. `"query"` is
-always empty for `"other"` - the reply (`telegram_orna._capabilities_text`)
-is fixed, deterministic text, not model-generated prose, same
-structured-over-freeform reasoning as everywhere else in this module.
-Deliberately only mentions genuinely public commands (`/orna`,
-`/res_today`, `/res_next`, `/remind`) - `/go` and its hidden siblings
-stay unlisted here same as everywhere else. Verified with 30 repeated
-real-model calls before deploying: 12/12 correct on four "other"-shaped
-phrasings (English/Ukrainian, help-ask and reminder-ask), and - the more
-important check - 18/18 legitimate Orna questions (name lookups, a stat
-query, a name+filter query, "next", "today") stayed correctly classified
-with zero false positives into `"other"`, since over-triggering here
-would break real functionality, not just add a redundant reply.
+**Tool-call counters (`usage_stats.record_tool_call`)** — every loop
+action (`today`/`next`/`need`/`search_codex`/`query`/`events`/
+`open_entry`/`knowledge_search`/`web_search`/`calculate`/`assess`/`ask`/
+`finish`, plus the synthetic `_step_budget_exhausted` when a session runs
+out of steps without finishing) increments a `usage_stats._orna_tools`
+counter, surfaced in `/stats` as a "Дії /orna (ReAct loop)" section
+(`telegram_bot.handle_stats`). This is what replaced `route_query`'s old
+intent counters conceptually - there's no separate intent classification
+step anymore, so "which intent fired" is now just "which tool the model
+chose first," visible the same way.
 
-**`route_query` has a sixth intent, `"need"`, for a quantity-bearing
-resource request ("треба 1000 балоріту") - routes to the same proof-cost
-report + reminder buttons the free-text `/need` flow gives, instead of
-`"next"`'s bare date lookup with no proof math.** Live report: `/orna
-треба 1000 балоріту` showed guild/date rows for both "Balorite" and
-"Lesser Balorite" (a plain substring match, `"next"`'s whole mechanism)
-with no proof-cost breakdown - the richer report already existed
-(`telegram_resources.build_report`, via the free-text/`/need`
-`ConversationHandler`), `/orna` just had no path to it.
-`telegram_orna._run_need_report` reuses `telegram_nlp.extract_resources`/
-`extract_quantities` directly (both already handle Ukrainian, so
-`"need"`'s `query` is deliberately the UNTRANSLATED original text -
-translating first would only risk mangling a material name before the
-exact-match step that needs it) rather than opening the stateful
-"which quantity did you mean" follow-up the conversation flow can -
-a bare `CommandHandler` has no conversation state to return into, so a
-material extracted without a resolvable quantity falls back to
-`_next_text` (still useful, just without proof math) instead of trying
-to ask a second message. Verified against live data: extraction on the
-exact reported phrase correctly resolves `Balorite` (not `Lesser
-Balorite` too) with quantity `1000`; verified 9/9 across 3 phrasings that
-`"need"` triggers correctly, and 10/10 that ordinary `"next"`/`"codex"`/
-`"query"` requests (including ones that also contain a number, like a
-stat threshold) don't get misclassified into it.
+**Fixed-text shortcuts for meta/"help" and reminder-shaped asks are
+embedded verbatim in the loop's own system prompt, not a separate
+classifier intent.** Before the ReAct rewrite, `route_query` had two
+dedicated intents (`"other"` for a meta "what can you do" ask, `"need"`
+for a quantity-bearing resource request) that short-circuited straight to
+fixed replies or a different report. In the loop, both are just prompt
+guidance telling the model what to `finish()` with, not special-cased
+control flow:
+- `telegram_orna._orna_system_prompt()` interpolates
+  `_capabilities_text()!r` and `_REMINDER_NUDGE!r` directly into the
+  prompt text with an instruction to copy either string **verbatim** into
+  `finish()` when the ask is a meta "what can you do"/"допоможи" question
+  with no real Orna subject, or shaped like a reminder request ("нагадай
+  мені...", "remind me to..." - that's `/remind`'s job, `/orna` doesn't
+  set reminders itself). Both stay fixed, deterministic text (not
+  model-generated prose), same structured-over-freeform reasoning as
+  everywhere else in this module - `_capabilities_text()` deliberately
+  only mentions genuinely public commands (`/orna`, `/res_today`,
+  `/res_next`, `/remind`), `/go` and its hidden siblings stay unlisted.
+- `"need"` is now a real tool, `_run_need_tool(message, text)` - a
+  quantity-bearing resource request ("треба 1000 балоріту") reuses the
+  exact same `extract_resources`/`extract_quantities` extraction +
+  `build_report`/`send_report_blocks` pipeline the free-text `/need` flow
+  (`telegram_resources.py`) already has, instead of `next`'s bare date
+  lookup with no proof-cost math. `text` is deliberately the UNTRANSLATED
+  original request (both extraction calls already handle Ukrainian
+  directly) - translating first would only risk mangling a material name
+  before the exact-match step that needs it. A material extracted without
+  a resolvable quantity falls back to `_next_text` (still useful, just
+  without proof math) rather than opening a second clarifying round-trip -
+  the loop already has `ask` for that if the model chooses to use it, no
+  need for `need` to special-case it. If nothing in the request resolves
+  to a known Material Forecast material at all, it falls through to
+  `_run_codex_search` (same "let the next honest attempt take over"
+  pattern as `next`'s own dead end).
+
+### `knowledge_search` and `web_search` - the codex genuinely doesn't know everything
+
+Both tools exist for the same gap: playorna's codex + aussiescodex's
+`codex.json` are complete for an entry's own facts/stats/effects, but
+**a boss's elemental damage immunities/resistances are not tracked
+anywhere in either data source at all** - verified directly (not just
+assumed) by inspecting a real boss record end to end and finding no such
+field, empty or otherwise. Live report that surfaced this: `/orna як
+вбити Лицар Сіріус?` ("how do I kill Knight Sirus") - this boss is immune
+to nearly every element except one, information no codex fact captures,
+but exactly the kind of thing a wiki or forum documents. `_STRATEGY_RULE`
+in the loop's system prompt makes calling `knowledge_search` (and
+`web_search` if that doesn't help) **mandatory**, not optional, for any
+"how do I beat/kill X" or "what's X weak to" question - specifically
+because a codex page that *looks* complete (facts, stats, sections, all
+present) is exactly the case where a model would otherwise reasonably
+assume it already has enough to answer, and a live-verified failure
+confirmed that: skipping straight to `finish` with only codex facts
+produced a confidently wrong "no known weaknesses, just hit it hard"
+instead of the real answer. `knowledge_search` is tried first (free,
+instant, pre-vetted community data, no external API), `web_search` is the
+fallback when it doesn't have the answer either.
+
+- **`knowledge_search`** (`orna_knowledge.py`, reading
+  `orna_knowledge.txt`) is a static, generated reference built from 4
+  user-provided Google Sheets (`orna_scrape_knowledge.py`'s `_TABLES`
+  list): 2 tabs of a "Gear XP/Orn/Gold Boosts + Combat Mechanics Notes"
+  spreadsheet, 12 tabs of the community "Ornapedia" spreadsheet (Badges,
+  Boost Items, Buildings, End of Gauntlet Items, Monster Data, Pets/
+  Followers, Proofs for Materials, Raid Rewards, Skills/Spells, Titles,
+  View Distance, XP/Leveling), and 2 tabs of an orn-bonus-calculator
+  spreadsheet (Main, GearInf) whose numbers/formulas back the
+  `_AGGREGATE_RULE` quality-scaling math (see below). **Deliberately
+  flattened into plain `" | "`-joined text lines under `=== Title ===`
+  section headers, not typed per-sheet schemas** - these are
+  human-maintained community wiki sheets with inconsistent columns
+  sheet-to-sheet, not clean data, so a generic substring/fuzzy search
+  (`orna_knowledge.search`) that a model reads and interprets itself is
+  the right fit, not bespoke parsing code per sheet - same
+  "tool retrieves, model interprets" split `web_search` and
+  `orna_calendar.fetch_events` already use. Regeneration is a one-off
+  script run (`python3 orna_scrape_knowledge.py`, mirrors
+  `orna_scrape_material_names.py`'s pattern), not something the bot does
+  at runtime - re-run it by hand if the source sheets change.
+  `search(query, section="", limit=20)` tries an exact case-insensitive
+  substring match first, then retries once with each query word
+  fuzzy-corrected against the corpus's own ~3500-word vocabulary
+  (`difflib.get_close_matches`, cutoff 0.75) - the same fix for
+  transliteration drift ("Sirius" vs the game's actual "Sirus") that
+  `search_codex`'s own retry chain and `orna_aussies._resolve_stat_field`
+  already use elsewhere in this codebase.
+- **`web_search`** reuses `telegram_go._tavily_search`/`TAVILY_API_KEY`
+  directly - same API key, same call shape, no second Tavily client.
+  Unlike every other tool, it never posts its own `reply_text`: raw
+  search results aren't trustworthy/structured enough to show a user
+  verbatim the way a codex result is, so the model reads the returned
+  text as an observation and writes the real answer itself in `finish()`
+  - same pattern `/go`'s own "search" action already uses.
+
+### `assess` - projecting an item's stats from a name + quality instead of a screenshot
+
+`/orna assess <item name> <quality>` (e.g. `/orna assess arisen aaru robe
+Legendary` or `...185%`) runs the exact same projection math the
+screenshot-upload flow uses (`orna_assess.get_assess_result` +
+`telegram_assess._format_response`) but starting from a typed quality
+instead of OCR'd observed stats - added after a live ask asked for both a
+name-based version of `/assess` AND confirmation that quality names
+("ornate") and raw percentages ("195%") both actually work.
+
+**Building this surfaced a real, previously-unknown production bug that
+affects the screenshot flow too, not just this new tool.** The first
+version pulled stats from `orna_codex.lookup_by_name`'s playorna-HTML-
+scraped `CodexEntry` (the same path the screenshot flow already used) and
+got back an **empty stats dict** for "Arisen Aaru Robe" even though the
+item genuinely has stats - per explicit correction mid-session
+("instead of looking into codes, assess tool better check codex.json"),
+investigated instead of assumed away: **playorna migrated every page fact
+(not just Tier/Rarity/Place, which `_harvest_meta` already handled) from
+`<div class="codex-stat">` markup to `<dl class="entry-facts"><dt>Label
+</dt><dd>Value</dd></dl>`, and `orna_codex.parse_codex_html`'s stat
+extraction was never updated for it** - silently returning `stats={}` for
+every item's combat stats since that migration, on the screenshot flow
+too. Fixed at the source in `orna_codex.py` (kept the old `div.codex-stat`
+path as a first attempt - verified it now matches nothing live - added a
+`dl.entry-facts` fallback via `dt.find_next_sibling("dd")`; verified
+against a live "Arisen Aaru Robe" page: previously empty, now correctly
+`{'defense': 151.0, 'resistance': 191.0, 'mana': 80.0, 'ward': 4.0,
+'adornment_slots': 4}`).
+
+Even with that scraper fixed, `_run_assess_tool` pulls stats from
+**aussiescodex's `codex.json`** (`_aussies_record_to_codex_entry`,
+`orna_aussies._codex()`), not from `orna_codex.CodexEntry` - a second,
+structural reason beyond the scraper bug: **some stats (e.g. an item's
+own Orn Bonus) render on playorna's page as a free-text "effect" bullet,
+never as a structured fact/dt-dd pair at all**, so no amount of HTML-
+scraper fixing can reach them - verified directly (Dark Mage Hood's Orn
+Bonus never reaches a scraped `CodexEntry.stats`, confirmed present in
+aussies' `stats` dict). `codex_search` (playorna's own ranked name
+search, already proven reliable everywhere else in this module) is still
+used for name resolution only, since aussies' own name matching is a
+plain, ambiguity-prone substring - the category+id from that search then
+indexes straight into `codex["main"][category][id]`.
+`_aussies_record_to_codex_entry` derives the `is_adornment`/
+`is_accessory`/`is_celestial_weapon`/`is_upgradable`/`has_scaling_slots`/
+`boss_scaling` flags `orna_assess` needs from aussies' clean `place`/
+`item_type`/`rarity` enum-like fields instead of regex-matching scraped
+page text - more reliable for everything except `is_two_handed`, which
+aussies doesn't expose as a flat field at all and is hardcoded `False`
+(documented `# ponytail:` gap in the function - only affects a celestial
+TWO-HANDED weapon's adornment-slot count, narrow enough not to chase
+until it's actually reported).
+
+`_parse_quality_spec` accepts either a raw percentage (`"185"`, `"185%"`)
+or a named tier, via two lookup tables:
+- `_QUALITY_NAME_TO_PERCENT` (broken=50, poor=90, regular/normal=100,
+  superior=101, famed=120, legendary=140, ornate=171) - each tier's own
+  LOWER bound as a representative %, since there's no single canonical
+  "the" percentage for a bare tier name; `_run_assess_tool` notes this
+  assumption in the reply rather than leaving it silent.
+- `_FORGED_LEVELS` (masterforged=11, demonforged=12, godforged=13) -
+  Masterforged/Demonforged/Godforged are really upgrade **levels** past
+  10 in Orna's own mechanics, not a quality percentage (`get_quality_code`
+  derives the quality bucket from level once past 10) - quality defaults
+  to 100% for these, an item assumed pushed to the tier's floor rather
+  than some arbitrary higher %.
+
+A **pre-existing quirk in the ported `orna_assess.py`** (not introduced
+by this work, not modified - assumed intentional port fidelity):
+`get_assess_result`'s displayed "(Quality Name)" label always derives via
+`get_quality_code(quality, 1)` - level hardcoded to `1` regardless of the
+actual requested level - so a Masterforged/Demonforged/Godforged request
+(level 11-13) always displays as "(Regular)" even though the underlying
+stat projection is correct. `_run_assess_tool` resolves this
+transparently rather than leaving it misleading: when the input was a
+named tier, it inserts a "Запитана якість: X" line ahead of the
+auto-derived (and known-wrong-for-this-case) label.
+
+Bonus-type stats (orn/exp/gold/luck bonus, ...) aren't part of the core
+10-stat upgrade table `_format_response` renders, but scale with quality
+via the same official formula (`scaled = ((100 + base) * (100 +
+scaling) - 10000) / 100` - the identical formula `_AGGREGATE_RULE`
+documents for the loop's own multi-slot build-optimization reasoning, see
+above) - `_run_assess_tool` appends a "Бонус-статистики" section computed
+via `get_quality_bonus()` for any `QUALITY_CODE_BONUS_KEYS` the item
+actually has, since that's exactly the number a "best build" bonus
+question needs and the core table alone wouldn't surface it.
 
 ## Things that aren't obvious from reading one file at a time
 
@@ -717,6 +982,49 @@ photo/text handlers only match when *that* conversation is actually active
 for the chat; when it isn't, it correctly falls through to the resources
 conversation. Don't reorder these without re-checking that interaction.
 
+**PTB's `concurrent_updates` defaults to `False` - every update from every
+chat is processed one at a time, globally, regardless of which chat it's
+from - and this bit the whole bot in production, not just `/orna`.** Live
+incident (2026-09-23): a single complex `/orna` request (which can
+legitimately run for minutes - `MAX_STEPS = 16`, `LOOP_TIMEOUT_SECONDS =
+300`) blocked EVERY other command from EVERY user - including a trivial
+`/res_today` sent by a different user right after it - until the loop
+finished or timed out. Before the ReAct rewrite this was never really
+exposed, since no handler in the bot ran anywhere near that long; once
+`/orna` could legitimately take a few minutes, PTB's sequential-by-default
+processing turned one slow user's request into a full outage for everyone
+else. Fixed in `telegram_bot.main()` via
+`.concurrent_updates(32)` on the `ApplicationBuilder` - a modest bound
+(not PTB's max-256 default for plain `True`) that keeps most concurrent
+activity naturally isolated to different chats/users without going
+unbounded. The tradeoff, and why 32 rather than `True`/unbounded: PTB's
+own docs warn concurrent processing risks a race in stateful
+`ConversationHandler` flows (the assess/resources conversations) if the
+*same* chat sends two messages close together mid-flow - a real but
+narrow risk, far outweighed by "the whole bot hangs for minutes" being
+the default otherwise.
+
+**Enabling `concurrent_updates` is necessary but not sufficient - a
+genuinely blocking synchronous call inside a handler coroutine still
+stalls the entire single-threaded asyncio event loop, for every chat,
+concurrency setting or not.** `concurrent_updates` only helps PTB dispatch
+multiple *update handlers* without waiting on each other's `await` points
+- it does nothing for a handler that calls something synchronous and
+blocking directly (a network fetch, a disk read, a CPU-bound scan) without
+wrapping it in `asyncio.to_thread`. Found and fixed two of these live in
+`telegram_orna.py` during the same incident's investigation, both already
+noted in their own docstrings but worth having in one place: `_run_assess_tool`'s
+`_aussies_codex()` call (can trigger a synchronous network fetch on an
+aussiescodex cache miss) and `_run_knowledge_tool`'s
+`orna_knowledge.search()` call (a synchronous disk read on first call, plus
+a `difflib`-based fuzzy-correction pass on a ~3500-word vocabulary on a
+miss) - both now wrapped in `asyncio.to_thread(...)`. When adding a new
+`/orna` tool (or any handler) that touches the filesystem, an external
+HTTP call not already wrapped by an async client, or any CPU-heavy loop,
+wrap it in `asyncio.to_thread` - this class of bug won't show up in quick
+manual testing (a single request looks fine), it only surfaces as
+"everything hangs" once two real users' requests overlap in production.
+
 **`"think": False` was the actual cause of `gpt-oss:20b`'s flakiness, not
 the model itself.** This section used to warn that the same input to
 `telegram_nlp.extract_resources` could return the right answer on one call
@@ -725,18 +1033,21 @@ and an empty list on the next. Root-caused during the `/orna` work
 model/quantization returns empty or truncated-mid-reasoning content
 instead of the requested JSON *close to 100% of the time* under repeated
 testing - not occasional flakiness, a near-total failure rate. Switching to
-`"think": True` (now the default in `telegram_nlp._chat_json_once`) was
-100% reliable across the same repeated tests, including free-text
-Ukrainian input: Ollama separates the reasoning out on its own and
-`content` comes back as clean JSON. The tradeoff is a bit more latency per
-call (the model actually thinks now), which has been an acceptable trade
-so far. `orna_material_names_uk.json`'s static EN↔UK table is used by
-`telegram_offerings.py` specifically (OCR'd offerings-screen rows), not by
-`extract_resources` — don't assume it's a universal fallback underneath
+`"think": True` was 100% reliable across the same repeated tests,
+including free-text Ukrainian input: Ollama separates the reasoning out on
+its own and `content` comes back as clean JSON. The tradeoff is a bit more
+latency per call (the model actually thinks now), which has been an
+acceptable trade so far. This is now enforced in exactly one place,
+`ollama_client.chat_json` (unconditionally sets `"think": True` - every
+caller across `telegram_nlp.py`, `telegram_go.py`, and `telegram_orna.py`'s
+loop goes through this one function, so there's no longer a second copy to
+forget to fix). `orna_material_names_uk.json`'s static EN↔UK table is used
+by `telegram_offerings.py` specifically (OCR'd offerings-screen rows), not
+by `extract_resources` — don't assume it's a universal fallback underneath
 every LLM call in this repo. The general principle still holds even with
 the fix: prefer a deterministic lookup wherever one is feasible, and keep
 the LLM for genuinely fuzzy natural-language parsing (`telegram_orna.py`'s
-routing is a good example of leaning on it appropriately once it was
+ReAct loop is a good example of leaning on it appropriately once it was
 actually reliable).
 
 **OCR text needs defensive parsing, not clean regexes.** Real OCR output
@@ -795,12 +1106,19 @@ The `query.answer()` toast is still sent too, but as a non-blocking
 toast (no `show_alert=True`) rather than a modal - now that the button's
 disappearance is itself a persistent, visible confirmation, a popup the
 user has to dismiss would be redundant weight, not the primary signal.
-Replaced the earlier `orna_calendar.py` (deleted) design
-outright, per explicit ask - a reminder the bot actually delivers beats a
-link out to a separate app the user has to remember to check, and sidesteps
-the same-day-timezone ambiguity that design's own comment already flagged
-(the new fire time inherits that same ambiguity, documented on
-`_bundle_fire_at`, rather than pretending it's precise).
+Replaced an earlier Google-Calendar-link design outright, per explicit
+ask - a reminder the bot actually delivers beats a link out to a separate
+app the user has to remember to check, and sidesteps the same-day-timezone
+ambiguity that design's own comment already flagged (the new fire time
+inherits that same ambiguity, documented on `_bundle_fire_at`, rather than
+pretending it's precise). **Filename collision, worth knowing if you ever
+run `git log`/`blame` on it:** that old design's module was *also* called
+`orna_calendar.py`, deleted in the same commit that added these reminder
+buttons (2026-09-23) - the `orna_calendar.py` that exists today (see the
+module map / the `/orna` events tool) is a completely unrelated file
+created later the same day, scraping `playorna.com/calendar/`'s live
+event list rather than generating Google Calendar links. Same filename,
+two unrelated histories - `git log --follow` on it will jump between them.
 
 **Button labels include the material name(s), not just the guild -
 `_bundle_label`.** Live report: asking about 2 materials produced 19
@@ -853,3 +1171,15 @@ reload the live service (`launchctl unload` then `load` on
 `orna-telegram-bot/telegrambot_error.log` for the `go:`-prefixed lines
 `telegram_go.py` logs at each pipeline step — they carry the actual
 yt-dlp/ffmpeg output, not just the final error message the user saw.
+
+`/orna`'s ReAct loop is verified the same no-mocks way, plus one extra
+harness: a throwaway `FakeMessage` (a stand-in with a `reply_text` that
+just prints/collects instead of hitting Telegram) passed straight into
+`_advance`/the loop's tool functions, run against the real local/cloud
+Ollama and real codex/aussiescodex data end-to-end for a given request
+string — lets you watch every `reply_text` a multi-step request would
+actually send (including which tool got dead-ended, retried, or produced
+an empty observation) without needing a live chat to test against. Same
+`orna-telegram-bot/telegrambot_error.log` reload-and-check step afterward,
+watching for the `orna:`-prefixed step logs mirroring `/go`'s own
+`go:`-prefixed ones.
