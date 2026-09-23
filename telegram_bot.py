@@ -7,7 +7,14 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before importing modules that read env vars at import time (orna_sheets)
 
 import httpx
-from telegram import BotCommand, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    Update,
+)
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
@@ -108,15 +115,28 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _post_init(app):
-    # No setMyCommands call existed anywhere before this - /go is the one
-    # command that must stay off this list (see below), everything else
-    # genuinely is meant to be user-visible autocomplete.
-    await app.bot.set_my_commands([
+    # /go is the one command that must stay off this list, everything else
+    # genuinely is meant to be user-visible autocomplete. Set in every
+    # scope Telegram actually consults for a real chat, not just the
+    # "default" one - get_my_commands showed all_private_chats/
+    # all_group_chats/all_chat_administrators already had their own
+    # (older, narrower - just res_today/res_next) list from outside this
+    # repo, likely set via BotFather at some point, and those more
+    # specific scopes silently shadow "default" so only the old 2 were
+    # ever showing regardless of what "default" had.
+    commands = [
         BotCommand("orna", "Запит про Orna (природною мовою)"),
         BotCommand("res_today", "Ресурси, доступні сьогодні"),
         BotCommand("res_next", "Коли з'явиться ресурс"),
         BotCommand("remind", "Поставити нагадування"),
-    ])
+    ]
+    for scope in (
+        BotCommandScopeDefault(),
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllChatAdministrators(),
+    ):
+        await app.bot.set_my_commands(commands, scope=scope)
 
 
 def main():

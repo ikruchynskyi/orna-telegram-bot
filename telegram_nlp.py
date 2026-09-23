@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -24,8 +24,6 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY")
 OLLAMA_TIMEOUT = 60.0
-
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.S)
 
 
 class OllamaError(RuntimeError):
@@ -75,12 +73,18 @@ async def _chat_json_once(system: str, user: str) -> dict:
         return json.loads(content)
     except json.JSONDecodeError:
         # format="json" should guarantee valid JSON, but be tolerant of a
-        # stray code fence or preamble anyway.
-        m = _JSON_OBJECT_RE.search(content)
-        if not m:
+        # stray code fence/preamble, or trailing garbage after an
+        # otherwise-valid object (seen live in telegram_go.py's identical
+        # call pattern: "Extra data" - the model appended more content
+        # right after a complete JSON object). raw_decode parses just the
+        # first complete object starting at the first "{" and stops there,
+        # instead of a greedy regex that would span across the garbage too.
+        start = content.find("{")
+        if start == -1:
             raise OllamaError(f"Ollama returned non-JSON content: {content[:200]!r}")
         try:
-            return json.loads(m.group(0))
+            obj, _ = json.JSONDecoder().raw_decode(content, start)
+            return obj
         except json.JSONDecodeError as e:
             raise OllamaError(f"Ollama returned malformed JSON: {content[:200]!r}") from e
 
@@ -132,7 +136,7 @@ async def route_query(text: str) -> Dict[str, str]:
     four intents, translating to English along the way in one round trip.
 
     Returns {"intent": "today"|"next"|"codex"|"query", "query": "<English
-    text>"}. For "query", "query" is passed to parse_conditions (a
+    text>"}. For "query", "query" is passed to plan_queries (a
     separate call - keeps each prompt's schema simple rather than one
     mega-prompt doing classification and structured condition extraction
     at once, which proved less reliable during development).
@@ -176,35 +180,7 @@ async def route_query(text: str) -> Dict[str, str]:
 _CONDITION_KINDS = ("stat", "effect", "text", "attr")
 
 
-async def parse_conditions(text: str) -> Dict:
-    """
-    Turn an already-English "query"-intent request into structured search
-    conditions for orna_aussies.query_records. A separate, focused call
-    from route_query (see its docstring for why) - this one's whole job
-    is producing a list of:
-      {"kind":"stat","field":"<snake_case stat name, any real Orna stat -
-       not just the common ones, e.g. follower_stats, crit_damage>",
-       "cmp":">|<|>=|<=|=","value":<number, may be negative>}
-      {"kind":"effect","field":"immunities|causes|gives|","value":"<text,
-       e.g. 'stunned' or 'T Mag 3'>"}
-      {"kind":"text","field":"description|name|","value":"<substring>"}
-      {"kind":"attr","field":"<tier|rarity|useable_by|place|type|
-       item_type|family|element>","cmp":"=|>|<|>=|<=","value":"<text or number>"}
-
-    Returns {"conditions": [...], "combinator": "and"|"or", "category":
-    "<one of _ORNA_CATEGORIES or empty>", "sort_by": "<stat field or
-    empty>", "sort_dir": "asc"|"desc"}. Never returns an empty conditions
-    list with no sort_by either (orna_aussies.query_records treats that
-    as "nothing matches") - falls back to one {"kind":"text"} condition
-    on the raw text if the model can't be reached or returns nothing
-    usable, so a genuinely-asked query doesn't just dead-end silently.
-    """
-    system = (
-        "Parse an Orna RPG database search into structured conditions. Reply with "
-        'strict JSON: {"conditions": [...], "combinator": "and"|"or", "category": '
-        '"<one of items, monsters, bosses, raids, followers, classes, spells, '
-        'buildings, dungeons, or empty>", "sort_by": "<stat field or empty>", '
-        '"sort_dir": "asc"|"desc"}.\n'
+_CONDITION_RULES = (
         "Each condition is one of:\n"
         '  {"kind":"stat","field":"<snake_case stat name>","cmp":">|<|>=|<=|=",'
         '"value":<number, may be negative>} - a numeric stat threshold, e.g. '
@@ -294,26 +270,122 @@ async def parse_conditions(text: str) -> Dict:
         '{"kind":"stat","field":"crit","cmp":">","value":3}], combinator: "and".\n'
         'Example: "what is the item with the biggest mag" -> conditions: [], '
         'sort_by: "magic", sort_dir: "desc".'
+)
+
+
+def _sanitize_query_block(raw) -> Optional[Dict]:
+    """One "queries[]" entry -> a clean {"label","conditions","combinator",
+    "category","sort_by","sort_dir"}, or None if it has neither usable
+    conditions nor a sort_by (nothing to run)."""
+    if not isinstance(raw, dict):
+        return None
+    raw_conditions = raw.get("conditions")
+    conditions = [c for c in raw_conditions if isinstance(c, dict) and c.get("kind") in _CONDITION_KINDS] \
+        if isinstance(raw_conditions, list) else []
+    sort_by = str(raw.get("sort_by") or "").strip()
+    if not conditions and not sort_by:
+        return None
+    combinator = raw.get("combinator") if raw.get("combinator") in ("and", "or") else "and"
+    category = raw.get("category") if raw.get("category") in _ORNA_CATEGORIES else ""
+    sort_dir = raw.get("sort_dir") if raw.get("sort_dir") in ("asc", "desc") else "desc"
+    label = str(raw.get("label") or "").strip()
+    return {"label": label, "conditions": conditions, "combinator": combinator,
+            "category": category, "sort_by": sort_by, "sort_dir": sort_dir}
+
+
+async def plan_queries(text: str, clarified: bool = False) -> Dict:
+    """
+    Turn an already-English "query"-intent request into one or more
+    structured searches for orna_aussies.query_records, optionally asking
+    a clarifying question first - the multi-query and clarification
+    counterpart to the old single-query parse_conditions.
+
+    Returns {"needs_clarification": bool, "question": str, "options":
+    [...], "queries": [<query block>, ...]}. A query block is
+    {"label", "conditions", "combinator", "category", "sort_by",
+    "sort_dir"} - see _CONDITION_RULES for what a condition/sort_by/
+    category/combinator can be; identical rules to the old single-query
+    schema, just nested one level so several independent searches (e.g.
+    "best mag item for thieves and for mages" -> one block per class)
+    can ride in a single reply.
+
+    When needs_clarification is True, "queries" is empty and the caller
+    should ask "question" via 2-4 tappable "options" (button-only, same
+    reasoning as /go's "ask" action - a local model's clarifying
+    questions are themselves unreliable enough that free-text follow-up
+    would just compound the uncertainty) rather than run anything yet.
+    Pass clarified=True on the follow-up call (after the user picked an
+    option) to forbid asking again - mirrors /go's "don't ask more than
+    once" rule, so this can never loop.
+
+    Never returns a totally empty "queries" with needs_clarification
+    False too (falls back to one {"kind":"text"} block on the raw text)
+    - a genuinely-asked query shouldn't just dead-end silently.
+    """
+    fallback = {"needs_clarification": False, "question": "", "options": [], "queries": [
+        {"label": "", "conditions": [{"kind": "text", "field": "", "value": text}],
+         "combinator": "and", "category": "", "sort_by": "", "sort_dir": "desc"},
+    ]}
+
+    clarify_rules = (
+        'Set "needs_clarification": true (with "question" and 2-4 short '
+        '"options") ONLY when a specific missing detail would materially change '
+        'which items come back and you\'d otherwise have to guess it - e.g. '
+        '"good gear for my class" names no class, "strongest weapon" with no '
+        "stat in sight and several equally-plausible readings (attack? magic?). "
+        "Most requests do NOT need this - don't ask when a reasonable default "
+        'exists or the request is already clear ("legendary items", "what '
+        'cures poisoned", "mag > 250" all need zero clarification). Never ask '
+        "about anything already answered elsewhere in the request. The user "
+        "can only tap one of your option buttons, never type a free-text "
+        "reply, so options must be short, concrete, and self-sufficient.\n"
+        if not clarified else
+        "The user has already been asked one clarifying question this turn and "
+        'picked an answer (folded into the request below) - "needs_clarification" '
+        "MUST be false now; commit to your best-effort reading and always return "
+        "at least one query block.\n"
     )
-    fallback = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and",
-                "category": "", "sort_by": "", "sort_dir": "desc"}
+    multi_rules = (
+        '"queries" normally has exactly ONE block. Use MORE than one only when '
+        "the request explicitly names several separate things to look up side "
+        'by side that don\'t collapse into one AND/OR filter - e.g. "best mag '
+        'item for thieves and for mages" -> two blocks (one per class, each '
+        'with its own useable_by condition + sort_by "magic"), "top attack '
+        'weapon and top defense armor" -> two blocks (different stats/slots). '
+        'Give each block a short "label" naming what makes it distinct (e.g. '
+        '"Thief", "Mage", "Top Attack Weapon") - empty label is fine for a '
+        "single-block reply. A request that's naturally one combined filter "
+        '(e.g. "mag > 250 and crit > 3%") stays ONE block - don\'t split an '
+        'AND/OR into multiple blocks.\n'
+    )
+    system = (
+        "Parse an Orna RPG database search. Reply with strict JSON: "
+        '{"needs_clarification": bool, "question": "<question or empty>", '
+        '"options": ["<opt1>", "<opt2>", ...], "queries": [<query block>, ...]}.\n'
+        + clarify_rules + multi_rules +
+        "Each query block is {\"conditions\": [...], \"combinator\": \"and\"|\"or\", "
+        '"category": "<one of items, monsters, bosses, raids, followers, classes, '
+        'spells, buildings, dungeons, or empty>", "sort_by": "<stat field or '
+        'empty>", "sort_dir": "asc"|"desc", "label": "<short name or empty>"}.\n'
+        + _CONDITION_RULES
+    )
     try:
         data = await _chat_json(system, text)
     except OllamaError:
         return fallback
 
-    raw_conditions = data.get("conditions")
-    conditions = [c for c in raw_conditions if isinstance(c, dict) and c.get("kind") in _CONDITION_KINDS] \
-        if isinstance(raw_conditions, list) else []
-    sort_by = str(data.get("sort_by") or "").strip()
-    if not conditions and not sort_by:
-        return fallback
+    if data.get("needs_clarification") and not clarified:
+        options = [str(o).strip() for o in (data.get("options") or []) if str(o).strip()][:4]
+        question = str(data.get("question") or "").strip()
+        if question and options:
+            return {"needs_clarification": True, "question": question, "options": options, "queries": []}
 
-    combinator = data.get("combinator") if data.get("combinator") in ("and", "or") else "and"
-    category = data.get("category") if data.get("category") in _ORNA_CATEGORIES else ""
-    sort_dir = data.get("sort_dir") if data.get("sort_dir") in ("asc", "desc") else "desc"
-    return {"conditions": conditions, "combinator": combinator, "category": category,
-            "sort_by": sort_by, "sort_dir": sort_dir}
+    raw_queries = data.get("queries")
+    queries = [b for b in (_sanitize_query_block(q) for q in raw_queries) if b] \
+        if isinstance(raw_queries, list) else []
+    if not queries:
+        return fallback
+    return {"needs_clarification": False, "question": "", "options": [], "queries": queries}
 
 
 async def extract_quantities(text: str, resources: List[str]) -> Dict[str, int]:

@@ -432,10 +432,85 @@ itself has 2 results - `route_query` passes the number through verbatim
 since it has no way to know it's noise rather than part of the name.
 
 **`/orna` (plus `res_today`/`res_next`/`remind`) are now registered via
-`set_my_commands` in a `post_init` hook (`telegram_bot.py`)** - no
-command had ever been added to the visible Telegram autocomplete menu
-before this (not an oversight specific to `/orna`; nothing was). `/go`
-is deliberately left out of this list, unlike everything else.
+`set_my_commands` in a `post_init` hook (`telegram_bot.py`), in EVERY
+scope Telegram actually consults for a real chat, not just `default`.**
+The first version only set `default` scope and the user still only saw
+2 of the 4 commands - `get_my_commands` revealed why: `all_private_chats`/
+`all_group_chats`/`all_chat_administrators` each already carried their
+own older, narrower (`res_today`/`res_next` only, different Ukrainian
+wording) command list from outside this repo, presumably set via
+BotFather itself at some point - those more specific scopes silently
+shadow `default` in Telegram's own scope-precedence rules, so it doesn't
+matter what `default` has. `_post_init` now writes the same full list to
+`BotCommandScopeDefault`, `AllPrivateChats`, `AllGroupChats`, and
+`AllChatAdministrators` explicitly. `/go` is deliberately left out of
+this list, unlike everything else.
+
+**A live "Extra data" `JSONDecodeError` (`telegram_go.py`, both the cloud
+and local-fallback paths) traced to two compounding issues, both fixed.**
+1. `_chat_json`'s payload never set `"think": True` - the exact fix
+   `telegram_nlp.py` already carries (see above) for reliable JSON-only
+   output, just never applied to `/go`'s own separate copy of this
+   helper. Without it, reasoning tokens could leak into `content`
+   alongside the JSON.
+2. Even with that fixed, the old fallback (`_JSON_OBJECT_RE.search`, a
+   greedy `\{.*\}` regex) couldn't have recovered from this failure mode
+   anyway: given valid JSON followed by trailing garbage, greedy `.*`
+   matches from the first `{` all the way to the LAST `}` in the whole
+   string - spanning right across the garbage instead of stopping at the
+   end of the first real object, so `json.loads` on the "recovered"
+   text failed with the exact same error at the exact same offset as the
+   raw content (visible in the log: both tracebacks show identical
+   `char 442`). Replaced with `json.JSONDecoder().raw_decode(content,
+   start)`, which parses exactly one complete object starting at the
+   first `{` and simply stops there. `telegram_nlp.py._chat_json_once`
+   had the identical latent bug in its own fallback (hadn't manifested
+   yet, but same call pattern) - hardened the same way. Verified against
+   three synthetic cases (clean JSON, JSON+trailing duplicate object,
+   preamble text+JSON) before deploying.
+
+**`parse_conditions` was replaced by `plan_queries`, which can return
+several independent query blocks and/or one button-only clarifying
+question - deliberately NOT a full ReAct loop, after weighing it against
+one for "search multiple items"/"more complex questions".** The
+considered alternative was giving `/orna` the same multi-step
+search/open/ask loop `telegram_go.py` already has; rejected because that
+loop's reliability is carried by a stronger/cloud-fallback model and
+still needs real engineering (step limits, session TTLs) to stay
+sane - looping that same machinery over local Ollama, which already
+needed `think: True` and multiple verification passes just for reliable
+*single-shot* structured output, would multiply the flakiness across
+steps and add real latency to what's usually a simple one-item lookup.
+Instead `plan_queries` stays a single call (a second one only on the
+rare clarify round-trip) that can fan out into multiple blocks:
+- **Multi-query**: `"queries"` is normally one block, but the prompt
+  allows more when the ask genuinely names several separate lookups that
+  don't collapse into one AND/OR filter (e.g. "best mag item for thieves
+  and for mages" → two blocks, one per class, each with its own
+  `useable_by` condition + `sort_by: "magic"`). `telegram_orna._execute_queries`
+  runs each block through the same `query_records`/`_result_list_keyboard`
+  path as before and sends one results message per block, labeled from
+  the block's own `"label"`.
+- **Clarification**: modeled directly on `/go`'s `"ask"` action and the
+  same reasoning - button-only, never free text, because a local model's
+  own clarifying questions are exactly as unreliable as everything else
+  it produces, so a free-text follow-up would just compound that
+  uncertainty rather than resolve it. The prompt is deliberately
+  conservative about *when* to ask (only when a missing detail would
+  materially change the results and no reasonable default exists -
+  "good gear for my class" asks, "legendary items" or "mag > 250" don't)
+  since over-asking is its own UX cost. `clarified=True` on the
+  follow-up call (after a button tap) forbids asking a second time,
+  mirroring `/go`'s "don't ask more than once" rule - this is what keeps
+  it a single bounded round-trip instead of needing loop/session state
+  the way `/go` does.
+- A real bug surfaced during verification, fixed alongside this: the
+  natural class nickname a player types ("mage") often isn't a literal
+  substring of the stored `useable_by` value ("magic_users" contains
+  "magi", not "mage") - `_USEABLE_BY_ALIASES` in `orna_aussies.py` maps
+  common nicknames (mage/mages, warrior(s), thief/thieves/rogue(s),
+  summoner(s)) onto a substring that's actually present, applied only to
+  the `useable_by` field specifically.
 
 ## Things that aren't obvious from reading one file at a time
 

@@ -327,6 +327,12 @@ _CMP_OPS = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operato
             "=": operator.eq, "==": operator.eq, "!=": operator.ne}
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _EFFECT_LIST_FIELDS = ("immunities", "causes", "gives", "cures")
+_USEABLE_BY_ALIASES = {
+    "mage": "magic", "mages": "magic", "magic": "magic", "magic_user": "magic", "magic_users": "magic",
+    "warrior": "warrior", "warriors": "warrior", "melee": "melee",
+    "thief": "thief", "thieves": "thief", "rogue": "thief", "rogues": "thief",
+    "summoner": "summoner", "summoners": "summoner", "valhallan": "valhallan",
+}
 
 _stat_field_cache: Optional[dict] = None
 
@@ -469,6 +475,14 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             op = _CMP_OPS.get(cmp_op)
             return val is not None and target is not None and op is not None and op(val, target)
         target_text = str(cond.get("value", "")).strip().lower()
+        if real_field == "useable_by":
+            # real values are "magic_users"/"melee_classes"/"thief_classes"/
+            # "warrior_classes"/"valhallan_summoner_classes"/"all_classes" -
+            # the natural class NAME a player types ("mage", "thief") often
+            # isn't a literal substring of that (e.g. "mage" isn't in
+            # "magic_users" - "magi" is, "mage" isn't), so map common class
+            # nicknames onto a substring that actually IS.
+            target_text = _USEABLE_BY_ALIASES.get(target_text, target_text)
         if isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
             # boolean-flag fields (exotic/new/hidden/...) are presence-only
             # in the source data - the key exists and is True on a match,

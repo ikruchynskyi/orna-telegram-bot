@@ -105,7 +105,6 @@ MAX_CONTEXT_MESSAGES = 20
 # message in the chat stops being treated as a continuation.
 CONTINUE_TTL_SECONDS = 10 * 60
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.S)
 _CLOUD_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
 _TAVILY_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0)
 
@@ -236,8 +235,39 @@ class _UnsupportedMultimodal(Exception):
     retry text-only instead of just failing the whole turn."""
 
 
+def _extract_json(content: str) -> dict:
+    """Parse `content` as JSON, tolerating trailing garbage after an
+    otherwise-valid object. Seen live: json.loads raising "Extra data" at
+    the same character offset on both the raw content AND the old
+    `_JSON_OBJECT_RE.search` fallback (a greedy `\\{.*\\}` regex just
+    grabs from the first "{" to the LAST "}" in the string, which spans
+    right across the trailing garbage too instead of stopping at the end
+    of the first real object - it couldn't ever recover from this
+    failure mode). `raw_decode` parses one complete object starting at
+    the first "{" and simply stops there, discarding whatever follows."""
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    start = content.find("{")
+    if start == -1:
+        return {}
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(content, start)
+        return obj
+    except json.JSONDecodeError:
+        return {}
+
+
 async def _chat_json(host: str, model: str, messages: list[dict], headers: dict) -> dict:
-    payload = {"model": model, "messages": messages, "stream": False, "format": "json"}
+    payload = {
+        "model": model, "messages": messages, "stream": False, "format": "json",
+        # Same fix as telegram_nlp.py's _chat_json_once (see its comment) -
+        # without this, reasoning tokens can leak into `content` alongside
+        # (or instead of) the JSON, which is what caused the live "Extra
+        # data" JSONDecodeErrors this was added to fix.
+        "think": True,
+    }
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
         resp = await client.post(f"{host}/api/chat", json=payload, headers=headers)
         if resp.status_code == 400 and "multimodal" in resp.text.lower():
@@ -245,11 +275,7 @@ async def _chat_json(host: str, model: str, messages: list[dict], headers: dict)
         resp.raise_for_status()
         content = resp.json().get("message", {}).get("content", "")
 
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        m = _JSON_OBJECT_RE.search(content)
-        return json.loads(m.group(0)) if m else {}
+    return _extract_json(content)
 
 
 def _drop_images(messages: list[dict]) -> bool:

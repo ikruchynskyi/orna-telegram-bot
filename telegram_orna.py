@@ -14,10 +14,13 @@ request via telegram_nlp.route_query into one of four intents:
   - "codex": a lookup of one specific named item/monster/etc by name -
     search playorna.com's codex.
   - "query": "what gives/causes/is immune to X", "mag > 250 and crit > 3%",
-    "items with 'dragon' in the description" - a structured multi-attribute
-    search over orna_aussies' full item/monster/etc. database, not a name
-    lookup. See telegram_nlp.parse_conditions for how free text becomes
-    conditions, and orna_aussies.query_records for how they're evaluated.
+    "items with 'dragon' in the description", "best mag item for thieves
+    and for mages" - one or more structured multi-attribute searches over
+    orna_aussies' full item/monster/etc. database, not a name lookup. See
+    telegram_nlp.plan_queries for how free text becomes one or more
+    condition blocks (and, if genuinely ambiguous, a button-only
+    clarifying question first), and orna_aussies.query_records for how a
+    block is evaluated.
 
 Both "codex" and "query" results feed into the exact same result-list/
 entry rendering: orna_aussies' record ids are the same slugs playorna.com
@@ -59,7 +62,7 @@ from orna_aussies import has_aussies_page
 from orna_aussies import query_records, resolve_codes as resolve_effect_codes
 from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
-from telegram_nlp import OllamaError, parse_conditions, route_query
+from telegram_nlp import OllamaError, plan_queries, route_query
 
 logger = logging.getLogger(__name__)
 
@@ -297,47 +300,77 @@ def _describe_condition(cond: dict) -> str:
     return str(cond)
 
 
+def _fallback_plan(text: str) -> dict:
+    return {"needs_clarification": False, "question": "", "options": [], "queries": [
+        {"label": "", "conditions": [{"kind": "text", "field": "", "value": text}],
+         "combinator": "and", "category": "", "sort_by": "", "sort_dir": "desc"},
+    ]}
+
+
+async def _execute_queries(message, queries: list) -> None:
+    """Run each parsed query block and send its own results message -
+    lets a single /orna ask cover several independent searches at once
+    (e.g. "best mag item for thieves and for mages" -> two messages),
+    while a normal single-block ask behaves exactly as before."""
+    for q in queries:
+        conditions = q.get("conditions") or []
+        sort_by = q.get("sort_by") or None
+        try:
+            matches = await asyncio.to_thread(
+                query_records, conditions, q.get("combinator", "and"), q.get("category") or None,
+                50, sort_by, q.get("sort_dir", "desc"),
+            )
+        except Exception as e:
+            logger.warning("orna: query search failed for %r", q, exc_info=True)
+            await message.reply_text(f"Пошук не вдався: {e}")
+            continue
+
+        joiner = " AND " if q.get("combinator", "and") == "and" else " OR "
+        summary = joiner.join(_describe_condition(c) for c in conditions) if conditions else ""
+        if sort_by:
+            rank_label = f"{'найбільший' if q.get('sort_dir', 'desc') == 'desc' else 'найменший'} {sort_by}"
+            summary = f"{summary} — {rank_label}" if summary else rank_label
+        label = q.get("label")
+        if label:
+            summary = f"{label}: {summary}" if summary else label
+
+        if not matches:
+            text = f"🔎 <b>{html.escape(summary)}</b> — нічого не знайдено." if summary else "Нічого не знайдено за цим запитом."
+            await message.reply_text(text, parse_mode="HTML")
+            continue
+
+        # playorna urls, not aussiescodex - tapping a result should show the
+        # full stats/facts/sections in chat via _send_entry, same as a name
+        # search; the aussiescodex "Assess" link lives on that entry view.
+        entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
+                    "sort_value": m.sort_value} for m in matches]
+        suffix = " (показано перші 50)" if len(entries) >= 50 else ""
+
+        key = _remember({"entries": entries, "lang": "en"})
+        await message.reply_text(
+            f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
+            parse_mode="HTML",
+            reply_markup=_result_list_keyboard(entries, key),
+        )
+
+
 async def _run_query_search(message, text: str) -> None:
     try:
-        parsed = await parse_conditions(text)
+        plan = await plan_queries(text)
     except OllamaError:
-        parsed = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and",
-                  "category": "", "sort_by": "", "sort_dir": "desc"}
+        plan = _fallback_plan(text)
 
-    conditions = parsed["conditions"]
-    sort_by = parsed.get("sort_by") or None
-    try:
-        matches = await asyncio.to_thread(
-            query_records, conditions, parsed.get("combinator", "and"), parsed.get("category") or None,
-            50, sort_by, parsed.get("sort_dir", "desc"),
-        )
-    except Exception as e:
-        logger.warning("orna: query search failed for %r", text, exc_info=True)
-        await message.reply_text(f"Пошук не вдався: {e}")
+    if plan.get("needs_clarification"):
+        options = plan["options"]
+        key = _remember({"kind": "clarify", "text": text, "options": options})
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(opt[:30], callback_data=f"orna|clarify|{key}|{i}")
+            for i, opt in enumerate(options)
+        ]])
+        await message.reply_text(plan.get("question") or "Уточніть, будь ласка:", reply_markup=keyboard)
         return
 
-    if not matches:
-        await message.reply_text("Нічого не знайдено за цим запитом.")
-        return
-
-    # playorna urls, not aussiescodex - tapping a result should show the
-    # full stats/facts/sections in chat via _send_entry, same as a name
-    # search; the aussiescodex "Assess" link lives on that entry view.
-    entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
-                "sort_value": m.sort_value} for m in matches]
-    joiner = " AND " if parsed.get("combinator", "and") == "and" else " OR "
-    summary = joiner.join(_describe_condition(c) for c in conditions) if conditions else ""
-    if sort_by:
-        rank_label = f"{'найбільший' if parsed.get('sort_dir', 'desc') == 'desc' else 'найменший'} {sort_by}"
-        summary = f"{summary} — {rank_label}" if summary else rank_label
-    suffix = " (показано перші 50)" if len(entries) >= 50 else ""
-
-    key = _remember({"entries": entries, "lang": "en"})
-    await message.reply_text(
-        f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
-        parse_mode="HTML",
-        reply_markup=_result_list_keyboard(entries, key),
-    )
+    await _execute_queries(message, plan.get("queries") or [])
 
 
 async def _send_entry(message, entry_ref: dict, lang: str) -> None:
@@ -467,6 +500,26 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             parse_mode="HTML",
             reply_markup=_result_list_keyboard(entries, key2),
         )
+        return
+
+    if kind == "clarify":
+        idx = int(arg) if arg.isdigit() else -1
+        options = state.get("options") or []
+        if not (0 <= idx < len(options)):
+            return
+        choice = options[idx]
+        try:
+            await query.edit_message_text(f"{query.message.text}\n\n→ {choice}", reply_markup=None)
+        except TelegramError:
+            pass  # e.g. double-tapped - harmless, the search below still runs
+        original_text = state.get("text", "")
+        # clarified=True: plan_queries won't ask a second time (see its
+        # docstring) - this can never loop back into another clarify button.
+        try:
+            plan = await plan_queries(f"{original_text} ({choice})", clarified=True)
+        except OllamaError:
+            plan = _fallback_plan(original_text)
+        await _execute_queries(query.message, plan.get("queries") or [])
         return
 
 
