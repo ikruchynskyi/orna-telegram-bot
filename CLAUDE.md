@@ -390,6 +390,53 @@ regex fallback stopped at the first comma. All of the above verified
 directly against live data first, then with 3 repeated real-model calls
 per phrasing before deploying, same as every other prompt change.
 
+**`place` (not `type`/`item_type`) is the body-slot field - live bug:
+"what goes on legs" was parsed as `field:"type"`, which only ever holds a
+weapon subtype and never matches "legs" at all.** Real `place` values:
+`head`/`torso`/`legs`/`weapon`/`off-hand`/`accessory`/`material`/
+`armor_(for_adornments)`/`augment_(for_celestial_weapons)`. The prompt's
+attr field guidance now spells out all three fields side by side with an
+explicit "use `place` for body-slot asks, never `type`" instruction,
+since the names alone don't disambiguate them.
+
+**Buff/debuff tier shorthand (`"T Mag ++"`, `"Def ↓↓"`, `"T Mag 3"`) has
+to survive two separate steps intact, and both needed fixing.** Live bug:
+"/orna what gives t.mag ++" returned 50 results including an item that
+only gives tier-1 T. Mag ↑, not tier 2. Root causes, both fixed:
+1. `orna_aussies._parse_buff_query` never recognized `+`/`-` run notation
+   or counted repeated arrows as magnitude - it only understood a literal
+   digit or roman numeral, so `"++"` silently fell back to magnitude 1.
+   Now `↑↑`/`↓↓` (arrow count = magnitude) and `+`/`-` runs are parsed the
+   same way, with word/digit as the remaining fallback. Fixing this also
+   surfaced a real regression risk: loosening `_TEAM_RE`'s trailing
+   `\s+` to `\s*` (needed so `"t.mag"`, no space, is recognized as a team
+   prefix) broke `"team ..."` inputs, because the alternation
+   `(?:t\.?|team)` tried the single-letter `"t"` branch first and
+   matched just that, leaving a mangled `"eam attack..."` behind.
+   Reordering to `(?:team|t\.?)` (longest/most-specific alternative
+   first) fixed both without reintroducing the old requirement for a
+   space after `t.`.
+2. Even with (1) fixed, `parse_conditions` itself was only reliably
+   preserving `"++"` into its `value` output about 5/8 of the time -
+   the rest either invented a wrong tier number, silently dropped the
+   tier, or (once) fabricated a nonexistent `"t_mag"` stat field. Added
+   explicit prompt guidance: tier shorthand is always `kind:"effect"`,
+   never `"stat"`, and must be copied into `value` character-for-character,
+   not re-notated or guessed. Verified 8/8 after the prompt change.
+
+**A trailing stray number on an otherwise-valid codex name falls back to
+the name with the number stripped** (`_run_codex_search`, alongside the
+existing "rainsong" space-collapse and description-substring fallbacks).
+Live bug: "/orna solarite 12345" found nothing even though "Solarite" by
+itself has 2 results - `route_query` passes the number through verbatim
+since it has no way to know it's noise rather than part of the name.
+
+**`/orna` (plus `res_today`/`res_next`/`remind`) are now registered via
+`set_my_commands` in a `post_init` hook (`telegram_bot.py`)** - no
+command had ever been added to the visible Telegram autocomplete menu
+before this (not an oversight specific to `/orna`; nothing was). `/go`
+is deliberately left out of this list, unlike everything else.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

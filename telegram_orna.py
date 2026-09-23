@@ -44,6 +44,7 @@ import asyncio
 import datetime
 import html
 import logging
+import re
 import uuid
 from collections import defaultdict
 from typing import Optional
@@ -202,6 +203,23 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
         return
 
     results = data.get("results") or []
+
+    # a trailing number is never part of a real codex name (seen live:
+    # "solarite 12345" -> 0 results, plain "Solarite" -> 2) - likely a
+    # stray quantity/typo tacked onto an otherwise-valid name. Strip it and
+    # retry before giving up, same "harmless if unneeded" logic as the
+    # space-collapse retry below.
+    if not results:
+        stripped = re.sub(r"\s+\d+\s*$", "", query).strip()
+        if stripped and stripped != query:
+            try:
+                retry_data = await asyncio.to_thread(codex_search, stripped, lang)
+            except Exception:
+                retry_data = {}
+            retry_results = retry_data.get("results") or []
+            if retry_results:
+                logger.info("orna: %r found nothing, %r (number stripped) did - using that", query, stripped)
+                query, results = stripped, retry_results
 
     # route_query's translation step non-deterministically splits some
     # compound item names into two words (seen live: "rainsong" ->

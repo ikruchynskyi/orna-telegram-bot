@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before importing modules that read env vars at import time (orna_sheets)
 
 import httpx
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
@@ -107,8 +107,20 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text("\n".join(msg), parse_mode="HTML")
 
 
+async def _post_init(app):
+    # No setMyCommands call existed anywhere before this - /go is the one
+    # command that must stay off this list (see below), everything else
+    # genuinely is meant to be user-visible autocomplete.
+    await app.bot.set_my_commands([
+        BotCommand("orna", "Запит про Orna (природною мовою)"),
+        BotCommand("res_today", "Ресурси, доступні сьогодні"),
+        BotCommand("res_next", "Коли з'явиться ресурс"),
+        BotCommand("remind", "Поставити нагадування"),
+    ])
+
+
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
     # New unified entry point (routes "today"/"next"/codex-search intent via

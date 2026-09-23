@@ -233,6 +233,16 @@ async def parse_conditions(text: str) -> Dict:
         'defense" -> value "Def Down", field "causes"), "gives" for grants/self-or-'
         'team buffs, "cures" for "what cures poisoned"/"removes stun", empty if '
         "unclear.\n"
+        "TIER SHORTHAND: a buff/debuff tier is often written as a run of +/- "
+        '("T Mag ++"), repeated arrows ("Mag ↑↑↑"), or a plain digit/roman '
+        'numeral ("T Mag 2", "Def III") - these are ALWAYS "kind":"effect" '
+        "(never \"stat\" - there's no stat named 't_mag' or similar, tier "
+        'shorthand is a buff strength, not a stat value). Copy the tier marker '
+        'into "value" EXACTLY as the user wrote it (same +/-/arrow count, same '
+        'digit) - never translate it into a different notation, invent a tier '
+        "number that wasn't there, or drop it. E.g. \"t.mag ++\" -> value "
+        '"t.mag ++" verbatim (not "T Mag 3", not "T Mag" with the tier '
+        'dropped).\n'
         "IMPORTANT: if the request has a NUMBER/threshold on a stat (magic, "
         'attack, crit damage, follower stats, etc.) it is ALWAYS "kind":"stat", '
         'even if the wording uses "gives"/"has"/"with" - e.g. "what gives magic '
@@ -247,9 +257,15 @@ async def parse_conditions(text: str) -> Dict:
         '"value":"<text, number, or true/false>"} - a flat attribute, not limited '
         "to a fixed list - infer the field from the record structure Orna data "
         'uses: "tier" (number), "rarity" (common/legendary/godly/arisen/...), '
-        '"useable_by" (which classes), "place" (where found), "type" (e.g. '
-        'weapon subtype - daggers/axes_&_hammers/curved_swords), "item_type" (the '
-        'equipment SLOT - armor/weapon/off-hand/field/...), "family" (monster '
+        '"useable_by" (which classes can equip it - magic_users/melee_classes/'
+        'thief_classes/warrior_classes/valhallan_summoner_classes/all_classes - a '
+        'partial word like "magic" or "thief" is fine, matched as a substring), '
+        '"place" (the body slot an item goes in - head/torso/legs/weapon/'
+        "off-hand/accessory/material - use THIS for \"what goes on "
+        'legs"/"head slot items"/"accessories", never "type"), "type" (e.g. '
+        'weapon SUBTYPE, only meaningful for weapons - daggers/axes_&_hammers/'
+        'curved_swords), "item_type" (the broad equipment category - armor/'
+        'weapon/off-hand/field/...), "family" (monster '
         'family, e.g. magical/undead), "element" (item elemental type - fire/'
         'water/arcane/...), "events" (which game event, e.g. "which items are '
         'from thronemakers"), "tags" (misc labels like found_in_chests), "price" '

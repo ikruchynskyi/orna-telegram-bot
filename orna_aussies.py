@@ -178,7 +178,7 @@ def has_aussies_page(category: str) -> bool:
 # resolving a human search term back to one or more effect codes
 # -----------------------------------------------------------------------------
 
-_TEAM_RE = re.compile(r"^\s*(?:t\.?|team)\s+", re.IGNORECASE)
+_TEAM_RE = re.compile(r"^\s*(?:team|t\.?)\s*", re.IGNORECASE)
 _MAGNITUDE_WORDS = {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3}
 _STAT_ALIASES = {
     "att": "att", "attack": "att",
@@ -214,25 +214,46 @@ def _build_stem_directions() -> dict:
 
 
 def _parse_buff_query(term: str) -> Optional[str]:
-    """Try to parse "T Mag 3" / "team attack down 2" / "Mag Up" into an
-    exact code like "t__mag_uuu". None if it doesn't look like this
-    pattern at all - caller falls back to fuzzy status matching."""
+    """Try to parse "T Mag 3" / "team attack down 2" / "Mag Up" /
+    "t.mag ++" / "Def ↓↓" into an exact code like "t__mag_uuu". None if
+    it doesn't look like this pattern at all - caller falls back to
+    fuzzy status matching."""
     text = term.strip().lower()
     team = bool(_TEAM_RE.match(text))
     text = _TEAM_RE.sub("", text)
 
     direction = None
-    if re.search(r"\bup\b|↑", text):
-        direction = "u"
-    elif re.search(r"\bdown\b|↓", text):
-        direction = "d"
-    text = re.sub(r"\b(up|down)\b", "", text).strip()
-
     magnitude = 1
-    m = re.search(r"\b(i{1,3}|[123])\b", text)
-    if m:
-        magnitude = _MAGNITUDE_WORDS.get(m.group(1), 1)
-        text = text[:m.start()].strip()
+
+    # arrow runs encode direction + magnitude together in one token,
+    # exactly like the game's own display ("Mag ↑↑" = tier 2 up).
+    arrows = re.search(r"(↑{1,3}|↓{1,3})", text)
+    if arrows:
+        token = arrows.group(1)
+        direction = "u" if token[0] == "↑" else "d"
+        magnitude = len(token)
+        text = (text[:arrows.start()] + text[arrows.end():]).strip()
+    else:
+        if re.search(r"\bup\b", text):
+            direction = "u"
+        elif re.search(r"\bdown\b", text):
+            direction = "d"
+        text = re.sub(r"\b(up|down)\b", "", text).strip()
+
+        # "+"/"-" run notation is common shorthand for the same thing
+        # ("T Mag ++" = tier 2 up, "Def --" = tier 2 down).
+        signs = re.search(r"([+]{1,3}|-{1,3})", text)
+        if signs:
+            token = signs.group(1)
+            if direction is None:
+                direction = "u" if token[0] == "+" else "d"
+            magnitude = len(token)
+            text = (text[:signs.start()] + text[signs.end():]).strip()
+        else:
+            m = re.search(r"\b(i{1,3}|[123])\b", text)
+            if m:
+                magnitude = _MAGNITUDE_WORDS.get(m.group(1), 1)
+                text = text[:m.start()].strip()
 
     stat = _STAT_ALIASES.get(text.strip())
     if not stat:
