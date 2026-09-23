@@ -259,22 +259,21 @@ against the live data before and after that fix, not just by reading the
 code. Results are capped at 50 (`query_records`'s `limit`) since a single
 loose condition like "mag > 250" alone can match hundreds of records.
 
-**Query results link to aussiescodex.com (`orna_aussies.build_url`), not
-playorna, and use Telegram `url=` buttons instead of the "open" callback
-`_send_entry` uses for a name search.** aussiescodex only actually has
-browsable pages for `items`/`bosses`/`followers`/`spells` (its URL
-segment for spells is `orna-skills`, not `orna-spells` — verified by
-checking a real page's own outbound links, not guessed) — every other
-category 404s there and isn't in its own nav, so `build_url` falls back
-to playorna's `/codex/<category>/<id>/` for `monsters`/`raids`/`classes`/
-`buildings`/`dungeons`. Since these are direct links (no server-side
-fetch+render needed the way a "codex" name-search result gets), the
-result-list keyboard uses a link-mode variant (`_link_list_keyboard`,
-`InlineKeyboardButton(url=...)`) instead of `orna|open|` callback buttons
-— pagination still needs the callback (`orna|page|`) since flipping pages
-edits the message's keyboard in place either way; the `page` handler
-branches on a `link_mode` flag stored alongside the entries to pick the
-right keyboard builder.
+**Query results use the exact same rich rendering as a name search -
+stats/facts/sections in chat, not just a link out.** First version made
+query results plain `url=` link buttons straight to aussiescodex.com,
+skipping the fetch+render entirely; reverted on the same day, per
+explicit feedback, once it was clear having the stats actually visible in
+the chat (not just a link to tap through to) was the valuable part.
+`_run_query_search` now builds playorna-shaped entries and reuses
+`_result_list_keyboard`/`_send_entry` exactly like a "codex" name search
+does. aussiescodex only earns a place as a single **"📊 Assess"** link
+button on the entry view (`orna_aussies.has_aussies_page` gates it - only
+4 of 9 categories have a page there, its URL segment for spells is
+`orna-skills` not `orna-spells`, both verified by checking a real page's
+own outbound links, not guessed) - playorna's own codex has no upgrade/
+assess calculator, aussiescodex does, so that's the one thing worth
+sending the user there for.
 
 **aussiescodex.com's `codex.json`/`translations.en.json` are fetched
 dynamically and cached to disk, gitignored (`.aussies_cache/`), with a

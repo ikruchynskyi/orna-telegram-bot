@@ -165,6 +165,15 @@ def build_url(category: str, record_id: str) -> str:
     return f"https://playorna.com/codex/{category}/{record_id}/"
 
 
+def has_aussies_page(category: str) -> bool:
+    """True only for the 4 categories aussiescodex actually has pages
+    for (see _AUSSIES_URL_SEGMENTS) - used to decide whether an "Assess"
+    link is worth showing at all, rather than one that's just a redundant
+    second link back to the same playorna page build_url already falls
+    back to for every other category."""
+    return category in _AUSSIES_URL_SEGMENTS
+
+
 # -----------------------------------------------------------------------------
 # resolving a human search term back to one or more effect codes
 # -----------------------------------------------------------------------------

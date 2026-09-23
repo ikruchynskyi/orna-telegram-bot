@@ -11,30 +11,32 @@ request via telegram_nlp.route_query into one of four intents:
     data as /res_next). Falls through to codex search if the named thing
     isn't a known Material Forecast material - it might still be a real
     codex entry (a monster, an item that isn't in the shop rotation, etc).
-  - "codex": a lookup of one specific named item/monster/etc - search
-    playorna.com's codex and browse results and cross-linked entries via
-    inline buttons.
-  - "effect": "what gives/causes/is immune to <effect>" - a structured
-    search over orna_aussies' full item/monster/etc. database (which
-    entities have a given status/buff/debuff), not a name lookup. Results
-    feed into the exact same result-list/entry rendering as "codex" -
-    orna_aussies' record ids are the same slugs playorna.com uses, so a
-    match there opens straight into a real codex page.
+  - "codex": a lookup of one specific named item/monster/etc by name -
+    search playorna.com's codex.
+  - "query": "what gives/causes/is immune to X", "mag > 250 and crit > 3%",
+    "items with 'dragon' in the description" - a structured multi-attribute
+    search over orna_aussies' full item/monster/etc. database, not a name
+    lookup. See telegram_nlp.parse_conditions for how free text becomes
+    conditions, and orna_aussies.query_records for how they're evaluated.
 
-No LLM involved past that one routing call for "today"/"next"/"codex".
-Every codex page - item, class, monster, boss, follower, raid, spell,
-building, dungeon - embeds a universal `codex-bootstrap` JSON blob
-(facts/effects/tags/sections), so Telegram is just a UI over that
-already-structured data; see orna_codex.fetch_codex_json for where that's
-read. "effect" additionally resolves the routed English term to a game
-effect code via orna_aussies.resolve_codes - see that module's docstring
-for how "T Mag 3" becomes "t__mag_uuu" without hand-parsing the game's
-internal up/down/team encoding.
+Both "codex" and "query" results feed into the exact same result-list/
+entry rendering: orna_aussies' record ids are the same slugs playorna.com
+uses, so a "query" match opens straight into a real codex page just like
+a "codex" one does. Every codex page - item, class, monster, boss,
+follower, raid, spell, building, dungeon - embeds a universal
+`codex-bootstrap` JSON blob (facts/effects/tags/sections), so Telegram is
+just a UI over that already-structured data; see
+orna_codex.fetch_codex_json for where that's read. An entry view also
+gets an "Assess" link to aussiescodex.com's own page for that record
+when one exists (only 4 of the 9 categories have one - see
+orna_aussies.has_aussies_page) - playorna's own codex has no upgrade/
+assess calculator, aussiescodex does.
 
-Navigation never edits a message in place except paging through one
-result list - every "open this" action sends a new message instead, so
-Telegram's own scrollback doubles as a browsing history with no "back"
-button or state stack needed (same pattern telegram_go.py uses).
+No LLM involved past routing+condition-parsing. Navigation never edits a
+message in place except paging through one result list - every "open
+this" action sends a new message instead, so Telegram's own scrollback
+doubles as a browsing history with no "back" button or state stack
+needed (same pattern telegram_go.py uses).
 """
 from __future__ import annotations
 
@@ -52,6 +54,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from orna_aussies import build_url as build_aussies_url
 from orna_aussies import decode as decode_effect_code
+from orna_aussies import has_aussies_page
 from orna_aussies import query_records, resolve_codes as resolve_effect_codes
 from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
@@ -154,37 +157,17 @@ def _result_list_keyboard(entries: list[dict], key: str, page: int = 0) -> Inlin
     return InlineKeyboardMarkup(rows)
 
 
-def _link_list_keyboard(entries: list[dict], key: str, page: int = 0) -> InlineKeyboardMarkup:
-    """Like _result_list_keyboard, but each button is a direct Telegram
-    `url` link (handled entirely client-side, no callback fires) rather
-    than an "open via our own fetch+render" callback - used for
-    orna_aussies query results, which link straight to aussiescodex.com/
-    playorna.com instead of going through orna_codex.fetch_codex_json."""
-    start = page * _RESULTS_PER_PAGE
-    chunk = entries[start:start + _RESULTS_PER_PAGE]
-    rows = []
-    for e in chunk:
-        tier = e.get("tier")
-        label = f"{e['name']} (★{tier})" if tier else e["name"]
-        rows.append([InlineKeyboardButton(label[:60], url=e["url"])])
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("« Prev", callback_data=f"orna|page|{key}|{page - 1}"))
-    if start + _RESULTS_PER_PAGE < len(entries):
-        nav.append(InlineKeyboardButton("Next »", callback_data=f"orna|page|{key}|{page + 1}"))
-    if nav:
-        rows.append(nav)
-    return InlineKeyboardMarkup(rows)
-
-
-def _section_keyboard(sections: list[dict], key: str) -> Optional[InlineKeyboardMarkup]:
+def _section_keyboard_rows(sections: list[dict], key: str) -> list:
+    """Button rows for an entry's cross-link sections - returns rows
+    (not a wrapped InlineKeyboardMarkup) so _send_entry can append an
+    "Assess" row before building the final keyboard."""
     rows = []
     for i, section in enumerate(sections):
         entries = section.get("entries") or []
         if not entries:
             continue
         rows.append([InlineKeyboardButton(f"{section['title']} ({len(entries)})"[:60], callback_data=f"orna|sec|{key}|{i}")])
-    return InlineKeyboardMarkup(rows) if rows else None
+    return rows
 
 
 def _format_entry(detail: dict) -> str:
@@ -288,16 +271,19 @@ async def _run_query_search(message, text: str) -> None:
         await message.reply_text("Нічого не знайдено за цим запитом.")
         return
 
-    entries = [{"name": m.name, "url": build_aussies_url(m.category, m.id), "tier": m.tier} for m in matches]
+    # playorna urls, not aussiescodex - tapping a result should show the
+    # full stats/facts/sections in chat via _send_entry, same as a name
+    # search; the aussiescodex "Assess" link lives on that entry view.
+    entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier} for m in matches]
     joiner = " AND " if parsed.get("combinator", "and") == "and" else " OR "
     summary = joiner.join(_describe_condition(c) for c in conditions)
     suffix = " (показано перші 50)" if len(entries) >= 50 else ""
 
-    key = _remember({"entries": entries, "link_mode": True})
+    key = _remember({"entries": entries, "lang": "en"})
     await message.reply_text(
         f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
         parse_mode="HTML",
-        reply_markup=_link_list_keyboard(entries, key),
+        reply_markup=_result_list_keyboard(entries, key),
     )
 
 
@@ -327,11 +313,20 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> None:
 
     sections = detail.get("sections") or []
     key = _remember({"sections": sections, "lang": lang})
+    rows = _section_keyboard_rows(sections, key)
+
+    # playorna urls are always "/codex/<category>/<id>/" - reuse that to
+    # link an "Assess" button to aussiescodex.com's calculator for the
+    # same record, when it has a page (only 4 of 9 categories do).
+    parts = [p for p in url.split("/") if p]
+    if len(parts) >= 3 and parts[0] == "codex" and has_aussies_page(parts[1]):
+        rows.append([InlineKeyboardButton("📊 Assess", url=build_aussies_url(parts[1], parts[2]))])
+
     await message.reply_text(
         _format_entry(detail),
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=_section_keyboard(sections, key),
+        reply_markup=InlineKeyboardMarkup(rows) if rows else None,
     )
 
 
@@ -401,9 +396,8 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if kind == "page":
         page = int(arg) if arg.isdigit() else 0
         entries = state.get("entries") or []
-        keyboard = _link_list_keyboard(entries, key, page) if state.get("link_mode") else _result_list_keyboard(entries, key, page)
         try:
-            await query.edit_message_reply_markup(reply_markup=keyboard)
+            await query.edit_message_reply_markup(reply_markup=_result_list_keyboard(entries, key, page))
         except TelegramError:
             pass  # e.g. "message not modified" if double-tapped - harmless
         return
