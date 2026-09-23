@@ -282,10 +282,7 @@ async def send_report_blocks(
     if bundles:
         key = _remember_bundles(bundles)
         rows = [
-            [InlineKeyboardButton(
-                f"🔔 {b.guild} — {'сьогодні' if b.occurrence <= datetime.date.today() else f'за {(b.occurrence - datetime.date.today()).days} дн.'}",
-                callback_data=f"needrem|{key}|{i}",
-            )]
+            [InlineKeyboardButton(_bundle_label(b), callback_data=f"needrem|{key}|{i}")]
             for i, b in enumerate(bundles)
         ]
         await message.reply_text(
@@ -396,6 +393,22 @@ def _bundle_fire_at(occurrence: datetime.date) -> datetime.datetime:
 def _bundle_text(bundle: ReminderBundle) -> str:
     items = ", ".join(f"{m.qty}x {m.name}" for m in bundle.materials)
     return f"🎁 Гільдія {bundle.guild}: {items}"
+
+
+def _bundle_when(occurrence: datetime.date) -> str:
+    days = (occurrence - datetime.date.today()).days
+    return "сьогодні" if days <= 0 else f"за {days} дн."
+
+
+def _bundle_label(bundle: ReminderBundle) -> str:
+    """Button text for one bundle - needs the material name(s), not just
+    the guild, or asking about several materials at once produces a wall
+    of buttons that all just say the same handful of guild names with no
+    way to tell which is which (live report: 20 buttons, 10 guild names
+    each appearing twice, one per material - useless without the name)."""
+    names = ", ".join(m.name for m in bundle.materials)
+    label = f"🔔 {bundle.guild} — {names} — {_bundle_when(bundle.occurrence)}"
+    return label if len(label) <= 64 else label[:63] + "…"
 
 
 async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

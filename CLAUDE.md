@@ -764,6 +764,17 @@ the same-day-timezone ambiguity that design's own comment already flagged
 (the new fire time inherits that same ambiguity, documented on
 `_bundle_fire_at`, rather than pretending it's precise).
 
+**Button labels include the material name(s), not just the guild -
+`_bundle_label`.** Live report: asking about 2 materials produced 19
+buttons, but the label was just guild + day-count, so most guild names
+appeared twice (once per material, at different dates) with no way to
+tell which button was for which material without tapping it. `_bundle_label`
+joins every material name in the bundle (comma-separated - a bundle can
+have more than one when two requested materials land at the same guild
+on the same day, e.g. both landing at "Towers" the same day become one
+button naming both) into the button text, truncated to 64 chars as a
+safety cap for an unusually long combination.
+
 ## Verifying changes
 
 There's no test suite. The working pattern used throughout development:
