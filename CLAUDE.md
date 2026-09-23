@@ -780,7 +780,22 @@ entirely. State (which bundle a tap refers to) lives in an in-memory
 `_REMINDER_STATE` dict keyed by a short id in `callback_data`, same
 pattern as `telegram_orna._STATE`/`telegram_go._SESSIONS`; a `"scheduled"`
 set per state entry guards against a double-tap creating two identical
-reminders. Replaced the earlier `orna_calendar.py` (deleted) design
+reminders (still checked even though the tapped button - see next
+paragraph - normally isn't there to tap again; a client showing a
+momentarily-stale cached keyboard, or a very fast double-tap racing the
+edit below, both still hit this).
+
+**Tapping a reminder button removes it from the keyboard - that's the
+confirmation, there's no separate message.** `handle_reminder_button`
+rebuilds `reply_markup` from `bundles`, excluding every index already in
+`state["scheduled"]`, and edits the message in place; once every button
+in a panel has been tapped, `reply_markup` goes to `None` (Telegram
+just drops the keyboard) rather than an empty `InlineKeyboardMarkup`.
+The `query.answer()` toast is still sent too, but as a non-blocking
+toast (no `show_alert=True`) rather than a modal - now that the button's
+disappearance is itself a persistent, visible confirmation, a popup the
+user has to dismiss would be redundant weight, not the primary signal.
+Replaced the earlier `orna_calendar.py` (deleted) design
 outright, per explicit ask - a reminder the bot actually delivers beats a
 link out to a separate app the user has to remember to check, and sidesteps
 the same-day-timezone ambiguity that design's own comment already flagged

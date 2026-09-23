@@ -44,6 +44,7 @@ from collections import defaultdict
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -435,7 +436,22 @@ async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_T
         context.application, query.message.chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence),
     )
     state["scheduled"].add(idx)
-    await query.answer("✅ Нагадування встановлено!", show_alert=True)
+    await query.answer("✅ Нагадування встановлено!")
+
+    # Remove the tapped button rather than leaving it there - there's no
+    # separate confirmation message, so the button disappearing (a change
+    # that stays visible in the chat, unlike the toast above which is gone
+    # the moment it's dismissed) IS the confirmation.
+    remaining_rows = [
+        [InlineKeyboardButton(_bundle_label(b), callback_data=f"needrem|{key}|{i}")]
+        for i, b in enumerate(bundles) if i not in state["scheduled"]
+    ]
+    try:
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(remaining_rows) if remaining_rows else None
+        )
+    except TelegramError:
+        pass  # e.g. "message not modified" on a double-tap race - harmless
 
 
 def build_reminder_callback_handler() -> CallbackQueryHandler:
