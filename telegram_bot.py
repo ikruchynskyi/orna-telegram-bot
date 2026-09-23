@@ -1,12 +1,9 @@
 import os
-import datetime
 import logging
-from collections import defaultdict
 
 from dotenv import load_dotenv
 load_dotenv()  # must run before importing modules that read env vars at import time (orna_sheets)
 
-import httpx
 from telegram import (
     BotCommand,
     BotCommandScopeAllChatAdministrators,
@@ -21,7 +18,7 @@ from telegram_resources import build_reminder_callback_handler, build_resource_c
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
 from telegram_remind import build_remind_handler, reschedule_pending
 from telegram_orna import build_orna_callback_handler, build_orna_handler, build_update_codex_handler
-from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
+from telegram_orna import _next_text, _today_text
 import usage_stats
 
 logging.basicConfig(
@@ -36,45 +33,25 @@ if not BOT_TOKEN:
 
 
 async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Thin wrapper: /res_today and /orna's own today() tool used to
+    independently reimplement the exact same sheet-walk - now both call
+    telegram_orna._today_text, one implementation to maintain (and this
+    picks up that function's proper HTML-escaping for free)."""
     usage_stats.record_command_for(update, "res_today")
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    logger.info("res_today from chat_id=%s user_id=%s", chat_id, user_id)
-
-    today = get_today_month_day()
-
-    try:
-        values = await fetch_sheet_data()
-    except httpx.HTTPError as e:
-        logger.exception("Failed to fetch sheet data")
-        await update.message.reply_text(f"Не вдалося отримати дані: {e}")
+    message = update.effective_message
+    if not message:
         return
-
-    tdg: dict[str, list[str]] = defaultdict(list)
-    for res in values:
-        res_name = res[0]
-        for i, date in enumerate(res[1:]):
-            if date == today and i < len(GUILD_NAMES):
-                tdg[GUILD_NAMES[i]].append(res_name)
-
-    if not tdg:
-        await update.message.reply_text(f"Сьогодні ({today}) немає ресурсів.")
-        return
-
-    msg = [f"Ресурси {today}"]
-    for guild, materials in tdg.items():
-        msg.append(f"{guild}{' ' * 6}{', '.join(materials)}")
-
-    await update.message.reply_text("\n".join(msg))
+    await message.reply_text(await _today_text())
 
 
 async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Thin wrapper over telegram_orna._next_text - see today_resources."""
     message = update.effective_message
     if not message:
         logger.warning("Handler called without an effective message.")
         return
 
-    text = " ".join(context.args).lower().strip()
+    text = " ".join(context.args).strip()
     usage_stats.record_command_for(update, "res_next", text)
     if not text:
         await message.reply_text(
@@ -82,39 +59,13 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    try:
-        values = await fetch_sheet_data()
-    except httpx.HTTPError as e:
-        logger.exception("Failed to fetch sheet data")
-        await message.reply_text(f"Не вдалося отримати дані: {e}")
-        return
-
-    msg = [f"Наступні гільдії і дати коли з’явиться ресурс {text}"]
-    for res in values:
-        res_name = res[0]
-        if text not in res_name.lower():
-            continue
-
-        guild_dates = [(GUILD_NAMES[i], date) for i, date in enumerate(res[1:]) if i < len(GUILD_NAMES) and date]
-
-        try:
-            guild_dates.sort(key=lambda x: datetime.datetime.strptime(x[1], '%B %d'))
-        except ValueError:
-            logger.warning("Malformed date in row: %s", res)
-            continue
-
-        msg.append(f"<b>{res_name}:</b>")
-        for guild, date in guild_dates:
-            msg.append(f"{guild}{' ' * 6}{date}")
-        msg.append(" ")
-
-    if len(msg) == 1:
+    result = await _next_text(text)
+    if result is None:
         await message.reply_text(
             "Такий ресурс не знайдено. Приклад використання: /res_next Adamantine"
         )
         return
-
-    await message.reply_text("\n".join(msg), parse_mode="HTML")
+    await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -187,6 +138,14 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if llm_calls:
         for model, count in sorted(llm_calls.items(), key=lambda kv: -kv[1]):
             lines.append(f"  {model}: {count}")
+    else:
+        lines.append("  (ще немає даних)")
+    lines.append("")
+    lines.append("Дії /orna (ReAct loop):")
+    orna_tools = data["orna_tools"]
+    if orna_tools:
+        for action, count in sorted(orna_tools.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {action}: {count}")
     else:
         lines.append("  (ще немає даних)")
     lines.append("")

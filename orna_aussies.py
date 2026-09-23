@@ -9,13 +9,20 @@ Two files:
   - codex.json: every item/monster/boss/class/follower/raid/spell/
     building/dungeon record in one dump. Buffs/debuffs/immunities/things
     an item *causes* on a target are encoded as short internal codes
-    (e.g. "mag_u" = Mag Up I, "t__mag_uuu" = Team Mag Up III) - the
-    game's own internal effect-string vocabulary, not a display name.
+    (e.g. "mag_u" = Mag Up I, "t__mag_uuu" = Temp. Mag Up III) - the
+    game's own internal effect-string vocabulary, not a display name. The
+    "t__" prefix's own displayed abbreviation ("T.") reads like it could
+    mean "Team", but it doesn't - verified directly against playorna.com's
+    own served icon filenames (e.g. "T. Def ↑" -> defense_up_temp.png,
+    vs. plain "Def ↑" -> defense_up.png, same pairing for Res): it's
+    "Temp[orary]", a status that came from something time-limited (a
+    follower's bond proc, a consumable) rather than a normal spell/skill
+    grant - not a whole-party effect.
   - translations.en.json: maps every one of those codes straight to its
     human-readable name/arrow notation (e.g. "mag_u" -> "Mag ↑",
     "t__mag_uuu" -> "T. Mag ↑↑↑"), plus a `main` section
     keyed by record id -> {name, description}. Decoding is a flat
-    dictionary lookup; no need to hand-parse the up/down/team encoding -
+    dictionary lookup; no need to hand-parse the up/down/temp encoding -
     _build_stem_directions derives the valid tiers per stat from this
     file directly, so it stays correct if the game adds more later.
 
@@ -193,7 +200,15 @@ def has_aussies_page(category: str) -> bool:
 # resolving a human search term back to one or more effect codes
 # -----------------------------------------------------------------------------
 
-_TEAM_RE = re.compile(r"^\s*(?:team|t\.?)\s*", re.IGNORECASE)
+# The "t__" prefix means "Temp[orary]", not "Team" (see the module
+# docstring for the icon-filename evidence) - "team" is still accepted as
+# a recognized input synonym since that's the natural guess a player
+# would make from the "T." abbreviation alone, just not what it actually
+# means internally. Longest/most-specific alternative first ("temporary"
+# before "temp" before "team" before the bare "t\.?") - a bare "t" placed
+# earlier would greedily match and leave the rest of the word dangling,
+# the exact ordering bug already hit once with "team" vs "t\.?" alone.
+_TEMP_RE = re.compile(r"^\s*(?:temporary|temp|team|t\.?)\s*", re.IGNORECASE)
 _MAGNITUDE_WORDS = {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3}
 _STAT_ALIASES = {
     "att": "att", "attack": "att",
@@ -209,10 +224,10 @@ _STAT_ALIASES = {
 
 
 def _build_stem_directions() -> dict:
-    """{(team, base_stem): {ud strings}} derived live from
+    """{(is_temp, base_stem): {ud strings}} derived live from
     translations['status'] keys - not hardcoded, so a new tier/stat the
-    game adds still resolves correctly. Team and non-team are genuinely
-    asymmetric in the real data (e.g. non-team "Att Down" only goes to
+    game adds still resolves correctly. Temp and non-temp are genuinely
+    asymmetric in the real data (e.g. non-temp "Att Down" only goes to
     tier 1, "T. Att Down" goes to tier 3) so they're kept as separate
     keys rather than merged into one set per stem."""
     global _stem_directions_cache
@@ -222,20 +237,20 @@ def _build_stem_directions() -> dict:
     for k in _translations().get("status", {}):
         m = re.match(r"^(t__)?([a-z_]+?)_([ud]+)$", k)
         if m:
-            team_prefix, base, ud = m.groups()
-            stems.setdefault((bool(team_prefix), base), set()).add(ud)
+            temp_prefix, base, ud = m.groups()
+            stems.setdefault((bool(temp_prefix), base), set()).add(ud)
     _stem_directions_cache = stems
     return stems
 
 
 def _parse_buff_query(term: str) -> Optional[str]:
-    """Try to parse "T Mag 3" / "team attack down 2" / "Mag Up" /
+    """Try to parse "T Mag 3" / "temp attack down 2" / "Mag Up" /
     "t.mag ++" / "Def ↓↓" into an exact code like "t__mag_uuu". None if
     it doesn't look like this pattern at all - caller falls back to
     fuzzy status matching."""
     text = term.strip().lower()
-    team = bool(_TEAM_RE.match(text))
-    text = _TEAM_RE.sub("", text)
+    is_temp = bool(_TEMP_RE.match(text))
+    text = _TEMP_RE.sub("", text)
 
     direction = None
     magnitude = 1
@@ -277,13 +292,13 @@ def _parse_buff_query(term: str) -> Optional[str]:
         direction = "u"  # bare "T Mag 3" - buffs are the far more common ask than debuffs
 
     stems = _build_stem_directions()
-    same_direction = {ud for ud in stems.get((team, stat), set()) if ud[0] == direction}
+    same_direction = {ud for ud in stems.get((is_temp, stat), set()) if ud[0] == direction}
     ud = direction * magnitude
     if ud not in same_direction:
         if not same_direction:
             return None
         ud = max(same_direction, key=len)  # requested tier doesn't exist - use the highest that does
-    return f"t__{stat}_{ud}" if team else f"{stat}_{ud}"
+    return f"t__{stat}_{ud}" if is_temp else f"{stat}_{ud}"
 
 
 def _reverse_status() -> dict:
@@ -651,3 +666,36 @@ def query_records(conditions: list, combinator: str = "and", category: Optional[
         matched.sort(key=lambda pair: pair[0], reverse=(sort_dir != "asc"))
     results = [m for _, m in matched]
     return results[offset:offset + limit]
+
+
+def _demo() -> None:
+    """Pins _parse_buff_query's tier-shorthand parsing against known-good
+    phrasings - this function has two documented past regressions (arrow/
+    plus-run magnitude not counted at all, and the t./team alternation
+    ordering bug), exactly the "worked before, quietly stopped" shape a
+    future edit nearby could reintroduce with no other signal. Needs
+    network/cache access (translations.en.json) like the rest of this
+    module. Run directly: python3 orna_aussies.py"""
+    cases = {
+        "T Mag 3": "t__mag_uuu",
+        "team attack down 2": "t__att_dd",  # "team" is still accepted input - see _TEMP_RE
+        "Mag Up": "mag_u",
+        "t.mag ++": "t__mag_uu",
+        "Def ↓↓": "def_dd",
+        "T. Att Down": "t__att_d",
+        # Both of these ask for tier 3, but non-temp Def Up / Mag Up only
+        # go to tier 2 in the real game data (asymmetric temp-vs-non-temp
+        # tiers, see _build_stem_directions) - _parse_buff_query falls back
+        # to the highest tier that actually exists rather than inventing
+        # one, so these correctly resolve one tier lower than requested.
+        "Def III": "def_uu",
+        "Mag ↑↑↑": "mag_uu",
+    }
+    for term, expected in cases.items():
+        got = _parse_buff_query(term)
+        assert got == expected, f"_parse_buff_query({term!r}) = {got!r}, expected {expected!r}"
+    print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

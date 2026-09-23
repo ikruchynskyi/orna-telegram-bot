@@ -31,6 +31,7 @@ MAX_LOG_PER_USER = 40
 
 _commands: Counter = Counter()
 _llm_calls: Counter = Counter()  # keyed by "model (local|cloud)"
+_orna_tools: Counter = Counter()  # keyed by /orna ReAct loop action name
 _user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Counter[command]
 _user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
 _user_log: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{command,text,ts}, ...], newest last
@@ -48,6 +49,7 @@ def _load() -> None:
         return
     _commands.update(data.get("commands", {}))
     _llm_calls.update(data.get("llm_calls", {}))
+    _orna_tools.update(data.get("orna_tools", {}))
     for uid, counts in data.get("user_commands", {}).items():
         _user_commands[uid].update(counts)
     _user_names.update(data.get("user_names", {}))
@@ -57,15 +59,22 @@ def _load() -> None:
 
 
 def _save() -> None:
+    # Atomic write (temp file + os.replace, same directory) - same reasoning
+    # as telegram_remind.py's _save: a plain write_text left truncated by a
+    # crash/reload mid-write would make _load() silently start fresh,
+    # losing all history instead of just failing to record one entry.
     try:
-        _STORE_PATH.write_text(json.dumps({
+        tmp = _STORE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({
             "since": _since,
             "commands": dict(_commands),
             "llm_calls": dict(_llm_calls),
+            "orna_tools": dict(_orna_tools),
             "user_commands": {uid: dict(c) for uid, c in _user_commands.items()},
             "user_names": _user_names,
             "user_log": _user_log,
         }))
+        tmp.replace(_STORE_PATH)
     except OSError:
         logger.warning("usage_stats: couldn't write %s", _STORE_PATH, exc_info=True)
 
@@ -130,11 +139,24 @@ def record_llm_call(model: str, backend: str) -> None:
     _save()
 
 
+def record_tool_call(action: str) -> None:
+    """Call once per /orna ReAct loop tool dispatch (including "ask"/
+    "finish", and a dedicated "_step_budget_exhausted" entry when the loop
+    gives up without finishing) - the loop is new and more complex than
+    what it replaced, and this is the at-a-glance signal for whether it's
+    behaving (which tools actually get used, how often it needs to ask,
+    how often it runs out of steps) instead of manually digging through
+    logs after every live report."""
+    _orna_tools[action] += 1
+    _save()
+
+
 def snapshot() -> Dict:
     return {
         "since": _since,
         "commands": dict(_commands),
         "llm_calls": dict(_llm_calls),
+        "orna_tools": dict(_orna_tools),
         "user_count": len(_user_commands),
     }
 

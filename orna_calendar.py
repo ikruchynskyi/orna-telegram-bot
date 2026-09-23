@@ -17,11 +17,29 @@ browsing UI with no new rendering code.
 Cached to disk like orna_aussies.py, but with a much shorter TTL - event
 state (what's live, what's next) is time-sensitive in a way the slow-
 changing item/monster database isn't.
+
+Live report (2026-09-23): "коли буде івент на орни?" ("when's the next
+orns event") got a model-synthesized answer that showed two events whose
+own dates had already passed, then separately claimed "no such event" -
+confusing and simply wrong, because the model was left to reason about
+"already ended vs. upcoming" itself from raw date strings alongside doing
+the fuzzy "does this description count as an orns event" judgment in the
+same step. Fixed here, not in the prompt: fetch_events() now parses real
+datetimes and filters out anything already ended BEFORE the model ever
+sees it - one less thing to get wrong, and this repo's own server runs in
+America/New_York (verified: `date` -> "EDT"), the same zone the site's
+own date strings are labelled with, so a plain naive-datetime comparison
+against server-local `datetime.now()` is exact here, not an approximation.
+CALENDAR_URL_UK is also surfaced so telegram_orna.py can always include a
+direct link as a ground-truth fallback the user can check themselves,
+rather than depending entirely on the model's synthesis for an inherently
+fuzzy "does this bonus count" judgment call.
 """
 from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +47,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 CALENDAR_URL = "https://playorna.com/calendar/"
+CALENDAR_URL_UK = f"{CALENDAR_URL}?lang=uk"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -41,6 +60,25 @@ CACHE_TTL_SECONDS = 6 * 3600
 
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*[AP]M)\s*(\S*)\s*[–-]\s*"
                        r"(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*[AP]M)\s*(\S*)")
+_DT_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})\s*([AP]M)", re.IGNORECASE)
+
+
+def _parse_dt(display: str) -> Optional[datetime]:
+    """"2026-09-11 12:00 PM EDT" -> a naive datetime, comparable against
+    datetime.now() (see module docstring for why that's exact here, not
+    just close enough) - display-string parsing only, not full tz math."""
+    m = _DT_RE.search(display)
+    if not m:
+        return None
+    date_part, hour_s, minute_s, ampm = m.groups()
+    try:
+        d = datetime.strptime(date_part, "%Y-%m-%d")
+    except ValueError:
+        return None
+    hour = int(hour_s) % 12
+    if ampm.upper() == "PM":
+        hour += 12
+    return d.replace(hour=hour, minute=int(minute_s))
 
 
 def _fetch_html(force: bool = False) -> str:
@@ -98,18 +136,30 @@ def _parse_event(article) -> dict:
         "name": name_el.get_text(strip=True) if name_el else "?",
         "starts": starts,
         "ends": ends,
+        "ends_dt": _parse_dt(ends),
         "live": bool(article.select_one(".live-badge")),
         "description": desc_el.get_text(strip=True) if desc_el else "",
         "roster": roster,
     }
 
 
-def fetch_events(force: bool = False) -> list[dict]:
+def fetch_events(force: bool = False, upcoming_only: bool = True) -> list[dict]:
     """Every event currently listed on playorna.com/calendar/ (roughly:
     live now + the near-term upcoming window the site itself shows - there
     is no further pagination to walk). Each entry:
-    {"name", "starts", "ends", "live", "description",
-     "roster": {"<Category>": [{"name", "url"}, ...]}}."""
+    {"name", "starts", "ends", "ends_dt", "live", "description",
+     "roster": {"<Category>": [{"name", "url"}, ...]}}.
+
+    upcoming_only (default True) drops anything whose own end date has
+    already passed - deterministic, not left to the model (see module
+    docstring for the live bug this fixes). An event whose date couldn't
+    be parsed (ends_dt is None) is kept rather than dropped - fail open,
+    since silently hiding a real event over a parsing miss would be worse
+    than occasionally showing a stale one."""
     html = _fetch_html(force=force)
     soup = BeautifulSoup(html, "html.parser")
-    return [_parse_event(a) for a in soup.select("article.event-card")]
+    events = [_parse_event(a) for a in soup.select("article.event-card")]
+    if upcoming_only:
+        now = datetime.now()
+        events = [e for e in events if e["ends_dt"] is None or e["ends_dt"] >= now]
+    return events

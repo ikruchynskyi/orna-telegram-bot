@@ -62,3 +62,27 @@ def proofs_needed(count: int, guild: str, base_rate: int) -> int:
     guild_proof = GUILD_PROOFS[guild]
     exchange_rate = guild_proof.scaling * base_rate
     return math.ceil(count * exchange_rate / CAL_SCALING)
+
+
+def _demo() -> None:
+    """Pins this module's own formulas against known-correct values - a
+    typo'd constant here (e.g. a wrong RARITY_SCALING or scaling factor)
+    would otherwise only surface as a subtly-wrong-looking proof report
+    days later. Run directly: python3 orna_proofs.py"""
+    assert base_exchange_rate(10, "legendary") == 115  # 10*10 + 3*5
+    assert base_exchange_rate(5, "common") == 50  # 5*10 + 0*5
+    assert base_exchange_rate(7, "rare") == 75  # 7*10 + 1*5
+    assert base_exchange_rate(10, "  Legendary  ") == base_exchange_rate(10, "legendary"), \
+        "rarity lookup should be case/whitespace tolerant"
+    assert base_exchange_rate(5, "mythic") == 50  # unknown rarity -> 0 scaling, not a KeyError
+
+    assert proofs_needed(500, "Agony", 115) == 575  # scaling 1: 500*1*115/100, exact
+    assert proofs_needed(500, "Towers", 115) == 115000  # scaling 200: "worth much less per unit"
+    assert proofs_needed(1, "Coral", 50) == 10  # scaling 20, exact
+    assert proofs_needed(1, "Remembrance", 33) == 1  # scaling 2: 0.66 -> ceil to 1
+
+    print("orna_proofs: all self-checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

@@ -470,11 +470,29 @@ def _harvest_meta(soup: BeautifulSoup) -> _PageMeta:
     return meta
 
 
+def _add_stat(stats: Dict[str, float], label: str, value: str) -> None:
+    norm = _normalize_label(label)
+    if any(norm.startswith(p) for p in SKIP_LABEL_PREFIXES):
+        return
+    key = STAT_LABEL_MAP.get(norm)
+    if key is None:
+        # Unrecognised stat label - log via name and skip. Adding more
+        # mappings to STAT_LABEL_MAP is the fix.
+        return
+    v = _parse_stat_value(value)
+    if v is None:
+        return
+    # adornment_slots is conceptually an int
+    stats[key] = int(v) if key == "adornment_slots" else v
+
+
 def parse_codex_html(html: str) -> CodexEntry:
     """
     Parse a codex item page's HTML into a CodexEntry.
 
-    - Stats come from <div class="codex-stat"> blocks.
+    - Stats come from <div class="codex-stat"> blocks - the ORIGINAL
+      markup, tried first for safety, but no longer what the live site
+      actually serves (see the entry-facts fallback below).
     - Flags are inferred from the Place / Type metadata + page text.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -490,19 +508,26 @@ def parse_codex_html(html: str) -> CodexEntry:
         if ":" not in text:
             continue
         label, _, value = text.partition(":")
-        norm = _normalize_label(label)
-        if any(norm.startswith(p) for p in SKIP_LABEL_PREFIXES):
-            continue
-        key = STAT_LABEL_MAP.get(norm)
-        if key is None:
-            # Unrecognised stat label - log via name and skip.  Adding more
-            # mappings to STAT_LABEL_MAP is the fix.
-            continue
-        v = _parse_stat_value(value)
-        if v is None:
-            continue
-        # adornment_slots is conceptually an int
-        stats[key] = int(v) if key == "adornment_slots" else v
+        _add_stat(stats, label, value)
+
+    if not stats:
+        # Current site markup (verified live, Sept 2026): EVERY fact -
+        # combat stats included, not just Tier/Rarity/Place/Type - lives
+        # in one <dl class="entry-facts"><dt>Label</dt><dd>Value</dd></dl>
+        # list; div.codex-stat doesn't exist on the live site at all
+        # anymore (verified: 0 matches). _harvest_meta already reads this
+        # markup for Place/Type/Tier/Rarity, but stat extraction was never
+        # updated to match - live bug: Arisen Aaru Robe (real stats
+        # Defense 151/Resistance 191/Mana 80/Ward 4%/Adornment Slots 4,
+        # confirmed via the same page's own codex-bootstrap JSON) parsed
+        # to a completely EMPTY stats dict before this fix, silently
+        # breaking both the screenshot-assess flow and a name+quality
+        # assess tool built on the same function - not a narrow edge case,
+        # every item's stats were affected.
+        for dt in soup.select("dl.entry-facts dt"):
+            dd = dt.find_next_sibling("dd")
+            if dd is not None:
+                _add_stat(stats, dt.get_text(strip=True), dd.get_text(strip=True))
 
     # Flags from metadata
     meta = _harvest_meta(soup)

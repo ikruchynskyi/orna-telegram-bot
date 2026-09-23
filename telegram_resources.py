@@ -62,6 +62,19 @@ from telegram_remind import schedule_reminder
 
 logger = logging.getLogger(__name__)
 
+# GUILD_NAMES (orna_sheets, sheet column order) and GUILD_PROOFS (orna_proofs,
+# insertion order) encode the same 10-guild ordering independently - nothing
+# else checks that they agree, and a reorder in one alone would silently
+# miscalculate every proof cost (build_report zips them together by guild
+# name below, so this is really more a documentation-in-code guard than a
+# behavior change: the two are looked up by name already, but a genuinely
+# missing/renamed guild on either side is exactly the kind of thing that
+# should fail loud at import time, not produce a quietly wrong report).
+assert list(GUILD_PROOFS) == GUILD_NAMES, (
+    f"orna_proofs.GUILD_PROOFS and orna_sheets.GUILD_NAMES are out of sync: "
+    f"{list(GUILD_PROOFS)!r} != {GUILD_NAMES!r}"
+)
+
 
 class MaterialNeed(NamedTuple):
     name: str
@@ -118,8 +131,9 @@ async def _start_flow(message, context: ContextTypes.DEFAULT_TYPE, text: str) ->
     """Shared entry logic for both the free-text handler and /need."""
     try:
         sheet_values = await fetch_sheet_data()
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to fetch sheet data for resource request")
+        await message.reply_text(f"Не вдалося отримати дані: {e}")
         return ConversationHandler.END
 
     known = [row[0] for row in sheet_values if row]

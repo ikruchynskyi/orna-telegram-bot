@@ -45,21 +45,29 @@ import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
-from ollama_client import OllamaError, UnsupportedMultimodal, chat_json_with_fallback
+from ollama_client import OllamaError, UnsupportedMultimodal, chat_json, chat_json_with_fallback
 from orna_aussies import build_url as build_aussies_url
 from orna_aussies import decode as decode_effect_code
+from orna_aussies import display_name
 from orna_aussies import has_aussies_page
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
-from orna_calendar import fetch_events
+from orna_aussies import _codex as _aussies_codex
+from orna_aussies import _parse_number as _aussies_parse_number
+from orna_calendar import CALENDAR_URL_UK, fetch_events
+import orna_knowledge
+from orna_assess import (
+    AssessInput, CodexEntry, QUALITY_CODE_BONUS_KEYS, get_assess_result, get_quality_bonus, get_quality_code,
+)
 from orna_codex import codex_search, fetch_codex_json
+from telegram_assess import _format_response
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
-from telegram_go import GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY
+from telegram_go import GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY, TAVILY_API_KEY, _calculate, _tavily_search
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
 from telegram_resources import build_report, send_report_blocks
@@ -68,17 +76,32 @@ import usage_stats
 logger = logging.getLogger(__name__)
 
 _RESULTS_PER_PAGE = 8
-MAX_STEPS = 6
+# 6 was enough before web_search existed (a multi-part query is usually
+# 2-3 steps), but a "how do I beat X" strategy question now genuinely
+# needs codex-miss + retry + open_entry + knowledge_search/web_search
+# (+ maybe a refined retry) + finish. 16 gives real headroom for that
+# chain plus a genuinely multi-part request on top of it.
+MAX_STEPS = 16
+# Only the first CLOUD_STEPS turns are allowed to try the cloud model at
+# all (still falling back to local mid-turn if the cloud call itself
+# fails, same as always) - turns past that go straight to local, no cloud
+# attempt. A request still running this long is already the unusual case;
+# spending more cloud quota/cost on it isn't worth it when local can
+# still finish the reasoning for free.
+CLOUD_STEPS = 8
 # Hard wall-clock ceiling on one /orna request, regardless of what's
 # happening inside it - MAX_STEPS bounds the number of turns, but each
 # turn's own timeouts (chat_json_with_fallback: up to 90s cloud + up to
 # 90s local fallback; each tool's own network call, all offloaded via
 # asyncio.to_thread) can still add up to several minutes worst-case
-# across 6 steps. This is the actual guarantee that the loop always
-# replies within a bounded time no matter what any single step does -
-# a hung/slow chain gets cut off here instead of the user just waiting
-# indefinitely with no way to tell a slow loop from a stuck one.
-LOOP_TIMEOUT_SECONDS = 180
+# across MAX_STEPS steps. This is the actual guarantee that the loop
+# always replies within a bounded time no matter what any single step
+# does - a hung/slow chain gets cut off here instead of the user just
+# waiting indefinitely with no way to tell a slow loop from a stuck one.
+# Bumped alongside MAX_STEPS 8->16 to keep giving a legitimately-slow (not
+# hung) full-length run enough real time to finish rather than getting
+# cut off mid-reasoning.
+LOOP_TIMEOUT_SECONDS = 300
 # ponytail: fixed TTL + a hard cap, pruned opportunistically on each new
 # /orna call - same tradeoff telegram_go._SESSIONS makes. No persistence,
 # no real LRU; add if session volume ever outgrows one process's memory
@@ -358,6 +381,41 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> str:
             logger.info("orna: %r found nothing, %r did - using that", query, collapsed)
             query, results = collapsed, retry_results
 
+    # Two more transliteration slips, seen live together on one request
+    # ("клятий ортаніт" -> "Cursed Ortannite"/then "Ortannite", both 0
+    # results - the real name is "Ortanite"): (1) a doubled letter from an
+    # inexact Ukrainian->English transliteration, and (2) a leading word
+    # that's colloquial emphasis ("клятий"/"damn/cursed") rather than a
+    # real item-name modifier, mistranslated as if it were one. Try both,
+    # and both together (drop the leading word, THEN dedupe) - harmless if
+    # unneeded, same as every retry above.
+    if not results:
+        candidates = []
+        deduped = re.sub(r"(.)\1+", r"\1", query)
+        if deduped != query:
+            candidates.append(deduped)
+        if " " in query:
+            _, _, rest = query.partition(" ")
+            if rest:
+                candidates.append(rest)
+                rest_deduped = re.sub(r"(.)\1+", r"\1", rest)
+                if rest_deduped != rest:
+                    candidates.append(rest_deduped)
+        tried = {query}
+        for candidate in candidates:
+            if candidate in tried:
+                continue
+            tried.add(candidate)
+            try:
+                retry_data = await asyncio.to_thread(codex_search, candidate, lang)
+            except Exception:
+                retry_data = {}
+            retry_results = retry_data.get("results") or []
+            if retry_results:
+                logger.info("orna: %r found nothing, %r did - using that", query, candidate)
+                query, results = candidate, retry_results
+                break
+
     # A name search dead-ends on a request that's really a description
     # substring (e.g. "strange sword" only appears in "Bladeless"'s
     # description, not its name) - fall back to a description-text
@@ -381,8 +439,15 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> str:
             names = "; ".join(f"{e['name']} ({e['url']})" for e in desc_entries[:5])
             return f"{len(desc_entries)} matches by description for {query!r}: {names}"
 
+    # Deliberately no reply_text here on a genuine dead end: this is an
+    # intermediate step the model can still recover from (retry a
+    # different name, fall back to query()) - posting "nothing found" as
+    # its own chat message for every failed attempt along the way is
+    # exactly the noise reported live (several dead-end messages plus a
+    # step-budget-exhausted message, for a request that should have been
+    # one clean answer). Only a genuinely final "nothing anywhere" belongs
+    # in the user's chat, and that's finish()'s job once the model gives up.
     if not results:
-        await message.reply_text(f"У кодексі нічого не знайдено за запитом: {html.escape(query)}", parse_mode="HTML")
         return f"0 results for {query!r}"
 
     key = _remember({"entries": results, "lang": lang})
@@ -443,8 +508,10 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
         summary = f"[{category}] {summary}" if summary else f"[{category}]"
 
     if not matches:
-        text = f"🔎 <b>{html.escape(summary)}</b> — нічого не знайдено." if summary else "Нічого не знайдено за цим запитом."
-        await message.reply_text(text, parse_mode="HTML")
+        # No reply_text here - same reasoning as _run_codex_search's dead
+        # end: this may just be one step in the model retrying with
+        # different fields/category, and every dead end posting its own
+        # "nothing found" message is the noise reported live.
         return f"0 matches for: {summary or conditions}"
 
     # playorna urls, not aussiescodex - tapping a result should show the
@@ -460,27 +527,52 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
         parse_mode="HTML",
         reply_markup=_result_list_keyboard(entries, key),
     )
-    names = "; ".join(f"{e['name']} ({e['url']})" for e in entries[:5])
+    # Include sort_value (the actual ranked number, e.g. an orn_bonus %)
+    # directly in the observation text when a sort was requested - without
+    # this the model could only see it in the posted message's button
+    # labels, which aren't part of its own context, forcing an unnecessary
+    # open_entry just to re-read a number it already had (live-verified
+    # waste: burned 2 extra loop steps doing exactly that on a multi-slot
+    # bonus-calculation request).
+    def _fmt(e):
+        if sort_by and e.get("sort_value") is not None:
+            return f"{e['name']} [{sort_by}={e['sort_value']}] ({e['url']})"
+        return f"{e['name']} ({e['url']})"
+    names = "; ".join(_fmt(e) for e in entries[:5])
     return f"{len(matches)} matches for {summary}: {names}"
+
+
+_CALENDAR_LINK_HTML = f'<a href="{CALENDAR_URL_UK}">📅 Переглянути календар подій</a>'
 
 
 async def _run_events_tool(message, keyword: str) -> str:
     try:
+        # upcoming_only=True (fetch_events' default) already drops anything
+        # whose own end date has passed - deterministic, done in
+        # orna_calendar.py, not left to the model's own date reasoning
+        # (live bug: it showed two already-ended events, then separately
+        # claimed no such event existed - a confusing, self-contradicting
+        # answer from doing date-judgment and bonus-wording-judgment in
+        # one fuzzy step).
         events = await asyncio.to_thread(fetch_events)
     except Exception as e:
         logger.warning("orna: events fetch failed", exc_info=True)
         return f"events fetch failed: {e}"
-    if not events:
-        return "No events currently listed on the calendar."
 
-    shown = events
     needle = keyword.strip().lower()
-    if needle:
-        filtered = [e for e in events if needle in e["name"].lower() or needle in e["description"].lower()]
-        if filtered:
-            shown = filtered
-        # else: keyword matched nothing - fall back to the full list rather
-        # than dead-ending, same "harmless retry" pattern as _run_codex_search.
+    shown = [e for e in events if needle in e["name"].lower() or needle in e["description"].lower()] if needle else events
+
+    if not shown:
+        # Honest "no match" instead of silently substituting a different
+        # (possibly irrelevant, possibly already-ended) list - that
+        # substitution is what produced the live confusing answer. The
+        # calendar link is always the fallback the user can check directly,
+        # not the model's synthesis of it.
+        await message.reply_text(
+            f"Наразі немає активних чи найближчих подій за цим запитом.\n{_CALENDAR_LINK_HTML}",
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+        return "no current/upcoming event matches; told the user nothing matches and linked the calendar"
 
     summaries = []
     for e in shown:
@@ -495,6 +587,7 @@ async def _run_events_tool(message, keyword: str) -> str:
             rows = _section_keyboard_rows(sections, key)
         await message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows) if rows else None)
         summaries.append(f"{e['name']} ({e['starts']} to {e['ends']}, live={e['live']}): {e['description']}")
+    await message.reply_text(_CALENDAR_LINK_HTML, parse_mode="HTML", disable_web_page_preview=True)
     return "\n".join(summaries)
 
 
@@ -558,7 +651,242 @@ async def _run_open_entry_tool(message, url: str) -> str:
     effects = detail.get("effects") or []
     if effects:
         digest += " | effects: " + ", ".join(effects)
+    # Cross-link sections (e.g. an item's "Dropped by" monsters, a
+    # monster's "Skills") are the site's own site-wide link graph - surface
+    # their entry names here too, not just as buttons, so a question like
+    # "which monster drops X" is answerable from this ONE call instead of
+    # the model flailing with description-text searches (live bug: it
+    # tried query()'ing monsters' descriptions for the item's name instead
+    # of just reading the item's own "Dropped by" section).
+    for section in detail.get("sections") or []:
+        entries = section.get("entries") or []
+        if not entries:
+            continue
+        names = ", ".join(e.get("name", "?") for e in entries[:10])
+        if len(entries) > 10:
+            names += f" (+{len(entries) - 10} more)"
+        digest += f" | {section.get('title', '?')}: {names}"
     return digest
+
+
+_QUALITY_NAME_TO_PERCENT = {
+    "broken": 50, "poor": 90, "regular": 100, "normal": 100,
+    "superior": 101, "famed": 120, "legendary": 140, "ornate": 171,
+}
+_FORGED_LEVELS = {"masterforged": 11, "demonforged": 12, "godforged": 13}
+
+
+def _parse_quality_spec(spec: str) -> Optional[tuple]:
+    """<quality%, level> from a free-text quality spec - a percentage
+    ("185", "185%") or a named tier. Masterforged/Demonforged/Godforged
+    are really upgrade LEVELS 11/12/13 in Orna's own mechanics (past
+    level 10, orna_assess.get_quality_code derives the quality bucket from
+    LEVEL, not quality% - see that function), not a quality percentage, so
+    those map to a level instead; quality defaults to 100% for them (a
+    forged item assumed pushed to the tier's floor, not some arbitrary
+    higher %). The 7 percentage-tier names (Broken..Ornate) use that
+    tier's own LOWER bound as a representative % (see get_quality_code's
+    own thresholds) since there's no single canonical "the" percentage for
+    a bare name - the caller notes this assumption in the reply rather
+    than leaving it silent. None if the spec isn't parseable at all."""
+    text = spec.strip().lower().rstrip("%").strip()
+    if text in _FORGED_LEVELS:
+        return 100, _FORGED_LEVELS[text]
+    if text in _QUALITY_NAME_TO_PERCENT:
+        return _QUALITY_NAME_TO_PERCENT[text], 1
+    try:
+        return int(round(float(text))), 1
+    except ValueError:
+        return None
+
+
+def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
+    """Build a CodexEntry (orna_assess's input shape) directly from an
+    aussiescodex.com codex.json record, rather than from
+    orna_codex.lookup_by_name's playorna-HTML-scraped one. Live bug this
+    fixes: playorna renders some stats (e.g. an item's own Orn Bonus) as a
+    free-text "effect" bullet rather than a page "fact" dt/dd pair, so
+    orna_codex.py's scraper structurally can't capture them (verified:
+    Dark Mage Hood's Orn Bonus never reaches its scraped CodexEntry.stats
+    at all) - aussies' stats dict has every stat, bonus stats included, as
+    one flat, reliable structure, the same one query()/knowledge_search
+    already trust all session.
+
+    Flags are derived the same way orna_codex.parse_codex_html derives
+    them, just from aussies' own clean enum-like place/item_type/rarity
+    fields instead of regex-matching scraped page text - more reliable
+    for everything except is_two_handed, which aussies doesn't expose as
+    a flat field at all.
+    ponytail: is_two_handed always False here - only affects a celestial
+    TWO-HANDED weapon's adornment-slot count (a narrow case), not any
+    stat projection. Add a real check (e.g. via fetch_codex_json's page
+    facts) if that specific gap is ever reported.
+    """
+    stats: Dict[str, float] = {}
+    for key, raw in (record.get("stats") or {}).items():
+        v = _aussies_parse_number(raw)
+        if v is not None:
+            stats[key] = int(v) if key == "adornment_slots" else v
+
+    place = (record.get("place") or "").lower()
+    item_type = (record.get("item_type") or "").lower()
+    rarity = (record.get("rarity") or "").lower()
+    is_adornment = "adornment" in item_type or "adornment" in place
+    is_accessory = place == "accessory"
+    is_weapon_like = place in ("weapon", "off-hand")
+    is_celestial_weapon = rarity == "celestial" and is_weapon_like
+    is_equippable = bool(place) and not is_adornment
+    is_upgradable = is_equippable and not is_accessory
+    has_scaling_slots = is_upgradable and "adornment_slots" in stats
+    boss_scaling = -1 if is_celestial_weapon else (1 if is_upgradable else 0)
+
+    return CodexEntry(
+        name=display_name(record["category"], record["id"]),
+        stats=stats,
+        is_adornment=is_adornment,
+        is_accessory=is_accessory,
+        is_celestial_weapon=is_celestial_weapon,
+        is_two_handed=False,
+        is_upgradable=is_upgradable,
+        has_scaling_slots=has_scaling_slots,
+        boss_scaling=boss_scaling,
+    )
+
+
+async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
+    """Same projection pipeline the screenshot-upload /assess flow uses
+    (orna_assess.get_assess_result) rendered the same way
+    (telegram_assess._format_response) - the difference is twofold: where
+    quality comes from (OCR'd observed stats there, an explicit name/%
+    given in the request here), and where STATS come from (aussies'
+    codex.json here - see _aussies_record_to_codex_entry - rather than
+    orna_codex.py's playorna-HTML scrape, which structurally misses some
+    bonus stats). Live ask: "/orna assess arisen aaru robe Legendary" or
+    "...185%" should return the same kind of stat table a screenshot
+    upload does. Name resolution still goes through codex_search
+    (playorna's own ranked search, already proven reliable everywhere
+    else this session) since aussies' own name matching is a plain,
+    ambiguity-prone substring."""
+    if not item_name or not quality_spec:
+        return "assess needs both an item name and a quality (name or %) in args"
+    parsed = _parse_quality_spec(quality_spec)
+    if parsed is None:
+        return (f"couldn't parse quality {quality_spec!r} - use a percentage (e.g. \"185\") or a quality name "
+                "(broken/poor/regular/superior/famed/legendary/ornate/masterforged/demonforged/godforged)")
+    quality, level = parsed
+
+    try:
+        data = await asyncio.to_thread(codex_search, item_name, "en")
+    except Exception as e:
+        logger.warning("orna: assess lookup failed for %r", item_name, exc_info=True)
+        return f"assess lookup failed: {e}"
+    results = data.get("results") or []
+    if not results:
+        return f"no codex entry found for {item_name!r} - try search_codex first to confirm the exact name"
+    url = results[0].get("url", "")
+    parts = [p for p in url.split("/") if p]
+    if len(parts) < 3 or parts[0] != "codex":
+        return f"couldn't resolve a codex id for {item_name!r}"
+    category, record_id = parts[1], parts[2]
+    record = _aussies_codex()["main"].get(category, {}).get(record_id)
+    if record is None:
+        return f"{results[0].get('name', item_name)!r} has no aussiescodex data (category {category!r})"
+
+    entry = _aussies_record_to_codex_entry(record)
+    source_url = f"https://playorna.com{url}" if url.startswith("/") else url
+
+    inp = AssessInput(entry=entry, level=level, boss_scaling=entry.boss_scaling, quality=quality, stats={})
+    result = get_assess_result(inp, is_quality_calc=True)
+    if result is None or result.levels == 0:
+        return f"{entry.name} isn't assessable (likely a non-scaling material or useable, not upgradable gear)"
+
+    reply = _format_response(entry, result, source_url, {}, level)
+
+    # get_assess_result always derives the shown "(Quality Name)" label
+    # via get_quality_code(quality, 1) - level hardcoded to 1 regardless
+    # of inp.level (existing behavior in the ported assess module, not
+    # something to change here) - so a forged-tier ask (level 11-13) always
+    # displays as "(Regular)"/etc instead of "(Masterforged)"/"(Godforged)"
+    # even though the projection itself is correct. Make what was actually
+    # requested unambiguous rather than relying on a label known to be
+    # misleading for exactly this case.
+    requested = quality_spec.strip().lower().rstrip("%")
+    if requested in _QUALITY_NAME_TO_PERCENT or requested in _FORGED_LEVELS:
+        reply = reply.replace("Quality:", f"Запитана якість: {quality_spec.strip().title()}\nQuality:", 1)
+
+    # Bonus-type stats (orn/exp/gold/luck bonus, ...) aren't part of the
+    # core upgrade table _format_response renders (that's the 10 combat
+    # stats only) but scale with quality too, via the same official
+    # formula - append them if the item actually has any, since that's
+    # exactly the number a "best build" bonus calculation needs.
+    quality_code = get_quality_code(quality, level)
+    bonus_lines = []
+    for key in sorted(QUALITY_CODE_BONUS_KEYS & entry.stats.keys()):
+        base = entry.stats.get(key)
+        if not isinstance(base, (int, float)) or isinstance(base, bool):
+            continue
+        scaled = get_quality_bonus(base, quality, quality_code, entry.is_adornment, key)
+        bonus_lines.append(f"{key.replace('_', ' ')}: {base:g}% base → {scaled:g}% at this quality")
+    if bonus_lines:
+        reply += "\n\n<b>Бонус-статистики (поза основною таблицею):</b>\n" + "\n".join(f"• {l}" for l in bonus_lines)
+
+    await message.reply_text(reply, parse_mode="HTML", disable_web_page_preview=True)
+    return f"posted assessment for {entry.name} at quality={quality}% level={level}"
+
+
+async def _run_calculate_tool(message, expression: str) -> str:
+    """Reuses telegram_go._calculate directly (safe ast-based eval, no
+    Python eval()) - same reasoning /go's own docstring already gives for
+    having this tool at all: "use this instead of doing arithmetic
+    yourself, you will get it wrong". /orna didn't have this until a live
+    report showed exactly that failure - a multi-slot bonus-stacking
+    question (multiply several per-slot % bonuses together) needs real
+    multiplication across several numbers gathered over several turns,
+    which is precisely the kind of compounding arithmetic a model is
+    unreliable at doing in free-form "thought" text. Synchronous, no I/O."""
+    if not expression:
+        return "calculate needs a numeric expression in action_input"
+    return _calculate(expression)
+
+
+async def _run_knowledge_tool(message, query: str) -> str:
+    """Curated community reference (orna_knowledge.txt, see
+    orna_scrape_knowledge.py) for exactly the gap web_search exists for -
+    most notably per-monster/boss elemental damage resistances/immunities,
+    which the live codex doesn't track at all (verified: not even an empty
+    field). Free, instant, no API call, and - being pre-vetted community
+    data rather than an arbitrary web page - more trustworthy than a
+    fresh web_search, so this is the one to try FIRST for that kind of
+    question; web_search is the fallback when this doesn't have it either.
+    Same no-reply_text pattern as web_search: the matched rows are raw
+    semi-structured data (see orna_knowledge.py), not something to show
+    the user verbatim - the model reads this observation and writes the
+    real answer in finish()."""
+    if not query:
+        return "knowledge_search needs a query in action_input"
+    result = orna_knowledge.search(query)
+    if not result:
+        return f"no knowledge-base matches for {query!r} - try web_search instead"
+    return result[:3000]
+
+
+async def _run_web_search_tool(message, query: str) -> str:
+    """Last-resort tool: Orna's structured data (codex + aussiescodex)
+    covers stats/facts/drops/effects, but not strategy - a boss's real
+    immunities in practice, community-discovered counters, meta builds,
+    that kind of thing genuinely isn't in either data source and never
+    will be. Reuses telegram_go._tavily_search directly rather than a
+    second Tavily client - same API key, same call shape, no reply_text
+    here (unlike every other tool) since raw search results aren't
+    trustworthy/structured enough to show the user verbatim the way a
+    codex result is - the model reads this observation and writes the
+    actual answer itself in finish(), same as /go's own "search" action."""
+    if not query:
+        return "web_search needs an English search query in action_input"
+    if not TAVILY_API_KEY:
+        return "web_search unavailable: no search API configured"
+    data = await _tavily_search(query)
+    return data["text"][:2000]
 
 
 # -----------------------------------------------------------------------------
@@ -577,26 +905,83 @@ _TOOLS_TEXT = (
     "- search_codex(action_input=<name, English>): look up ONE specific item/monster/boss/class/spell/building/"
     "dungeon/follower/raid by NAME alone. Only for a plain name/set-fragment lookup with NO attribute/class/slot "
     'restriction attached - a name PLUS a restriction (e.g. "Last Martyr items for mage") is a query() call '
-    "instead (a text condition on the name plus an attr condition), not search_codex.\n"
+    "instead (a text condition on the name plus an attr condition), not search_codex. Translate the NAME itself, "
+    "but drop casual/emphatic filler words that aren't really part of it - Ukrainian \"клятий\"/\"проклятий\" "
+    "(\"damn/cursed X\") is usually just annoyed emphasis about a material being hard to get, not a real item "
+    'modifier - search "Ortanite", not "Cursed Ortanite", unless a search for the plain name turns up nothing AND '
+    "a modified variant genuinely exists. A dead-end search costs nothing here (failed attempts aren't shown to "
+    "the user, only what you eventually finish with) - retry with a simpler form rather than giving up.\n"
     "- query(args={...}): search the full item/monster/boss/class/spell/building/dungeon/follower/raid database "
     "by attributes - see the condition rules below.\n"
     "- events(action_input=<keyword, or empty>): the current/near-term event calendar (double-orns weekends, EXP "
-    "events, raids, ...). Posts each matching event (dates + description) and returns a short summary - read the "
-    "description text yourself to judge a match (wording varies a lot: \"earn 25% more orns\" and \"double orns, "
-    'gold, and experience" both mean "gives more orns"). Leave action_input empty to see everything currently '
-    "listed; only pass a keyword once you already know roughly what you're narrowing to.\n"
-    "- open_entry(action_input=<url from a previous observation, e.g. \"/codex/items/foo/\">): fetch and show the "
-    "user one specific entry's full detail, and read a digest of it yourself - use this only if you need to "
-    "confirm an exact stat/fact before answering, not for browsing (query/search_codex already show a full "
-    "result list with buttons the user can open themselves).\n"
+    "events, raids, ...) - ALREADY filtered to what's live or upcoming (anything fully ended is excluded before "
+    "you ever see it, and a link to the full calendar is always shown to the user alongside the results), so you "
+    "don't need to reason about dates yourself - only about whether a description's wording matches what was "
+    'asked (wording varies: "earn 25% more orns" and "double orns, gold, and experience" both mean "gives more '
+    'orns"). If nothing shown matches, say so plainly - the user already has the calendar link, so don\'t guess '
+    "or invent a match that isn't really there. Leave action_input empty to see everything currently listed.\n"
+    "- open_entry(action_input=<url from a previous observation, e.g. \"/codex/items/foo/\">): fetch one specific "
+    "entry's full detail - facts, effects, AND its cross-link sections (e.g. an item's \"Dropped by\" monsters, a "
+    "class's \"Skills\") all come back in the digest. This is how to answer \"which monster/boss drops X\" or "
+    '"where do I get X" - open_entry the ITEM\'s own page and read its "Dropped by"-style section from the '
+    'digest, don\'t query()/search monsters for the item\'s name (that searches monster DESCRIPTIONS, not their '
+    "drop tables, and won't find it). Also use this to confirm an exact stat/fact before answering; not needed "
+    "just for browsing (query/search_codex already show a result list with buttons the user can open themselves).\n"
+    "- calculate(action_input=<numeric expression, e.g. \"1.5 * 1.2 * 1.1\">): evaluates + - * / ** % and "
+    "parentheses. Use this for ANY arithmetic beyond trivial single-step math - ESPECIALLY combining several "
+    "numbers gathered across multiple earlier tool calls (e.g. multiplying several items' bonus percentages "
+    "together). Never do multi-step or compounding math in your own \"thought\" text and just state the result - "
+    "you will get it wrong. Write the actual numbers you found into the expression yourself.\n"
+    "- assess(args={\"item\":\"<English item name>\",\"quality\":\"<quality name or %>\"}): projects an item's full "
+    "upgrade-level stat table (attack/magic/defense/resistance/hp/mana/dexterity/crit/ward/foresight across its "
+    "upgrade levels, plus any orn/exp/gold/luck bonus scaled the same official way) at a GIVEN quality - the exact "
+    "same calculation the screenshot-upload assess flow uses, just started from a name+quality instead of OCR'd "
+    "stats. Use this whenever the user names a SPECIFIC item and asks to assess/project/calculate its stats, e.g. "
+    '"assess arisen aaru robe legendary" or "aaru robe at 185%". quality is either a percentage ("185", "185%") '
+    "or a named tier (broken/poor/regular/superior/famed/legendary/ornate/masterforged/demonforged/godforged) - "
+    "pass whichever form the user gave verbatim, don't convert it yourself. This POSTS the full table to the "
+    "user directly (same as search_codex/query results) - finish() just needs a short closing line, the table IS "
+    "the answer.\n"
+    "- knowledge_search(action_input=<search term>): a curated community reference (player-maintained sheets) for "
+    "exactly what Orna's own codex genuinely doesn't track: PER-MONSTER/BOSS ELEMENTAL DAMAGE RESISTANCES/"
+    "IMMUNITIES most of all (the codex has NO immunity field for bosses at all - not even an empty one - even "
+    "though it matters enormously for \"how do I beat/kill X\" questions; don't conclude \"no immunities, use "
+    "standard attacks\" just because open_entry's facts are silent about it, that silence is a missing-data gap, "
+    "not evidence). In the \"Monster Data\" section's elemental columns (Arcane/Dark/Dragon/Earth/Fire/Holy/"
+    "Lightning/Physical/Water), the number is a damage MULTIPLIER, read exactly: 1 = normal damage, 0 = takes "
+    "ZERO damage (full IMMUNITY, not \"neutral\" - never call a 0 neutral), above 1 = extra damage (a real "
+    "weakness worth recommending), below 1 = reduced damage (a resistance). Also covers gear XP/orn/gold/luck "
+    "boost percentages, combat mechanics notes (faction/party/defend/berserk/gauntlet bonuses), badges, titles, "
+    "pets/bestial bonds, skills/spells, buildings, raid rewards, view distance, and leveling costs. Free and "
+    "instant (no API call) and pre-vetted community data - try this BEFORE "
+    "web_search for anything it might plausibly cover, especially a \"how do I beat/kill X\" question (always try "
+    "it at least once for those, specifically looking for elemental resistances). Results are matched rows with "
+    "their column header attached - read them like a small table. If nothing matches, fall back to web_search.\n"
+    "- web_search(action_input=<English search query>): the open web (via Tavily) - LAST RESORT for what Orna's "
+    "own data AND knowledge_search's community reference both genuinely don't cover: boss/monster STRATEGY "
+    "(specific tactics, not just resistances - try knowledge_search first for those), community meta discussion, "
+    "best builds/counters. Not for facts/stats/drops (always search_codex/query/open_entry - free, authoritative, "
+    "try them FIRST). Write a focused English query (add \"orna rpg\" if the term alone is ambiguous outside the "
+    "game). Read the results and write the actual answer yourself in finish() - don't dump the raw results, "
+    "briefly mention a source if one was genuinely useful, and if nothing useful turns up, say so honestly rather "
+    "than guessing. One follow-up web_search with a refined query is fine if the first didn't help; don't loop on "
+    "it beyond that.\n"
+    "- BOTH knowledge_search and web_search - CRITICAL: only state a specific detail (a follower/spell/item name, "
+    "an exact number, a named mechanic) if it's ACTUALLY present in what came back - never invent a plausible-"
+    "sounding specific to make the answer feel more complete. If the results only support a general insight (e.g. "
+    "\"immune to everything except arcane damage\"), give exactly that general insight and stop there rather than "
+    "padding it with specifics you don't actually have.\n"
     "- ask(action_input=<question>, options=[2-4 short choices]): a clarifying question. The user can only TAP a "
     "button, never type free text - always give options. Only when a specific missing detail would materially "
-    'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class). Most '
-    "requests do NOT need this. Never ask twice in the same conversation.\n"
-    "- finish(action_input=<short closing text>): end the turn. The actual results (search hits, reports, event "
-    "cards) are ALREADY shown to the user by whichever tool produced them - finish is just a short closing "
-    'sentence (e.g. "Ось варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed '
-    "text. Don't call finish before you have enough information.\n"
+    'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class, or a '
+    'name/search matches several unrelated things and it genuinely matters which). Most requests do NOT need '
+    "this. Never ask twice in the same conversation.\n"
+    "- finish(action_input=<short closing text>): end the turn. Results a TOOL already showed the user (search "
+    "hits, reports, event cards) don't need repeating - finish is just a short closing sentence (e.g. \"Ось "
+    'варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed text. An answer built '
+    "from knowledge_search or web_search is different: nothing was shown to the user yet, so finish() IS the "
+    "answer - write it out properly, in the user's own language, from what came back. Don't call finish before "
+    "you have enough information.\n"
 )
 
 _CONDITION_RULES = (
@@ -614,7 +999,8 @@ _CONDITION_RULES = (
     "wording. A NUMBER/threshold on a stat is ALWAYS kind:\"stat\" even worded as \"gives\"/\"has\" (\"magic over "
     '220" is stat, not effect). Negative values are fine ("defense < 0").\n'
     '  {"kind":"effect","field":"immunities|causes|gives|cures|","value":"<effect name>"} - immune to / causes on '
-    "an enemy / grants (self-or-team buff, including a follower's bond proc) / cures a NAMED status (e.g. "
+    "an enemy / grants (a buff to the player, including a follower's temporary bond proc - \"T.\" in a status "
+    "name means \"Temporary\", not \"Team\") / cures a NAMED status (e.g. "
     '"stunned", "T Mag 3", "Def Down") - never a bare number. Tier shorthand ("T Mag ++", "Mag ↑↑", "T Mag 3", '
     '"Def III") is ALWAYS effect - copy it into value EXACTLY as written, never invent or drop the tier.\n'
     '  {"kind":"text","field":"description|name|","value":"<substring>"}\n'
@@ -650,10 +1036,57 @@ _MULTI_PART_EXAMPLE = (
     '  3. finish(action_input="Ось варіанти для обох слотів.")'
 )
 
+_STRATEGY_RULE = (
+    "MANDATORY RULE for any \"how do I beat/kill/defeat X\" or \"what's X weak to\" question about a specific "
+    "boss/monster: you MUST call knowledge_search AT LEAST ONCE (and web_search too if that doesn't help) before "
+    "finish - never finish such a question from codex facts (search_codex/open_entry/query) alone, even if you "
+    "already opened the boss's codex page and it looked complete. The codex's own facts NEVER include elemental "
+    "immunities for a boss (that field doesn't exist there at all) - a complete-looking codex page is exactly the "
+    "situation this rule is for, not a reason to skip the extra step. Live-verified failure: skipping straight to "
+    "finish with only codex facts produced \"no known weaknesses, just hit it hard\" for a boss that is actually "
+    "immune to every element except one - confidently wrong instead of checking."
+)
+
+_AGGREGATE_RULE = (
+    "MULTI-SLOT / BUILD-OPTIMIZATION QUESTIONS (e.g. \"what's the max orn bonus from wearing the best orn item in "
+    "every slot: head, weapon/off-hand, torso, legs, accessories\"): this is several independent lookups PLUS a "
+    "final combination, not one query. Do it step by step:\n"
+    '  1. One query() PER SLOT to find that slot\'s best item for the relevant stat - e.g. '
+    '{"conditions":[{"kind":"attr","field":"place","cmp":"=","value":"head"}],"sort_by":"orn_bonus",'
+    '"sort_dir":"desc"} for head, then place="weapon", place="off-hand", place="torso", place="legs", '
+    '"accessory" (note: there are TWO accessory slots in Orna, so take the top TWO accessory results, not just '
+    'one - increase limit/read further down the result list, or run it once more with a lower sort_dir cutoff in '
+    'mind). Real slot values: head, weapon, off-hand, torso, legs, accessory. A slot with zero matches genuinely '
+    "has no bonus item available for that stat - treat it as contributing no bonus (1x), not an error.\n"
+    "  2. Each query's own observation text already shows every result's ranked number as "
+    '"[sort_by=value]" (e.g. "Dark Mage Hood [orn_bonus=5]") - that IS the number to use, note it down as you go. '
+    "Do NOT open_entry an item just to re-read a number you already have in the observation - that wastes a "
+    "turn for nothing; only open_entry if you need a DIFFERENT fact the query didn't already give you.\n"
+    "  2b. QUALITY: a query's orn_bonus/exp_bonus/gold_bonus/luck_bonus number is the item's BASE value at Normal "
+    "quality (100%) - if the user asked about a SPECIFIC quality (Superior/Famed/Legendary/Ornate/Masterforged/"
+    "Demonforged/Godforged, or an explicit %), scale each item's base bonus BEFORE combining across slots, using "
+    "Orna's real formula: scaled = ((100 + base) * (100 + scaling) - 10000) / 100, where scaling is a FIXED "
+    "number per quality tier: superior=+10, famed=+15, legendary=+20, ornate=+25, masterforged=+30, "
+    "demonforged=+40, godforged=+50 (regular/poor/normal quality = +0 scaling, i.e. scaled = base, no change). "
+    "Use calculate() for this per item too - e.g. a +5% orn_bonus item at Legendary: "
+    'calculate("((100 + 5) * (100 + 20) - 10000) / 100") = 26, i.e. +26% at Legendary, not +5%. If the user '
+    "gave no quality at all, assume Normal/base quality (scaling +0, use the number as-is) and say so in finish().\n"
+    "  3. These kinds of per-slot % bonuses stack MULTIPLICATIVELY (this is Orna's real bonus-stacking model, "
+    "also documented in knowledge_search's gear-boost tables): total multiplier = (1 + slot1%/100) * "
+    "(1 + slot2%/100) * ... across every slot. Use calculate() for this - e.g. if you found 5%, 10%, 20%, 50%, "
+    "50%, 25%, call calculate(\"1.05 * 1.10 * 1.20 * 1.50 * 1.50 * 1.25\") - NEVER multiply more than two numbers "
+    "in your own head/thought text, that is exactly the kind of compounding arithmetic you get wrong.\n"
+    "  4. finish() with the computed total bonus percentage AND which item was used for each slot - the per-slot "
+    "query results are the supporting evidence for your answer, the computed total is the actual answer the "
+    "question asked for. Don't finish with just a list of items and no combined number, and don't finish with "
+    "just a number and no breakdown of which items produced it."
+)
+
 
 def _orna_system_prompt() -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
-    actions = '"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"ask"|"finish"'
+    actions = ('"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"calculate"|"assess"|'
+               '"knowledge_search"|"web_search"|"ask"|"finish"')
     return (
         'You are a ReAct agent answering /orna requests about the mobile RPG "Orna" for a Telegram bot used by '
         f'its guild - requests come in English or Ukrainian. Current date/time: {now} (server local time) - use '
@@ -663,6 +1096,8 @@ def _orna_system_prompt() -> str:
         f"You have these tools - each turn, pick exactly ONE:\n{_TOOLS_TEXT}\n"
         f"{_CONDITION_RULES}\n\n"
         f"{_MULTI_PART_EXAMPLE}\n\n"
+        f"{_STRATEGY_RULE}\n\n"
+        f"{_AGGREGATE_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
@@ -703,6 +1138,7 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
     instead of killing the whole loop (defense in depth alongside
     telegram_bot.py's global error handler - the loop itself should never
     need that safety net to produce a reply)."""
+    usage_stats.record_tool_call(action)
     try:
         if action == "today":
             return await _run_today_tool(message)
@@ -721,10 +1157,19 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
             return await _run_events_tool(message, action_input)
         if action == "open_entry":
             return await _run_open_entry_tool(message, action_input)
+        if action == "knowledge_search":
+            return await _run_knowledge_tool(message, action_input)
+        if action == "web_search":
+            return await _run_web_search_tool(message, action_input)
+        if action == "calculate":
+            return await _run_calculate_tool(message, action_input)
+        if action == "assess":
+            return await _run_assess_tool(message, str(args.get("item") or ""), str(args.get("quality") or ""))
     except Exception as e:
         logger.warning("orna: tool %r failed", action, exc_info=True)
         return f"{action} failed: {e}"
-    return f"unknown action {action!r}; valid actions are today, next, need, search_codex, query, events, open_entry, ask, finish."
+    return (f"unknown action {action!r}; valid actions are today, next, need, search_codex, query, events, "
+            "open_entry, knowledge_search, web_search, calculate, assess, ask, finish.")
 
 
 async def _advance(sid: str, message) -> None:
@@ -742,6 +1187,35 @@ async def _advance(sid: str, message) -> None:
             logger.warning("orna: failed to notify user about loop timeout", exc_info=True)
 
 
+async def _call_step_model(session: "OrnaSession", step_number: int):
+    """One model call for one loop turn, with a single retry on failure.
+    Live report: a long multi-tool-call request (several query/
+    knowledge_search calls gathering numbers for a final calculation)
+    died on ONE "Ollama returned non-JSON content: ''" - empty output,
+    most likely the local model (this step had already passed CLOUD_STEPS)
+    running out of its own generation budget mid-"thought" under a long
+    accumulated tool-call history, not a systematic failure. Discarding
+    every step of reasoning already done over one blip is a bad trade -
+    retrying the identical call once before giving up on the whole
+    request costs a few seconds and matches the retry-once convention
+    telegram_nlp._local_chat_json already uses for the same reason."""
+    for attempt in range(2):
+        try:
+            if step_number <= CLOUD_STEPS:
+                # Normal path: try cloud, fall back to local mid-turn if the
+                # cloud call itself fails (out of credits, network, ...).
+                return await chat_json_with_fallback(
+                    GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
+                )
+            # Past CLOUD_STEPS: skip the cloud attempt entirely, local only.
+            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages)
+        except (OllamaError, UnsupportedMultimodal):
+            if attempt == 0:
+                logger.warning("orna: step %d model call failed, retrying once", step_number, exc_info=True)
+                continue
+            raise
+
+
 async def _advance_inner(sid: str, message) -> None:
     session = _ORNA_SESSIONS.get(sid)
     if session is None:
@@ -749,12 +1223,11 @@ async def _advance_inner(sid: str, message) -> None:
 
     while session.steps_left > 0:
         session.steps_left -= 1
+        step_number = MAX_STEPS - session.steps_left
         try:
-            step = await chat_json_with_fallback(
-                GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
-            )
+            step = await _call_step_model(session, step_number)
         except (OllamaError, UnsupportedMultimodal) as e:
-            logger.warning("orna: model call failed", exc_info=True)
+            logger.warning("orna: model call failed twice, giving up", exc_info=True)
             await message.reply_text(f"Не вдалося обробити запит: {e}")
             return
 
@@ -763,10 +1236,12 @@ async def _advance_inner(sid: str, message) -> None:
         args = step.get("args") if isinstance(step.get("args"), dict) else {}
 
         if action == "finish" or not action:
+            usage_stats.record_tool_call("finish")
             await message.reply_text(action_input or "Не вдалося сформувати відповідь.")
             return
 
         if action == "ask":
+            usage_stats.record_tool_call("ask")
             options = [str(o).strip() for o in (step.get("options") or []) if str(o).strip()][:4]
             if not options:
                 session.messages.append({
@@ -787,6 +1262,7 @@ async def _advance_inner(sid: str, message) -> None:
         observation = await _run_tool(message, action, action_input, args)
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
+    usage_stats.record_tool_call("_step_budget_exhausted")
     await message.reply_text("Не вдалося сформувати відповідь за відведену кількість кроків — спробуйте уточнити запит.")
 
 

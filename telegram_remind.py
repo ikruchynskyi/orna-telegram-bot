@@ -51,7 +51,14 @@ def _load() -> dict:
 
 
 def _save(store: dict) -> None:
-    _STORE_PATH.write_text(json.dumps(store, indent=2))
+    # Atomic write: a crash or launchctl reload landing mid-write on a plain
+    # write_text (this repo reloads often, per its own docs) can leave a
+    # truncated file - _load()'s except JSONDecodeError then silently starts
+    # fresh, dropping every pending reminder. Writing to a temp file in the
+    # same directory and os.replace()-ing over the target is atomic on POSIX.
+    tmp = _STORE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(store, indent=2))
+    tmp.replace(_STORE_PATH)
 
 
 def _parse(text: str) -> tuple[datetime, str] | None:
