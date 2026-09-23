@@ -6,3 +6,4 @@ __pycache__/
 venv/
 reminders.json
 .aussies_cache/
+usage_stats.json

@@ -18,6 +18,8 @@ from typing import Dict, List, Optional
 
 import httpx
 
+import usage_stats
+
 logger = logging.getLogger(__name__)
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -58,6 +60,7 @@ async def _chat_json_once(system: str, user: str) -> dict:
         "think": True,
     }
     headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
+    usage_stats.record_llm_call(OLLAMA_MODEL)
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             response = await client.post(

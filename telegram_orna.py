@@ -64,6 +64,7 @@ from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 from telegram_go import GO_ALLOWED_USER_IDS
 from telegram_nlp import OllamaError, plan_queries, route_query
+import usage_stats
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +425,7 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> None:
 # -----------------------------------------------------------------------------
 
 async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    usage_stats.record_command("orna")
     message = update.effective_message
     if not message:
         return
@@ -532,6 +534,7 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     same allowlist as /go (GO_ALLOWED_USER_IDS) - not something a regular
     guild member needs, and hammering aussiescodex's API on demand isn't
     something to leave wide open."""
+    usage_stats.record_command("update_codex")
     message = update.effective_message
     if not message:
         return

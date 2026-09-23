@@ -52,6 +52,10 @@ glue around three live, unmocked external services.
   `/go`): schedules a one-off reminder via PTB's `JobQueue`, persisted to
   `reminders.json` so it survives the frequent `launchctl` reloads this
   repo's development involves.
+- `usage_stats.py` — usage counters (questions per command, LLM calls per
+  model), persisted to `usage_stats.json` for the same reload-survival
+  reason as `reminders.json`. Viewed via the hidden `/stats` command
+  (`telegram_bot.py`, same allowlist as `/go`). See the note below.
 - `orna_assess.py` — pure math: upgrade-projection from OCR'd stats.
 - `orna_proofs.py` — pure math: guild-proof pricing, ported from
   OrnaCodex's `ProofView.vue`. See the docstring for the formula.
@@ -594,6 +598,21 @@ those branches to each set a local `matched` bool, then negate once at
 the end when `cmp` is `"!="`/`"<>"` - a single negation point instead of
 threading it through every branch separately. Verified: 0 weapons in the
 negated result set afterward, and the positive (`"="`) path unchanged.
+
+**Usage counters (`usage_stats.py`)** — `record_command(name)` at the top
+of every slash-command handler, `record_llm_call(model)` at the two
+actual LLM call sites (`telegram_nlp._chat_json_once`,
+`telegram_go._chat_json`), both persisted to `usage_stats.json`
+(gitignored, same reload-survival reasoning as `reminders.json`). `/stats`
+(hidden, `telegram_bot.py`, same `GO_ALLOWED_USER_IDS` gate as `/go`)
+reports both counters back. Deliberately scoped to slash commands only -
+the free-text conversation entry points in `telegram_assess.py`/
+`telegram_resources.py` aren't instrumented yet, so "questions to the
+bot" undercounts by however much traffic comes in that way rather than
+via a command. `record_llm_call` is called once per actual HTTP attempt
+(including retries `telegram_nlp._chat_json`'s wrapper makes), not once
+per logical "ask" - a retried call counts twice, which is the more
+useful number for understanding real load on Ollama.
 
 ## Things that aren't obvious from reading one file at a time
 

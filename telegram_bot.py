@@ -18,10 +18,11 @@ from telegram import (
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
-from telegram_go import build_go_callback_handler, build_go_continue_handler, build_go_handler
+from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
 from telegram_remind import build_remind_handler, reschedule_pending
 from telegram_orna import build_orna_callback_handler, build_orna_handler, build_update_codex_handler
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
+import usage_stats
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -35,6 +36,7 @@ if not BOT_TOKEN:
 
 
 async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    usage_stats.record_command("res_today")
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     logger.info("res_today from chat_id=%s user_id=%s", chat_id, user_id)
@@ -67,6 +69,7 @@ async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    usage_stats.record_command("res_next")
     message = update.effective_message
     if not message:
         logger.warning("Handler called without an effective message.")
@@ -114,6 +117,38 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text("\n".join(msg), parse_mode="HTML")
 
 
+async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hidden maintenance command: report usage_stats' counters (question
+    volume per command, LLM call volume per model). Gated by the same
+    GO_ALLOWED_USER_IDS allowlist /go and /update_codex use."""
+    message = update.effective_message
+    if not message:
+        return
+
+    user = update.effective_user
+    if GO_ALLOWED_USER_IDS and (not user or user.id not in GO_ALLOWED_USER_IDS):
+        logger.warning("stats: rejected user_id=%s", user.id if user else None)
+        return
+
+    data = usage_stats.snapshot()
+    lines = [f"📊 Статистика з {data['since']}", "", "Команди:"]
+    commands = data["commands"]
+    if commands:
+        for name, count in sorted(commands.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  /{name}: {count}")
+    else:
+        lines.append("  (ще немає даних)")
+    lines.append("")
+    lines.append("LLM виклики за моделлю:")
+    llm_calls = data["llm_calls"]
+    if llm_calls:
+        for model, count in sorted(llm_calls.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {model}: {count}")
+    else:
+        lines.append("  (ще немає даних)")
+    await message.reply_text("\n".join(lines))
+
+
 async def _post_init(app):
     # /go is the one command that must stay off this list, everything else
     # genuinely is meant to be user-visible autocomplete. Set in every
@@ -157,6 +192,8 @@ def main():
     # (force-refetch the aussiescodex cache now instead of waiting out its
     # 1-week TTL), not something a regular guild member needs.
     app.add_handler(build_update_codex_handler())
+    # Same hidden/gated treatment - reports usage_stats' counters.
+    app.add_handler(CommandHandler("stats", handle_stats))
     # Registered before the Orna conversations: its filter only matches a
     # chat that just tapped /go's "Continue" button, so it's a no-op (falls
     # through to assess/resources below) for every other chat/message.

@@ -50,6 +50,7 @@ from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
+import usage_stats
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,7 @@ async def _chat_json(host: str, model: str, messages: list[dict], headers: dict)
         # data" JSONDecodeErrors this was added to fix.
         "think": True,
     }
+    usage_stats.record_llm_call(model)
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
         resp = await client.post(f"{host}/api/chat", json=payload, headers=headers)
         if resp.status_code == 400 and "multimodal" in resp.text.lower():
@@ -920,6 +922,7 @@ async def go_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def handle_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    usage_stats.record_command("go")
     message = update.effective_message
     if not message:
         return

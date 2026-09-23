@@ -25,6 +25,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from telegram_go import GO_ALLOWED_USER_IDS
+import usage_stats
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ def _schedule(app: Application, reminder_id: str, chat_id: int, text: str, fire_
 
 
 async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    usage_stats.record_command("remind")
     message = update.effective_message
     if not message:
         return
