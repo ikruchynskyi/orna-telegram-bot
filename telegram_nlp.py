@@ -60,7 +60,7 @@ async def _chat_json_once(system: str, user: str) -> dict:
         "think": True,
     }
     headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
-    usage_stats.record_llm_call(OLLAMA_MODEL)
+    usage_stats.record_llm_call(OLLAMA_MODEL, "local")
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             response = await client.post(

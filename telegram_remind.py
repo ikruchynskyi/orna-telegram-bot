@@ -103,7 +103,6 @@ def schedule_reminder(app: Application, chat_id: int, text: str, fire_at: dateti
 
 
 async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    usage_stats.record_command("remind")
     message = update.effective_message
     if not message:
         return
@@ -114,6 +113,7 @@ async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     args = " ".join(context.args).strip()
+    usage_stats.record_command_for(update, "remind", args)
     if not args:
         await message.reply_text(
             "Usage:\n/remind 20m <text>\n/remind 2h <text>\n/remind 18:30 <text>\n"

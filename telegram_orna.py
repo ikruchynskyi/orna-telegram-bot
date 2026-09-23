@@ -492,12 +492,12 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> None:
 # -----------------------------------------------------------------------------
 
 async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    usage_stats.record_command("orna")
     message = update.effective_message
     if not message:
         return
 
     text = " ".join(context.args).strip()
+    usage_stats.record_command_for(update, "orna", text)
     if not text:
         await message.reply_text(
             "Використання: /orna <запит>\n"
@@ -616,7 +616,7 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     same allowlist as /go (GO_ALLOWED_USER_IDS) - not something a regular
     guild member needs, and hammering aussiescodex's API on demand isn't
     something to leave wide open."""
-    usage_stats.record_command("update_codex")
+    usage_stats.record_command_for(update, "update_codex")
     message = update.effective_message
     if not message:
         return

@@ -2,10 +2,11 @@
 usage_stats.py
 ================
 Lightweight usage counters: how many times each slash command was
-invoked, and how many LLM calls were made per model. Persisted to
-usage_stats.json (gitignored) so counts survive this bot's frequent
-launchctl reloads - same reasoning as telegram_remind.py's
-reminders.json.
+invoked (overall and per user), how many LLM calls were made per model
+(tagged local/cloud), and - per user - a capped log of their most recent
+questions. Persisted to usage_stats.json (gitignored) so counts survive
+this bot's frequent launchctl reloads - same reasoning as
+telegram_remind.py's reminders.json.
 
 Only slash commands are counted as "questions to the bot" today, not
 the free-text conversation entry points in telegram_assess.py/
@@ -17,17 +18,22 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _STORE_PATH = Path(__file__).parent / "usage_stats.json"
 
+MAX_LOG_PER_USER = 40
+
 _commands: Counter = Counter()
-_llm_calls: Counter = Counter()
+_llm_calls: Counter = Counter()  # keyed by "model (local|cloud)"
+_user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Counter[command]
+_user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
+_user_log: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{command,text,ts}, ...], newest last
 _since: str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -42,14 +48,24 @@ def _load() -> None:
         return
     _commands.update(data.get("commands", {}))
     _llm_calls.update(data.get("llm_calls", {}))
+    for uid, counts in data.get("user_commands", {}).items():
+        _user_commands[uid].update(counts)
+    _user_names.update(data.get("user_names", {}))
+    for uid, log in data.get("user_log", {}).items():
+        _user_log[uid] = log
     _since = data.get("since", _since)
 
 
 def _save() -> None:
     try:
-        _STORE_PATH.write_text(json.dumps(
-            {"since": _since, "commands": dict(_commands), "llm_calls": dict(_llm_calls)}
-        ))
+        _STORE_PATH.write_text(json.dumps({
+            "since": _since,
+            "commands": dict(_commands),
+            "llm_calls": dict(_llm_calls),
+            "user_commands": {uid: dict(c) for uid, c in _user_commands.items()},
+            "user_names": _user_names,
+            "user_log": _user_log,
+        }))
     except OSError:
         logger.warning("usage_stats: couldn't write %s", _STORE_PATH, exc_info=True)
 
@@ -57,17 +73,102 @@ def _save() -> None:
 _load()
 
 
-def record_command(name: str) -> None:
-    """Call once at the top of a slash command's handler."""
+def _display_name(username: Optional[str], first_name: Optional[str]) -> str:
+    if username:
+        return f"@{username}"
+    return first_name or "?"
+
+
+def record_command(
+    name: str,
+    user_id: Optional[int] = None,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    text: str = "",
+) -> None:
+    """Call once at the top of a slash command's handler. `user_id` +
+    `username`/`first_name` come straight from update.effective_user;
+    `text` is whatever the user actually typed after the command (so
+    "last 40 questions" shows real content, not just the command name
+    repeated 40 times)."""
     _commands[name] += 1
+    if user_id is not None:
+        uid = str(user_id)
+        _user_commands[uid][name] += 1
+        _user_names[uid] = _display_name(username, first_name)
+        log = _user_log[uid]
+        log.append({
+            "command": name,
+            "text": text[:200],
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        del log[:-MAX_LOG_PER_USER]
     _save()
 
 
-def record_llm_call(model: str) -> None:
-    """Call once per LLM API call actually made, tagged by model name."""
-    _llm_calls[model] += 1
+def record_command_for(update, name: str, text: str = "") -> None:
+    """Convenience wrapper: pulls user_id/username/first_name straight
+    out of a telegram.Update, so call sites don't each have to repeat
+    "user.id if user else None" three times over."""
+    user = getattr(update, "effective_user", None)
+    record_command(
+        name,
+        user.id if user else None,
+        getattr(user, "username", None),
+        getattr(user, "first_name", None),
+        text,
+    )
+
+
+def record_llm_call(model: str, backend: str) -> None:
+    """Call once per LLM API call actually made. `backend` is "local" or
+    "cloud" - the two are meaningfully different (cost, latency,
+    capability), and the raw model name alone doesn't say which, so
+    that's part of the counter key rather than something you'd have to
+    already know to interpret it."""
+    _llm_calls[f"{model} ({backend})"] += 1
     _save()
 
 
-def snapshot() -> Dict[str, Dict[str, int]]:
-    return {"since": _since, "commands": dict(_commands), "llm_calls": dict(_llm_calls)}
+def snapshot() -> Dict:
+    return {
+        "since": _since,
+        "commands": dict(_commands),
+        "llm_calls": dict(_llm_calls),
+        "user_count": len(_user_commands),
+    }
+
+
+def user_summary() -> List[tuple]:
+    """[(user_id, display_name, total_commands), ...] sorted by total desc."""
+    return sorted(
+        (
+            (uid, _user_names.get(uid, uid), sum(counter.values()))
+            for uid, counter in _user_commands.items()
+        ),
+        key=lambda t: -t[2],
+    )
+
+
+def user_detail(user_id) -> Optional[Dict]:
+    uid = str(user_id)
+    if uid not in _user_commands:
+        return None
+    return {
+        "user_id": uid,
+        "display_name": _user_names.get(uid, uid),
+        "commands": dict(_user_commands[uid]),
+        "recent": list(_user_log.get(uid, [])),
+    }
+
+
+def find_user(query: str) -> Optional[str]:
+    """Resolve a /stats argument (a numeric id, or a "@username"/bare
+    username) to a known user_id, or None if nothing matches."""
+    query = query.strip().lstrip("@")
+    if query in _user_commands:
+        return query
+    for uid, name in _user_names.items():
+        if name.lstrip("@").lower() == query.lower():
+            return uid
+    return None

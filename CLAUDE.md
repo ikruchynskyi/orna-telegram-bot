@@ -624,20 +624,43 @@ the end when `cmp` is `"!="`/`"<>"` - a single negation point instead of
 threading it through every branch separately. Verified: 0 weapons in the
 negated result set afterward, and the positive (`"="`) path unchanged.
 
-**Usage counters (`usage_stats.py`)** — `record_command(name)` at the top
-of every slash-command handler, `record_llm_call(model)` at the two
-actual LLM call sites (`telegram_nlp._chat_json_once`,
-`telegram_go._chat_json`), both persisted to `usage_stats.json`
-(gitignored, same reload-survival reasoning as `reminders.json`). `/stats`
-(hidden, `telegram_bot.py`, same `GO_ALLOWED_USER_IDS` gate as `/go`)
-reports both counters back. Deliberately scoped to slash commands only -
-the free-text conversation entry points in `telegram_assess.py`/
-`telegram_resources.py` aren't instrumented yet, so "questions to the
-bot" undercounts by however much traffic comes in that way rather than
-via a command. `record_llm_call` is called once per actual HTTP attempt
-(including retries `telegram_nlp._chat_json`'s wrapper makes), not once
-per logical "ask" - a retried call counts twice, which is the more
-useful number for understanding real load on Ollama.
+**Usage counters (`usage_stats.py`)** — `record_command_for(update, name,
+text)` at the top of every slash-command handler (a thin wrapper around
+`record_command` that pulls `user_id`/`username`/`first_name` straight
+off the `Update` so call sites don't each repeat that extraction),
+`record_llm_call(model, backend)` at the two actual LLM call sites
+(`telegram_nlp._chat_json_once` - always `"local"`, `telegram_go.
+_chat_json` - `"cloud"` or `"local"` depending on which `host` it was
+actually given), all persisted to `usage_stats.json` (gitignored, same
+reload-survival reasoning as `reminders.json`). Deliberately scoped to
+slash commands only - the free-text conversation entry points in
+`telegram_assess.py`/`telegram_resources.py` aren't instrumented yet, so
+"questions to the bot" undercounts by however much traffic comes in that
+way rather than via a command. `record_llm_call` is called once per
+actual HTTP attempt (including retries `telegram_nlp._chat_json`'s
+wrapper makes), not once per logical "ask" - a retried call counts
+twice, which is the more useful number for understanding real load on
+Ollama. The model counter key is `"<model> (<backend>)"`, not just the
+bare model name - added after a live ask ("not clear if local or cloud
+model was used") made clear the raw name alone doesn't say which, and
+that distinction is exactly the one that matters (cost, latency,
+capability).
+
+**`/stats` is per-user aware, not just a global total** - same live ask
+("not clear which user was asking... let it see stats per user").
+`usage_stats` keeps, per user id: a command counter, a last-seen display
+name (`@username` if set, else first name), and a capped log
+(`MAX_LOG_PER_USER = 40`, oldest dropped) of `{command, text, ts}` for
+their actual recent questions - not just counts, the real text they
+typed, so an admin can see *what* was asked, not only *how much*.
+`/stats` (no args) stays the global summary (now also showing
+`user_count`); `/stats users` lists every known user sorted by activity;
+`/stats user <id|@username>` (via `usage_stats.find_user`, resolving
+either form) shows that user's per-command breakdown plus their last 40
+questions with timestamps. All three still gated by the same
+`GO_ALLOWED_USER_IDS` allowlist `/go`/`/update_codex` use - this is
+explicitly an admin surface, storing per-user activity logs is only
+appropriate because of that gate.
 
 **`route_query` has a fifth, "self-aware" intent - `"other"` - for when
 the message isn't actually about the codex/resources at all, so `/orna`

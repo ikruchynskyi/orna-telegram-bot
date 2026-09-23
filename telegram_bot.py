@@ -36,7 +36,7 @@ if not BOT_TOKEN:
 
 
 async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usage_stats.record_command("res_today")
+    usage_stats.record_command_for(update, "res_today")
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     logger.info("res_today from chat_id=%s user_id=%s", chat_id, user_id)
@@ -69,13 +69,13 @@ async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usage_stats.record_command("res_next")
     message = update.effective_message
     if not message:
         logger.warning("Handler called without an effective message.")
         return
 
     text = " ".join(context.args).lower().strip()
+    usage_stats.record_command_for(update, "res_next", text)
     if not text:
         await message.reply_text(
             "Вкажіть назву ресурсу. Приклад: /res_next Adamantine"
@@ -118,9 +118,15 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Hidden maintenance command: report usage_stats' counters (question
-    volume per command, LLM call volume per model). Gated by the same
-    GO_ALLOWED_USER_IDS allowlist /go and /update_codex use."""
+    """Hidden admin command: report usage_stats' counters. Gated by the
+    same GO_ALLOWED_USER_IDS allowlist /go and /update_codex use.
+
+    /stats                  - overall totals (commands, LLM calls per
+                              model+backend, known user count)
+    /stats users            - every known user, sorted by activity
+    /stats user <id|@name>  - one user's per-command counts + their last
+                              40 questions (command + the text they typed)
+    """
     message = update.effective_message
     if not message:
         return
@@ -130,8 +136,45 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.warning("stats: rejected user_id=%s", user.id if user else None)
         return
 
+    args = context.args or []
+
+    if args and args[0].lower() == "users":
+        rows = usage_stats.user_summary()
+        if not rows:
+            await message.reply_text("Ще немає даних по користувачам.")
+            return
+        lines = ["📊 Користувачі (за активністю):", ""]
+        lines += [f"  {name}  (id {uid}) — {count}" for uid, name, count in rows]
+        lines.append("")
+        lines.append("/stats user <id|@username> — деталі й останні питання")
+        await message.reply_text("\n".join(lines))
+        return
+
+    if args and args[0].lower() == "user":
+        if len(args) < 2:
+            await message.reply_text("Використання: /stats user <id або @username>")
+            return
+        uid = usage_stats.find_user(args[1])
+        detail = usage_stats.user_detail(uid) if uid else None
+        if detail is None:
+            await message.reply_text(f"Не знайдено користувача {args[1]!r}.")
+            return
+        lines = [f"📊 {detail['display_name']} (id {detail['user_id']})", "", "Команди:"]
+        for name, count in sorted(detail["commands"].items(), key=lambda kv: -kv[1]):
+            lines.append(f"  /{name}: {count}")
+        lines.append("")
+        lines.append(f"Останні питання (до {usage_stats.MAX_LOG_PER_USER}):")
+        for entry in reversed(detail["recent"]):
+            ts = entry["ts"].replace("T", " ")[:16]
+            text = f" {entry['text']}" if entry["text"] else ""
+            lines.append(f"  [{ts}] /{entry['command']}{text}")
+        if not detail["recent"]:
+            lines.append("  (ще немає даних)")
+        await message.reply_text("\n".join(lines))
+        return
+
     data = usage_stats.snapshot()
-    lines = [f"📊 Статистика з {data['since']}", "", "Команди:"]
+    lines = [f"📊 Статистика з {data['since']}", f"Користувачів: {data['user_count']}", "", "Команди:"]
     commands = data["commands"]
     if commands:
         for name, count in sorted(commands.items(), key=lambda kv: -kv[1]):
@@ -146,6 +189,8 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             lines.append(f"  {model}: {count}")
     else:
         lines.append("  (ще немає даних)")
+    lines.append("")
+    lines.append("/stats users — список користувачів, /stats user <id> — деталі")
     await message.reply_text("\n".join(lines))
 
 
