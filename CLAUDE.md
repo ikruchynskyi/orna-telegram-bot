@@ -552,6 +552,18 @@ nothing, and the user separately confirmed they expected "Hyades Wreath"
    an explicit example distinguishing a spell/skill's own name from an
    obvious stat-buff word (Up/Down/a tier number/a status ailment).
 
+**`/update_codex` (hidden, `telegram_orna.py`) force-refetches
+aussiescodex's `codex.json`/`translations.en.json` right now, ignoring
+the 1-week TTL** - `orna_aussies.refetch_now()` calls the existing
+`refresh_cache()` (clears in-memory caches + deletes the on-disk cache
+files) then immediately re-fetches both, returning per-category record
+counts and vocabulary sizes for a confirmation reply. Gated by the same
+`GO_ALLOWED_USER_IDS` allowlist `/go` uses (imported straight from
+`telegram_go`, not duplicated) and left out of `set_my_commands` like
+`/go` - a maintenance command for whoever runs the bot, not something a
+guild member needs, and not something to leave open to hammering
+aussiescodex's API on demand.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

@@ -59,9 +59,10 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 from orna_aussies import build_url as build_aussies_url
 from orna_aussies import decode as decode_effect_code
 from orna_aussies import has_aussies_page
-from orna_aussies import query_records, resolve_codes as resolve_effect_codes
+from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
 from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
+from telegram_go import GO_ALLOWED_USER_IDS
 from telegram_nlp import OllamaError, plan_queries, route_query
 
 logger = logging.getLogger(__name__)
@@ -525,9 +526,43 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
 
+async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hidden maintenance command: force-refetch aussiescodex's codex.json/
+    translations.en.json right now, ignoring the 1-week TTL. Gated by the
+    same allowlist as /go (GO_ALLOWED_USER_IDS) - not something a regular
+    guild member needs, and hammering aussiescodex's API on demand isn't
+    something to leave wide open."""
+    message = update.effective_message
+    if not message:
+        return
+
+    user = update.effective_user
+    if GO_ALLOWED_USER_IDS and (not user or user.id not in GO_ALLOWED_USER_IDS):
+        logger.warning("update_codex: rejected user_id=%s", user.id if user else None)
+        return
+
+    await message.reply_text("Оновлюю codex.json / translations.en.json з aussiescodex.com...")
+    try:
+        stats = await asyncio.to_thread(refetch_now)
+    except Exception as e:
+        logger.warning("update_codex: refetch failed", exc_info=True)
+        await message.reply_text(f"Не вдалося оновити: {e}")
+        return
+
+    lines = ["✅ Кодекс оновлено:"]
+    for cat, count in stats["categories"].items():
+        lines.append(f"  {cat}: {count}")
+    lines.append(f"stats: {stats['stats_vocab']}, status: {stats['status_vocab']}")
+    await message.reply_text("\n".join(lines))
+
+
 def build_orna_handler() -> CommandHandler:
     return CommandHandler("orna", handle_orna)
 
 
 def build_orna_callback_handler() -> CallbackQueryHandler:
     return CallbackQueryHandler(orna_callback, pattern=r"^orna\|")
+
+
+def build_update_codex_handler() -> CommandHandler:
+    return CommandHandler("update_codex", handle_update_codex)

@@ -109,6 +109,21 @@ def _translations() -> dict:
     return _translations_cache
 
 
+def refetch_now() -> dict:
+    """Force a fresh download right now, ignoring the TTL, and return
+    small stats about what came back (record count per category, size of
+    the stats/status vocabularies) - for a status reply to whoever
+    triggered it, e.g. /update_codex."""
+    refresh_cache()
+    codex = _codex()["main"]
+    translations = _translations()
+    return {
+        "categories": {cat: len(records) for cat, records in codex.items()},
+        "stats_vocab": len(translations.get("stats", {})),
+        "status_vocab": len(translations.get("status", {})),
+    }
+
+
 def refresh_cache() -> None:
     """Force a re-download next time either file is needed."""
     global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache, _attr_field_cache

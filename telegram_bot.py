@@ -20,7 +20,7 @@ from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
 from telegram_go import build_go_callback_handler, build_go_continue_handler, build_go_handler
 from telegram_remind import build_remind_handler, reschedule_pending
-from telegram_orna import build_orna_callback_handler, build_orna_handler
+from telegram_orna import build_orna_callback_handler, build_orna_handler, build_update_codex_handler
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 
 logging.basicConfig(
@@ -153,6 +153,10 @@ def main():
     # of the Telegram command menu / autocomplete for regular Orna users.
     app.add_handler(build_go_handler())
     app.add_handler(build_go_callback_handler())
+    # Also hidden, also GO_ALLOWED_USER_IDS-gated - a maintenance command
+    # (force-refetch the aussiescodex cache now instead of waiting out its
+    # 1-week TTL), not something a regular guild member needs.
+    app.add_handler(build_update_codex_handler())
     # Registered before the Orna conversations: its filter only matches a
     # chat that just tapped /go's "Continue" button, so it's a no-op (falls
     # through to assess/resources below) for every other chat/message.
