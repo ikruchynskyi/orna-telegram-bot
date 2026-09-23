@@ -194,6 +194,22 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text("\n".join(lines))
 
 
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global safety net: without this, PTB's default handling for an
+    unhandled exception in any handler is to log it and reply with
+    NOTHING - the user just sees silence. Reproduced live via a crash
+    vector in the old telegram_nlp/telegram_go Ollama-JSON parsing (see
+    ollama_client.py's docstring) before this existed; that specific bug
+    is fixed at the source now, but this net stays regardless since any
+    other future handler bug has the exact same silent-failure shape."""
+    logger.error("Unhandled exception while processing update: %s", update, exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text("Виникла непередбачена помилка. Спробуйте ще раз.")
+        except Exception:
+            logger.warning("Failed to notify user about the error", exc_info=True)
+
+
 async def _post_init(app):
     # /go is the one command that must stay off this list, everything else
     # genuinely is meant to be user-visible autocomplete. Set in every
@@ -221,6 +237,7 @@ async def _post_init(app):
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
+    app.add_error_handler(_on_error)
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
     # New unified entry point (routes "today"/"next"/codex-search intent via

@@ -50,12 +50,17 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from ollama_client import OllamaError, UnsupportedMultimodal, chat_json, chat_json_with_fallback, drop_images
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 import usage_stats
 
+# Kept as an alias so the rest of this file's existing _UnsupportedMultimodal
+# references don't all need renaming - see ollama_client.py for why a non-
+# dict JSON parse result is also now a hard OllamaError, not a silent {}.
+_UnsupportedMultimodal = UnsupportedMultimodal
+
 logger = logging.getLogger(__name__)
 
-OLLAMA_CLOUD_HOST = "https://ollama.com"
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY")
 GO_MODEL = os.environ.get("GO_MODEL", "gemma4:31b")
 # /go nsfw ...: stays fully local (this GGUF isn't a cloud model, and a
@@ -107,7 +112,6 @@ MAX_CONTEXT_MESSAGES = 20
 # message in the chat stops being treated as a continuation.
 CONTINUE_TTL_SECONDS = 10 * 60
 
-_CLOUD_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
 _TAVILY_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0)
 
 # Nothing in the system prompt asks for Markdown, but the model writes it
@@ -294,108 +298,30 @@ class _PendingContinueFilter(filters.MessageFilter):
 _pending_continue_filter = _PendingContinueFilter()
 
 
-class _UnsupportedMultimodal(Exception):
-    """Raised when Ollama rejects a request because the model has no
-    vision support - distinct from a generic HTTP error so _call_model can
-    retry text-only instead of just failing the whole turn."""
-
-
-def _extract_json(content: str) -> dict:
-    """Parse `content` as JSON, tolerating trailing garbage after an
-    otherwise-valid object. Seen live: json.loads raising "Extra data" at
-    the same character offset on both the raw content AND the old
-    `_JSON_OBJECT_RE.search` fallback (a greedy `\\{.*\\}` regex just
-    grabs from the first "{" to the LAST "}" in the string, which spans
-    right across the trailing garbage too instead of stopping at the end
-    of the first real object - it couldn't ever recover from this
-    failure mode). `raw_decode` parses one complete object starting at
-    the first "{" and simply stops there, discarding whatever follows."""
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        pass
-    start = content.find("{")
-    if start == -1:
-        return {}
-    try:
-        obj, _ = json.JSONDecoder().raw_decode(content, start)
-        return obj
-    except json.JSONDecodeError:
-        return {}
-
-
-async def _chat_json(host: str, model: str, messages: list[dict], headers: dict) -> dict:
-    payload = {
-        "model": model, "messages": messages, "stream": False, "format": "json",
-        # Same fix as telegram_nlp.py's _chat_json_once (see its comment) -
-        # without this, reasoning tokens can leak into `content` alongside
-        # (or instead of) the JSON, which is what caused the live "Extra
-        # data" JSONDecodeErrors this was added to fix.
-        "think": True,
-    }
-    usage_stats.record_llm_call(model, "cloud" if host == OLLAMA_CLOUD_HOST else "local")
-    async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
-        resp = await client.post(f"{host}/api/chat", json=payload, headers=headers)
-        if resp.status_code == 400 and "multimodal" in resp.text.lower():
-            raise _UnsupportedMultimodal(resp.text[:300])
-        resp.raise_for_status()
-        content = resp.json().get("message", {}).get("content", "")
-
-    return _extract_json(content)
-
-
-def _drop_images(messages: list[dict]) -> bool:
-    """Strip any attached images in place and note it in that message's
-    text - `messages` is the same list/dicts _advance holds as
-    session.messages, so this also prevents every future turn from
-    re-attempting the same doomed image. Returns whether anything was
-    actually dropped, so the caller knows a retry is worth it."""
-    dropped = False
-    for m in messages:
-        if m.get("images"):
-            m.pop("images")
-            m["content"] = f"{m.get('content', '')}\n[an attached image couldn't be processed - this model has no vision support]"
-            dropped = True
-    return dropped
-
-
 async def _call_model(messages: list[dict], nsfw: bool = False) -> dict:
     """Ask the model for the next ReAct step.
 
     nsfw mode always uses the local NSFW_MODEL and never touches Ollama
     Cloud - that model isn't a cloud offering, and a hosted service would
-    likely refuse this content anyway. Otherwise: try Ollama Cloud first,
-    falling back to the same local Ollama model/host the Orna bot already
-    uses (telegram_nlp.py) if the cloud call fails for any reason (e.g.
-    out of cloud credits, or the flaky plane wifi just times out).
-
-    Either way, if a "Continue"-attached image hits a model with no vision
-    support, drop it and retry once rather than failing the whole turn -
-    none of GO_MODEL/LOCAL_OLLAMA_MODEL/NSFW_MODEL support images today.
+    likely refuse this content anyway. Otherwise delegates to
+    ollama_client.chat_json_with_fallback: try Ollama Cloud first, falling
+    back to the same local Ollama model/host the Orna bot already uses
+    (telegram_nlp.py) if the cloud call fails for any reason (e.g. out of
+    cloud credits, or the flaky plane wifi just times out) - including,
+    either way, dropping a "Continue"-attached image and retrying once if
+    the model has no vision support (none of GO_MODEL/LOCAL_OLLAMA_MODEL/
+    NSFW_MODEL support images today).
     """
     if nsfw:
-        host, model, headers = LOCAL_OLLAMA_HOST, NSFW_MODEL, {}
-    else:
-        host, model, headers = OLLAMA_CLOUD_HOST, GO_MODEL, ({"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {})
-
-    try:
-        return await _chat_json(host, model, messages, headers)
-    except _UnsupportedMultimodal:
-        logger.warning("go: %s has no vision support, dropping attached image(s)", model)
-        if _drop_images(messages):
-            return await _chat_json(host, model, messages, headers)
-        raise
-    except httpx.HTTPError:
-        if nsfw:
-            raise
-        logger.warning("go: Ollama Cloud unavailable, falling back to local Ollama", exc_info=True)
         try:
-            return await _chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, {})
+            return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages)
         except _UnsupportedMultimodal:
-            logger.warning("go: %s has no vision support, dropping attached image(s)", LOCAL_OLLAMA_MODEL)
-            if _drop_images(messages):
-                return await _chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, {})
+            logger.warning("go: %s has no vision support, dropping attached image(s)", NSFW_MODEL)
+            if drop_images(messages):
+                return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages)
             raise
+
+    return await chat_json_with_fallback(GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, api_key=OLLAMA_API_KEY)
 
 
 async def _tavily_search(query: str) -> dict:
@@ -860,7 +786,7 @@ async def _advance(sid: str, message) -> None:
         session.steps_left -= 1
         try:
             step = await _call_model(session.messages, nsfw=session.nsfw)
-        except (httpx.HTTPError, json.JSONDecodeError, _UnsupportedMultimodal) as e:
+        except (OllamaError, _UnsupportedMultimodal) as e:
             logger.exception("go: model call failed")
             await message.reply_text(f"Planning failed: {e}")
             return

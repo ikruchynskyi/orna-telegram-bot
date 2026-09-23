@@ -493,6 +493,21 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             granted = stats.get(key)
             if isinstance(granted, str):
                 candidates.append(granted)
+        # Followers encode "grants a spell when bonded" completely
+        # differently from items: record["bestial_bond"] is a list of bond
+        # tiers, each a list of {"name","type",...} entries - type "ABILITY"
+        # is a spell/skill slug (e.g. "earth-sigil-2"), as opposed to
+        # "BOND" (a status-code proc) or "BONUS" (a passive % stat, see the
+        # "effect" branch below and its ponytail note). Live report: "which
+        # follower gives earth sigil" found nothing until this was added -
+        # verified directly against codex.json that ancient-jinn/anubis
+        # both carry an ABILITY entry named "earth-sigil-2".
+        for tier in (record.get("bestial_bond") or []):
+            for entry in tier:
+                if entry.get("type") == "ABILITY":
+                    slug = entry.get("name", "")
+                    candidates.append(display_name("spells", slug))
+                    candidates.append(slug.replace("-", " "))
         if not candidates:
             return False
         if not value:
@@ -504,7 +519,24 @@ def _eval_condition(record: dict, cond: dict) -> bool:
         if not codes:
             return False
         target_fields = [field] if field in _EFFECT_LIST_FIELDS else list(_EFFECT_LIST_FIELDS)
-        return any(e.get("name") in codes for f in target_fields for e in (record.get(f) or []))
+        matched = any(e.get("name") in codes for f in target_fields for e in (record.get(f) or []))
+        if not matched and field in ("", "gives"):
+            # A follower's bond can also proc a status effect ("BOND"-type
+            # bestial_bond entries, e.g. "t__def_uu") - these are already
+            # real codes in the same status vocabulary resolve_codes just
+            # used, just reached through a different record field than
+            # items' own "gives" list. type "BONUS" entries (orn_bonus,
+            # crit_chance, ...) are deliberately NOT covered here - they're
+            # named % bonuses, not status codes, so resolve_codes can never
+            # match them.
+            # ponytail: no kind covers BONUS-type bond entries yet - add a
+            # kind:"bond_bonus" (field/value against translations['bestial_bond']
+            # vocabulary) if that's ever asked for.
+            matched = any(
+                entry.get("type") == "BOND" and entry.get("name") in codes
+                for tier in (record.get("bestial_bond") or []) for entry in tier
+            )
+        return matched
 
     if kind == "attr":
         real_field = field if field in record else _resolve_attr_field(field)

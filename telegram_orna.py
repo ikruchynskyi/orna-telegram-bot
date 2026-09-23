@@ -1,81 +1,96 @@
 """
 telegram_orna.py
 ================
-`/orna <text>` (English or Ukrainian) - single entry point that routes the
-request via telegram_nlp.route_query into one of four intents:
-  - "today": what materials are available today (same data as /res_today,
-    independently reimplemented here rather than imported - see
-    telegram_bot.py, kept untouched on purpose while /orna is proven out
-    alongside the existing commands).
-  - "next": when/where a specific named material becomes available (same
-    data as /res_next). Falls through to codex search if the named thing
-    isn't a known Material Forecast material - it might still be a real
-    codex entry (a monster, an item that isn't in the shop rotation, etc).
-  - "codex": a lookup of one specific named item/monster/etc by name -
-    search playorna.com's codex.
-  - "query": "what gives/causes/is immune to X", "mag > 250 and crit > 3%",
-    "items with 'dragon' in the description", "best mag item for thieves
-    and for mages" - one or more structured multi-attribute searches over
-    orna_aussies' full item/monster/etc. database, not a name lookup. See
-    telegram_nlp.plan_queries for how free text becomes one or more
-    condition blocks (and, if genuinely ambiguous, a button-only
-    clarifying question first), and orna_aussies.query_records for how a
-    block is evaluated.
+`/orna <text>` (English or Ukrainian) - a real ReAct loop over Orna's data:
+the model picks a tool itself each turn, reads what it returned, and
+decides the next tool call or finishes - rather than a fixed classify-
+then-parse pipeline. Mirrors telegram_go.py's `/go` loop (`_advance`,
+session dict, one action per turn, button-only "ask") but with /orna's own
+tool set and no free-text continuation.
 
-Both "codex" and "query" results feed into the exact same result-list/
-entry rendering: orna_aussies' record ids are the same slugs playorna.com
-uses, so a "query" match opens straight into a real codex page just like
-a "codex" one does. Every codex page - item, class, monster, boss,
-follower, raid, spell, building, dungeon - embeds a universal
-`codex-bootstrap` JSON blob (facts/effects/tags/sections), so Telegram is
-just a UI over that already-structured data; see
-orna_codex.fetch_codex_json for where that's read. An entry view also
-gets an "Assess" link to aussiescodex.com's own page for that record
-when one exists (only 4 of the 9 categories have one - see
-orna_aussies.has_aussies_page) - playorna's own codex has no upgrade/
-assess calculator, aussiescodex does.
+Tools: today/next/need (Material Forecast sheet + proof-cost reports,
+same data /res_today, /res_next, and the free-text /need flow serve),
+search_codex/query (playorna.com's codex + aussiescodex.com's structured
+item/monster/etc. database via orna_aussies.query_records), events
+(playorna.com/calendar/'s live event list, via orna_calendar), open_entry
+(read one entry's full detail), ask (button-only clarifying question),
+finish. Every tool that produces browsable results posts its own rich
+Telegram message immediately (result-list buttons, entry detail, event
+cards, proof-cost report + reminder buttons) and returns a short text
+observation to the model - "finish" is always just a short closing
+sentence, never where the actual data lives, so the model never has to
+retype a guild/date table or a stat block from memory.
 
-No LLM involved past routing+condition-parsing. Navigation never edits a
-message in place except paging through one result list - every "open
-this" action sends a new message instead, so Telegram's own scrollback
-doubles as a browsing history with no "back" button or state stack
-needed (same pattern telegram_go.py uses).
+Every codex page - item, class, monster, boss, follower, raid, spell,
+building, dungeon - embeds a universal `codex-bootstrap` JSON blob
+(facts/effects/tags/sections); orna_codex.fetch_codex_json/codex_search
+just extract and return this as-is. `sections[].entries[].url` is the
+site's own cross-link graph and can point at a different category than
+the current page - that's what makes drilling from an item into the
+monster that drops it, then into that monster's own skills, "just work"
+with the same functions recursively. Navigation (drilling into a result,
+opening a section) sends new messages rather than editing in place -
+Telegram's own scrollback becomes the browsing history for free - except
+paging through one result list, which edits that list's keyboard.
 """
 from __future__ import annotations
 
 import asyncio
 import datetime
 import html
+import json
 import logging
 import re
+import time
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
+from ollama_client import OllamaError, UnsupportedMultimodal, chat_json_with_fallback
 from orna_aussies import build_url as build_aussies_url
 from orna_aussies import decode as decode_effect_code
 from orna_aussies import has_aussies_page
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
+from orna_calendar import fetch_events
 from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
-from telegram_go import GO_ALLOWED_USER_IDS
-from telegram_nlp import OllamaError, extract_quantities, extract_resources, plan_queries, route_query
+from telegram_go import GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY
+from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
+from telegram_nlp import extract_quantities, extract_resources
 from telegram_resources import build_report, send_report_blocks
 import usage_stats
 
 logger = logging.getLogger(__name__)
 
 _RESULTS_PER_PAGE = 8
+MAX_STEPS = 6
+# Hard wall-clock ceiling on one /orna request, regardless of what's
+# happening inside it - MAX_STEPS bounds the number of turns, but each
+# turn's own timeouts (chat_json_with_fallback: up to 90s cloud + up to
+# 90s local fallback; each tool's own network call, all offloaded via
+# asyncio.to_thread) can still add up to several minutes worst-case
+# across 6 steps. This is the actual guarantee that the loop always
+# replies within a bounded time no matter what any single step does -
+# a hung/slow chain gets cut off here instead of the user just waiting
+# indefinitely with no way to tell a slow loop from a stuck one.
+LOOP_TIMEOUT_SECONDS = 180
+# ponytail: fixed TTL + a hard cap, pruned opportunistically on each new
+# /orna call - same tradeoff telegram_go._SESSIONS makes. No persistence,
+# no real LRU; add if session volume ever outgrows one process's memory
+# between bot restarts.
+SESSION_TTL_SECONDS = 15 * 60
+MAX_SESSIONS = 50
 
 # callback_data can't carry a full url/query list (64-byte cap), so each
 # rendered message's buttons reference a short-lived key into this dict
-# instead. Same ponytail tradeoff as telegram_go._SESSIONS: in-memory,
-# single-process, capped - fine at this volume, add persistence if it
-# ever isn't.
+# instead - unrelated to _ORNA_SESSIONS below (that's loop state; this is
+# result-list/section browsing state), same split telegram_go.py doesn't
+# need since it only ever has one kind of session.
 _STATE: dict[str, dict] = {}
 _STATE_MAX = 200
 
@@ -89,11 +104,12 @@ def _remember(state: dict) -> str:
 
 
 def _capabilities_text() -> str:
-    """Fixed, deterministic reply for route_query's "other" intent -
-    deliberately NOT model-generated prose (same reasoning as every
-    other structured-over-freeform choice in this codebase). Only
-    mentions genuinely public commands - /go and its hidden siblings
-    stay unlisted here same as everywhere else."""
+    """Fixed, deterministic reply for a meta "what can you do" ask -
+    deliberately NOT model-generated prose (same reasoning as every other
+    structured-over-freeform choice in this codebase). The system prompt
+    tells the model to copy this verbatim into finish() rather than write
+    its own. Only mentions genuinely public commands - /go and its hidden
+    siblings stay unlisted here same as everywhere else."""
     return (
         "Я вмію відповідати на питання про Orna:\n"
         "• /orna <назва> — знайти предмет/боса/клас/спел у кодексі "
@@ -103,10 +119,17 @@ def _capabilities_text() -> str:
         '"шоломи для мага, крім зброї")\n'
         "• /orna що сьогодні — ресурси, доступні сьогодні\n"
         "• /orna <ресурс> — коли з'явиться ресурс\n"
+        "• /orna коли наступний івент — календар подій гри\n"
         "• /res_today, /res_next — те саме окремими командами\n"
         "• /remind <час> <текст> — поставити нагадування (це окрема команда, "
         "не /orna)"
     )
+
+
+_REMINDER_NUDGE = (
+    "Це /orna — нагадування я тут не ставлю. Скористайтесь командою /remind, "
+    "наприклад: /remind 18:00 купити пруфи."
+)
 
 
 # -----------------------------------------------------------------------------
@@ -163,20 +186,36 @@ async def _next_text(resource_query: str) -> Optional[str]:
     return "\n".join(lines) if found else None
 
 
-async def _run_need_report(message, text: str) -> None:
-    """"need" intent: a quantity was given for one or more materials (e.g.
-    "треба 1000 балоріту") - reuse the exact same extraction + report
-    pipeline the free-text/`/need` flow (telegram_resources.py) already
-    has, rather than "next"'s plain date lookup with no proof-cost math.
-    Always sends SOME reply itself; never falls through to the caller,
-    since a bare CommandHandler can't open the same stateful "which
-    quantity did you mean" follow-up that conversation flow can when
-    extraction comes back incomplete."""
+async def _run_today_tool(message) -> str:
+    text = await _today_text()
+    await message.reply_text(text)
+    return "sent today's resources to the user"
+
+
+async def _run_next_tool(message, material: str) -> str:
+    if not material:
+        return "next needs a material name in action_input"
+    result = await _next_text(material)
+    if result is None:
+        return f"{material!r} is not a known Material Forecast resource - try search_codex or query instead"
+    await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
+    return f"sent next-appearance dates for {material} to the user"
+
+
+async def _run_need_tool(message, text: str) -> str:
+    """"need": a quantity was given for one or more materials (e.g.
+    "треба 1000 балоріту") - reuses the exact same extraction + report
+    pipeline the free-text /need flow (telegram_resources.py) already
+    has, rather than next()'s plain date lookup with no proof-cost math.
+    Always posts something itself (a report, a fallback next() reply, or
+    falls through to search_codex) - never silently drops the request."""
+    if not text:
+        return "need needs the original request text in action_input"
     try:
         sheet_values = await fetch_sheet_data()
     except Exception as e:
         await message.reply_text(f"Не вдалося отримати дані: {e}")
-        return
+        return f"failed to fetch sheet data: {e}"
 
     known = [row[0] for row in sheet_values if row]
     try:
@@ -185,27 +224,30 @@ async def _run_need_report(message, text: str) -> None:
         resources = []
     if not resources:
         # Not a recognized Material Forecast material at all - might still
-        # be a real codex entry, same reasoning "next" already uses.
-        await _run_codex_search(message, text)
-        return
+        # be a real codex entry, same reasoning next() already uses.
+        return await _run_codex_search(message, text)
 
     try:
         quantities = await extract_quantities(text, resources)
     except OllamaError:
         quantities = {}
 
+    summary_parts = []
     if quantities:
         blocks, bundles = await build_report(quantities, sheet_values)
         await send_report_blocks(message, blocks, bundles)
+        summary_parts.append("sent proof-cost report for: " + ", ".join(f"{n} x{q}" for n, q in quantities.items()))
 
     missing = [r for r in resources if r not in quantities]
     for name in missing:
-        # Couldn't pin a quantity to this one in a single message - fall
-        # back to a plain "when does it appear" lookup for it instead of
-        # silently dropping it from the reply.
+        # Couldn't pin a quantity to this one - fall back to a plain
+        # "when does it appear" lookup instead of silently dropping it.
         result = await _next_text(name)
         if result:
             await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
+            summary_parts.append(f"sent next-appearance for {name} (no quantity given)")
+
+    return "; ".join(summary_parts) if summary_parts else "no recognizable material+quantity found"
 
 
 # -----------------------------------------------------------------------------
@@ -236,9 +278,13 @@ def _result_list_keyboard(entries: list[dict], key: str, page: int = 0) -> Inlin
 
 
 def _section_keyboard_rows(sections: list[dict], key: str) -> list:
-    """Button rows for an entry's cross-link sections - returns rows
-    (not a wrapped InlineKeyboardMarkup) so _send_entry can append an
-    "Assess" row before building the final keyboard."""
+    """Button rows for a list of {"title", "entries"} sections - returns
+    rows (not a wrapped InlineKeyboardMarkup) so callers can append extra
+    rows (e.g. an "Assess" button) before building the final keyboard.
+    Reused for both a codex entry's own cross-link sections AND an
+    events() card's roster categories (Raids/Bosses/Followers/...) -
+    structurally the same shape (a title + a list of entries), so no
+    separate rendering path was needed for the calendar feature."""
     rows = []
     for i, section in enumerate(sections):
         entries = section.get("entries") or []
@@ -266,13 +312,15 @@ def _format_entry(detail: dict) -> str:
     return "\n".join(lines)
 
 
-async def _run_codex_search(message, query: str, lang: str = "en") -> None:
+async def _run_codex_search(message, query: str, lang: str = "en") -> str:
+    if not query:
+        return "search_codex needs a name in action_input"
     try:
         data = await asyncio.to_thread(codex_search, query, lang)
     except Exception as e:
         logger.warning("orna: codex search failed for %r", query, exc_info=True)
         await message.reply_text(f"Пошук у кодексі не вдався: {e}")
-        return
+        return f"codex search failed: {e}"
 
     results = data.get("results") or []
 
@@ -293,14 +341,12 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
                 logger.info("orna: %r found nothing, %r (number stripped) did - using that", query, stripped)
                 query, results = stripped, retry_results
 
-    # route_query's translation step non-deterministically splits some
-    # compound item names into two words (seen live: "rainsong" ->
-    # "Rain Song" on one call, "Rainsong" on the next, same input) - the
-    # codex's own search doesn't tolerate that inserted space. Rather than
-    # fight an inherently non-deterministic model quirk with more prompt
-    # engineering, retry once with the space collapsed before giving up;
-    # harmless when the space was already correct, since that case already
-    # returned results and never reaches here.
+    # A translated request can non-deterministically split a compound item
+    # name into two words (seen live: "rainsong" -> "Rain Song" on one
+    # call, "Rainsong" on the next) - the codex's own search doesn't
+    # tolerate that inserted space. Retry once with the space collapsed
+    # before giving up; harmless when the space was already correct, since
+    # that case already returned results and never reaches here.
     if not results and " " in query:
         collapsed = query.replace(" ", "")
         try:
@@ -312,11 +358,10 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
             logger.info("orna: %r found nothing, %r did - using that", query, collapsed)
             query, results = collapsed, retry_results
 
-    # route_query sends anything not obviously a stat/effect/attribute query
-    # down this name-lookup path, but some of those are really a description
+    # A name search dead-ends on a request that's really a description
     # substring (e.g. "strange sword" only appears in "Bladeless"'s
-    # description, not its name) - a plain name search here dead-ends, so
-    # fall back to a description-text query_records search before giving up.
+    # description, not its name) - fall back to a description-text
+    # query_records search before giving up.
     if not results:
         try:
             desc_matches = await asyncio.to_thread(
@@ -333,11 +378,12 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
                 parse_mode="HTML",
                 reply_markup=_result_list_keyboard(desc_entries, key),
             )
-            return
+            names = "; ".join(f"{e['name']} ({e['url']})" for e in desc_entries[:5])
+            return f"{len(desc_entries)} matches by description for {query!r}: {names}"
 
     if not results:
         await message.reply_text(f"У кодексі нічого не знайдено за запитом: {html.escape(query)}", parse_mode="HTML")
-        return
+        return f"0 results for {query!r}"
 
     key = _remember({"entries": results, "lang": lang})
     await message.reply_text(
@@ -345,6 +391,8 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
         parse_mode="HTML",
         reply_markup=_result_list_keyboard(results, key),
     )
+    names = "; ".join(f"{r.get('name', '?')} ({r.get('url', '')})" for r in results[:5])
+    return f"{len(results)} results for {query!r}: {names}"
 
 
 _FIELD_LABELS = {"immunities": "імунітет до", "causes": "спричиняє", "gives": "дає", "cures": "лікує"}
@@ -371,95 +419,106 @@ def _describe_condition(cond: dict) -> str:
     return str(cond)
 
 
-def _fallback_plan(text: str) -> dict:
-    return {"needs_clarification": False, "question": "", "options": [], "queries": [
-        {"label": "", "conditions": [{"kind": "text", "field": "", "value": text}],
-         "combinator": "and", "category": "", "sort_by": "", "sort_dir": "desc"},
-    ]}
+async def _run_query_tool(message, conditions: list, combinator: str, category: str, sort_by: str, sort_dir: str) -> str:
+    conditions = [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
+    if not conditions and not sort_by:
+        return "query needs at least one condition, or a sort_by for a ranking ask"
 
-
-async def _execute_queries(message, queries: list) -> None:
-    """Run each parsed query block and send its own results message -
-    lets a single /orna ask cover several independent searches at once
-    (e.g. "best mag item for thieves and for mages" -> two messages),
-    while a normal single-block ask behaves exactly as before."""
-    for q in queries:
-        conditions = q.get("conditions") or []
-        sort_by = q.get("sort_by") or None
-        try:
-            matches = await asyncio.to_thread(
-                query_records, conditions, q.get("combinator", "and"), q.get("category") or None,
-                50, sort_by, q.get("sort_dir", "desc"),
-            )
-        except Exception as e:
-            logger.warning("orna: query search failed for %r", q, exc_info=True)
-            await message.reply_text(f"Пошук не вдався: {e}")
-            continue
-
-        joiner = " AND " if q.get("combinator", "and") == "and" else " OR "
-        summary = joiner.join(_describe_condition(c) for c in conditions) if conditions else ""
-        if sort_by:
-            rank_label = f"{'найбільший' if q.get('sort_dir', 'desc') == 'desc' else 'найменший'} {sort_by}"
-            summary = f"{summary} — {rank_label}" if summary else rank_label
-        label = q.get("label")
-        if label:
-            summary = f"{label}: {summary}" if summary else label
-
-        if not matches:
-            text = f"🔎 <b>{html.escape(summary)}</b> — нічого не знайдено." if summary else "Нічого не знайдено за цим запитом."
-            await message.reply_text(text, parse_mode="HTML")
-            continue
-
-        # playorna urls, not aussiescodex - tapping a result should show the
-        # full stats/facts/sections in chat via _send_entry, same as a name
-        # search; the aussiescodex "Assess" link lives on that entry view.
-        entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
-                    "sort_value": m.sort_value} for m in matches]
-        suffix = " (показано перші 50)" if len(entries) >= 50 else ""
-
-        key = _remember({"entries": entries, "lang": "en"})
-        await message.reply_text(
-            f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
-            parse_mode="HTML",
-            reply_markup=_result_list_keyboard(entries, key),
-        )
-
-
-async def _run_query_search(message, text: str) -> None:
     try:
-        plan = await plan_queries(text)
-    except OllamaError:
-        plan = _fallback_plan(text)
+        matches = await asyncio.to_thread(
+            query_records, conditions, combinator if combinator in ("and", "or") else "and",
+            category or None, 50, sort_by or None, sort_dir if sort_dir in ("asc", "desc") else "desc",
+        )
+    except Exception as e:
+        logger.warning("orna: query tool failed for %r", conditions, exc_info=True)
+        await message.reply_text(f"Пошук не вдався: {e}")
+        return f"query failed: {e}"
 
-    if plan.get("needs_clarification"):
-        options = plan["options"]
-        key = _remember({"kind": "clarify", "text": text, "options": options})
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(opt[:30], callback_data=f"orna|clarify|{key}|{i}")
-            for i, opt in enumerate(options)
-        ]])
-        await message.reply_text(plan.get("question") or "Уточніть, будь ласка:", reply_markup=keyboard)
-        return
+    joiner = " AND " if combinator != "or" else " OR "
+    summary = joiner.join(_describe_condition(c) for c in conditions) if conditions else ""
+    if sort_by:
+        rank_label = f"{'найбільший' if sort_dir != 'asc' else 'найменший'} {sort_by}"
+        summary = f"{summary} — {rank_label}" if summary else rank_label
+    if category:
+        summary = f"[{category}] {summary}" if summary else f"[{category}]"
 
-    await _execute_queries(message, plan.get("queries") or [])
+    if not matches:
+        text = f"🔎 <b>{html.escape(summary)}</b> — нічого не знайдено." if summary else "Нічого не знайдено за цим запитом."
+        await message.reply_text(text, parse_mode="HTML")
+        return f"0 matches for: {summary or conditions}"
+
+    # playorna urls, not aussiescodex - tapping a result should show the
+    # full stats/facts/sections in chat via _send_entry, same as a name
+    # search; the aussiescodex "Assess" link lives on that entry view.
+    entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
+                "sort_value": m.sort_value} for m in matches]
+    suffix = " (показано перші 50)" if len(entries) >= 50 else ""
+
+    key = _remember({"entries": entries, "lang": "en"})
+    await message.reply_text(
+        f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
+        parse_mode="HTML",
+        reply_markup=_result_list_keyboard(entries, key),
+    )
+    names = "; ".join(f"{e['name']} ({e['url']})" for e in entries[:5])
+    return f"{len(matches)} matches for {summary}: {names}"
 
 
-async def _send_entry(message, entry_ref: dict, lang: str) -> None:
+async def _run_events_tool(message, keyword: str) -> str:
+    try:
+        events = await asyncio.to_thread(fetch_events)
+    except Exception as e:
+        logger.warning("orna: events fetch failed", exc_info=True)
+        return f"events fetch failed: {e}"
+    if not events:
+        return "No events currently listed on the calendar."
+
+    shown = events
+    needle = keyword.strip().lower()
+    if needle:
+        filtered = [e for e in events if needle in e["name"].lower() or needle in e["description"].lower()]
+        if filtered:
+            shown = filtered
+        # else: keyword matched nothing - fall back to the full list rather
+        # than dead-ending, same "harmless retry" pattern as _run_codex_search.
+
+    summaries = []
+    for e in shown:
+        live_tag = " 🔴 LIVE" if e["live"] else ""
+        text = (f"<b>{html.escape(e['name'])}</b>{live_tag}\n"
+                f"{html.escape(e['starts'])} – {html.escape(e['ends'])}\n\n"
+                f"{html.escape(e['description'])}")
+        sections = [{"title": cat, "entries": items} for cat, items in e["roster"].items()]
+        rows = []
+        if sections:
+            key = _remember({"sections": sections, "lang": "en"})
+            rows = _section_keyboard_rows(sections, key)
+        await message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows) if rows else None)
+        summaries.append(f"{e['name']} ({e['starts']} to {e['ends']}, live={e['live']}): {e['description']}")
+    return "\n".join(summaries)
+
+
+async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
+    """Posts the full rendered entry (sprite, facts/effects/tags, cross-
+    link section buttons, Assess link) and returns its `detail` dict so a
+    caller (open_entry's tool wrapper) can build a text digest from it -
+    the button-driven "open" callback ignores the return value, same as
+    before this returned nothing."""
     url = entry_ref.get("url")
     if not url:
         await message.reply_text("У цього запису немає посилання на сторінку кодексу.")
-        return
+        return None
     try:
         data = await asyncio.to_thread(fetch_codex_json, url, lang)
     except Exception as e:
         logger.warning("orna: failed to fetch codex page %s", url, exc_info=True)
         await message.reply_text(f"Не вдалося завантажити сторінку кодексу: {e}")
-        return
+        return None
 
     detail = data.get("detail")
     if not detail:
         await message.reply_text("Сторінку кодексу не вдалося розпізнати.")
-        return
+        return None
 
     sprite = detail.get("sprite")
     if sprite:
@@ -485,6 +544,250 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> None:
         disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup(rows) if rows else None,
     )
+    return detail
+
+
+async def _run_open_entry_tool(message, url: str) -> str:
+    if not url:
+        return "open_entry needs a url in action_input (from a previous observation)"
+    detail = await _send_entry(message, {"url": url}, "en")
+    if not detail:
+        return f"couldn't open {url}"
+    facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or [])[:8])
+    digest = f"{detail.get('name')}: {facts}"
+    effects = detail.get("effects") or []
+    if effects:
+        digest += " | effects: " + ", ".join(effects)
+    return digest
+
+
+# -----------------------------------------------------------------------------
+# the ReAct loop
+# -----------------------------------------------------------------------------
+
+_TOOLS_TEXT = (
+    "- today(): no input. Materials available today in the guild shops (Material Forecast sheet). Posts the list.\n"
+    "- next(action_input=<material name, English>): when/where a SPECIFIC named crafting material next appears, "
+    "no quantity involved. If it's not a known Material Forecast resource, try search_codex or query instead - "
+    "it might still be a real codex entry (a monster, a non-shop item, ...).\n"
+    "- need(action_input=<the relevant original wording, quantity + material - do NOT translate this one, the "
+    "extraction step handles Ukrainian directly>): the user gave an actual QUANTITY of one or more materials "
+    '(e.g. "треба 1000 балоріту", "need 500 mythril and 200 adamantine") - runs the full guild-availability + '
+    "proof-cost + \"remind me\" report, richer than next().\n"
+    "- search_codex(action_input=<name, English>): look up ONE specific item/monster/boss/class/spell/building/"
+    "dungeon/follower/raid by NAME alone. Only for a plain name/set-fragment lookup with NO attribute/class/slot "
+    'restriction attached - a name PLUS a restriction (e.g. "Last Martyr items for mage") is a query() call '
+    "instead (a text condition on the name plus an attr condition), not search_codex.\n"
+    "- query(args={...}): search the full item/monster/boss/class/spell/building/dungeon/follower/raid database "
+    "by attributes - see the condition rules below.\n"
+    "- events(action_input=<keyword, or empty>): the current/near-term event calendar (double-orns weekends, EXP "
+    "events, raids, ...). Posts each matching event (dates + description) and returns a short summary - read the "
+    "description text yourself to judge a match (wording varies a lot: \"earn 25% more orns\" and \"double orns, "
+    'gold, and experience" both mean "gives more orns"). Leave action_input empty to see everything currently '
+    "listed; only pass a keyword once you already know roughly what you're narrowing to.\n"
+    "- open_entry(action_input=<url from a previous observation, e.g. \"/codex/items/foo/\">): fetch and show the "
+    "user one specific entry's full detail, and read a digest of it yourself - use this only if you need to "
+    "confirm an exact stat/fact before answering, not for browsing (query/search_codex already show a full "
+    "result list with buttons the user can open themselves).\n"
+    "- ask(action_input=<question>, options=[2-4 short choices]): a clarifying question. The user can only TAP a "
+    "button, never type free text - always give options. Only when a specific missing detail would materially "
+    'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class). Most '
+    "requests do NOT need this. Never ask twice in the same conversation.\n"
+    "- finish(action_input=<short closing text>): end the turn. The actual results (search hits, reports, event "
+    "cards) are ALREADY shown to the user by whichever tool produced them - finish is just a short closing "
+    'sentence (e.g. "Ось варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed '
+    "text. Don't call finish before you have enough information.\n"
+)
+
+_CONDITION_RULES = (
+    "query's args: {\"conditions\": [<condition>, ...], \"combinator\": \"and\"|\"or\", \"category\": \"<one of "
+    'items, monsters, bosses, raids, followers, classes, spells, buildings, dungeons, or empty for all>", '
+    '"sort_by": "<stat field or empty>", "sort_dir": "asc"|"desc"}. ONE query call = one filter - if the request '
+    "names several separate things to look up (different slots, different classes, different items), call query "
+    "multiple times, once per thing (see the worked example below) - never cram unrelated asks into one call's "
+    "conditions.\n"
+    "Each condition is one of:\n"
+    '  {"kind":"stat","field":"<snake_case stat name>","cmp":">|<|>=|<=|=","value":<number, may be negative>} - '
+    "field is not a fixed list: attack/magic/defense/resistance/dexterity/ward/foresight/crit/crit_chance/"
+    "crit_damage(a SEPARATE stat from crit - how much extra damage a crit does, never conflate them)/"
+    "follower_stats/summon_stats/view_distance/gold_bonus/exp_bonus/... - infer the snake_case name from the "
+    "wording. A NUMBER/threshold on a stat is ALWAYS kind:\"stat\" even worded as \"gives\"/\"has\" (\"magic over "
+    '220" is stat, not effect). Negative values are fine ("defense < 0").\n'
+    '  {"kind":"effect","field":"immunities|causes|gives|cures|","value":"<effect name>"} - immune to / causes on '
+    "an enemy / grants (self-or-team buff, including a follower's bond proc) / cures a NAMED status (e.g. "
+    '"stunned", "T Mag 3", "Def Down") - never a bare number. Tier shorthand ("T Mag ++", "Mag ↑↑", "T Mag 3", '
+    '"Def III") is ALWAYS effect - copy it into value EXACTLY as written, never invent or drop the tier.\n'
+    '  {"kind":"text","field":"description|name|","value":"<substring>"}\n'
+    '  {"kind":"attr","field":"<flat field>","cmp":"=|!=|>|<|>=|<=","value":<text, number, or true/false>} - '
+    "tier, rarity, useable_by (magic_users/melee_classes/thief_classes/warrior_classes/"
+    'valhallan_summoner_classes/all_classes - "mage"/"thief" etc as a substring is fine), place (the BODY SLOT: '
+    'head/torso/legs/weapon/off-hand/accessory/material - use for "goes on legs/head", never "type"), type '
+    "(weapon SUBTYPE only, e.g. daggers/axes_&_hammers), item_type (the broad equipment slot: armor/weapon/"
+    'off-hand/field), family, element, events, tags, price, and boolean exotic/new/hidden ("true"/"false"). Use '
+    'cmp:"!=" for exclusion language ("not"/"except"/"excluding").\n'
+    '  {"kind":"ability","value":"<spell/skill name, or empty for any>"} - the record ITSELF grants a spell/skill '
+    "when equipped/bonded. For an ITEM this lives in stats[\"+spell\"]/[\"+skill\"] or an ability cross-link; for "
+    "a FOLLOWER this is a bestial_bond tier's ABILITY entry - either way, use kind:\"ability\" whenever a "
+    'SPECIFIC SPELL/SKILL NAME is named (or "gives a bonus/extra spell" with no name given), NEVER kind:"effect" '
+    "- \"effect\" is only for buff/debuff status codes (Up/Down/a tier number/an ailment), never a spell's own "
+    'name. E.g. "which follower gives earth sigil" -> category:"followers", kind:"ability", value:"earth sigil" '
+    "(Earth Sigil is a SPELL, not a status effect - this exact phrasing was previously misread as an effect and "
+    "found nothing).\n"
+    '"combinator": "and" (default) or "or". "sort_by"/"sort_dir": for a ranking ask ("biggest mag item", "weakest '
+    'defense follower") instead of (or together with) a plain filter - sort_dir "desc" for biggest/highest/best, '
+    '"asc" for smallest/lowest/worst; conditions may be empty for a pure-ranking ask.'
+)
+
+_MULTI_PART_EXAMPLE = (
+    "MULTI-PART REQUESTS: when a request names several separate things to look up, call query (or search_codex) "
+    "once PER thing, observe each result, then finish once with a short overall wrap-up - never force unrelated "
+    'asks into one call. Worked example: "I need two separate items. Legs and head. For mage. Mag stat should be '
+    'more than 50." is TWO lookups, not one:\n'
+    '  1. query(args={"conditions":[{"kind":"attr","field":"place","cmp":"=","value":"legs"},'
+    '{"kind":"attr","field":"useable_by","cmp":"=","value":"magic"},{"kind":"stat","field":"magic","cmp":">",'
+    '"value":50}],"combinator":"and"})\n'
+    '  2. same again with the place condition\'s value changed to "head"\n'
+    '  3. finish(action_input="Ось варіанти для обох слотів.")'
+)
+
+
+def _orna_system_prompt() -> str:
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
+    actions = '"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"ask"|"finish"'
+    return (
+        'You are a ReAct agent answering /orna requests about the mobile RPG "Orna" for a Telegram bot used by '
+        f'its guild - requests come in English or Ukrainian. Current date/time: {now} (server local time) - use '
+        'this for "today"/"next event"/other relative dates. Reply text (ask/finish action_input) is in the SAME '
+        "language the user wrote in; tool arguments (action_input for other tools, query conditions) are always "
+        "in ENGLISH regardless of the request's language, since the underlying data is English.\n\n"
+        f"You have these tools - each turn, pick exactly ONE:\n{_TOOLS_TEXT}\n"
+        f"{_CONDITION_RULES}\n\n"
+        f"{_MULTI_PART_EXAMPLE}\n\n"
+        "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
+        f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
+        f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
+        "Each turn, reply with strict JSON only, no other text: "
+        f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, unused for query/today>",'
+        '"args":{"...only for action \\"query\\", see above..."},"options":["<opt1>","<opt2>"]}. "options" is only '
+        "used with action \"ask\". Don't call finish before you have enough information, don't ask more than "
+        "once, and don't repeat a tool call you've already made with the same input."
+    )
+
+
+@dataclass
+class OrnaSession:
+    messages: list
+    steps_left: int
+    created: float = field(default_factory=time.monotonic)
+    ask_options: list = field(default_factory=list)
+
+
+_ORNA_SESSIONS: dict[str, OrnaSession] = {}
+
+
+def _new_orna_session(messages: list, steps_left: int) -> str:
+    now = time.monotonic()
+    for sid in [s for s, sess in _ORNA_SESSIONS.items() if now - sess.created > SESSION_TTL_SECONDS]:
+        _ORNA_SESSIONS.pop(sid, None)
+    if len(_ORNA_SESSIONS) >= MAX_SESSIONS:
+        oldest = min(_ORNA_SESSIONS, key=lambda s: _ORNA_SESSIONS[s].created)
+        _ORNA_SESSIONS.pop(oldest, None)
+    sid = uuid.uuid4().hex[:10]
+    _ORNA_SESSIONS[sid] = OrnaSession(messages=messages, steps_left=steps_left)
+    return sid
+
+
+async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
+    """Dispatch one tool call. Wrapped in a broad except so a bug in any
+    single tool ends that step with an observation the model can react to,
+    instead of killing the whole loop (defense in depth alongside
+    telegram_bot.py's global error handler - the loop itself should never
+    need that safety net to produce a reply)."""
+    try:
+        if action == "today":
+            return await _run_today_tool(message)
+        if action == "next":
+            return await _run_next_tool(message, action_input)
+        if action == "need":
+            return await _run_need_tool(message, action_input)
+        if action == "search_codex":
+            return await _run_codex_search(message, action_input)
+        if action == "query":
+            return await _run_query_tool(
+                message, args.get("conditions") or [], str(args.get("combinator") or "and"),
+                str(args.get("category") or ""), str(args.get("sort_by") or ""), str(args.get("sort_dir") or "desc"),
+            )
+        if action == "events":
+            return await _run_events_tool(message, action_input)
+        if action == "open_entry":
+            return await _run_open_entry_tool(message, action_input)
+    except Exception as e:
+        logger.warning("orna: tool %r failed", action, exc_info=True)
+        return f"{action} failed: {e}"
+    return f"unknown action {action!r}; valid actions are today, next, need, search_codex, query, events, open_entry, ask, finish."
+
+
+async def _advance(sid: str, message) -> None:
+    """Wraps _advance_inner in a hard wall-clock deadline - see
+    LOOP_TIMEOUT_SECONDS. No matter what happens inside (a hung call, a
+    pathologically slow chain of fallbacks, anything), this guarantees a
+    reply within a bounded time instead of the request just going quiet."""
+    try:
+        await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning("orna: loop exceeded %ss, cut off (sid=%s)", LOOP_TIMEOUT_SECONDS, sid)
+        try:
+            await message.reply_text("Запит триває надто довго — спробуйте ще раз або сформулюйте простіше.")
+        except Exception:
+            logger.warning("orna: failed to notify user about loop timeout", exc_info=True)
+
+
+async def _advance_inner(sid: str, message) -> None:
+    session = _ORNA_SESSIONS.get(sid)
+    if session is None:
+        return
+
+    while session.steps_left > 0:
+        session.steps_left -= 1
+        try:
+            step = await chat_json_with_fallback(
+                GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
+            )
+        except (OllamaError, UnsupportedMultimodal) as e:
+            logger.warning("orna: model call failed", exc_info=True)
+            await message.reply_text(f"Не вдалося обробити запит: {e}")
+            return
+
+        action = step.get("action")
+        action_input = str(step.get("action_input") or "").strip()
+        args = step.get("args") if isinstance(step.get("args"), dict) else {}
+
+        if action == "finish" or not action:
+            await message.reply_text(action_input or "Не вдалося сформувати відповідь.")
+            return
+
+        if action == "ask":
+            options = [str(o).strip() for o in (step.get("options") or []) if str(o).strip()][:4]
+            if not options:
+                session.messages.append({
+                    "role": "user",
+                    "content": 'Observation: "ask" needs 2-4 short "options" to tap - '
+                               "there's no free-text reply channel here. Retry with options, or finish.",
+                })
+                continue
+            session.ask_options = options
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(opt[:30], callback_data=f"orna|ask|{sid}|{i}")
+                for i, opt in enumerate(options)
+            ]])
+            await message.reply_text(action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
+            return
+
+        session.messages.append({"role": "assistant", "content": json.dumps(step)})
+        observation = await _run_tool(message, action, action_input, args)
+        session.messages.append({"role": "user", "content": f"Observation: {observation}"})
+
+    await message.reply_text("Не вдалося сформувати відповідь за відведену кількість кроків — спробуйте уточнити запит.")
 
 
 # -----------------------------------------------------------------------------
@@ -502,48 +805,16 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await message.reply_text(
             "Використання: /orna <запит>\n"
             "Приклади: /orna adamantine, /orna що сьогодні є, /orna balor sword, "
-            "/orna what gives immunity to stunned"
+            "/orna what gives immunity to stunned, /orna коли наступний івент"
         )
         return
 
-    try:
-        routed = await route_query(text)
-    except OllamaError:
-        routed = {"intent": "codex", "query": text}
-    intent = routed.get("intent", "codex")
-
-    if intent == "other":
-        # self-aware fallback: the request isn't actually about the codex/
-        # resources at all (a meta "what can you do" ask, or shaped like a
-        # reminder - a different command's job) - see route_query's
-        # docstring. Better to say so than to dead-end on a "codex" name
-        # search for text that was never a name.
-        await message.reply_text(_capabilities_text())
-        return
-
-    query = routed.get("query") or text
-
-    if intent == "today":
-        await message.reply_text(await _today_text())
-        return
-
-    if intent == "need":
-        await _run_need_report(message, query)
-        return
-
-    if intent == "next":
-        result = await _next_text(query)
-        if result is not None:
-            await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
-            return
-        # Not a known Material Forecast resource - it might still be a real
-        # codex entry, so don't just dead-end here.
-
-    if intent == "query":
-        await _run_query_search(message, query)
-        return
-
-    await _run_codex_search(message, query)
+    messages = [
+        {"role": "system", "content": _orna_system_prompt()},
+        {"role": "user", "content": text},
+    ]
+    sid = _new_orna_session(messages, MAX_STEPS)
+    await _advance(sid, message)
 
 
 async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -553,6 +824,24 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if len(parts) < 4 or parts[0] != "orna":
         return
     kind, key, arg = parts[1], parts[2], parts[3]
+
+    if kind == "ask":
+        session = _ORNA_SESSIONS.get(key)
+        if session is None:
+            await query.message.reply_text("Ця сесія застаріла — спробуйте /orna ще раз.")
+            return
+        idx = int(arg) if arg.isdigit() else -1
+        if not (0 <= idx < len(session.ask_options)):
+            return
+        choice = session.ask_options[idx]
+        try:
+            await query.edit_message_text(f"{query.message.text}\n\n→ {choice}", reply_markup=None)
+        except TelegramError:
+            pass  # e.g. double-tapped - harmless, the loop resume below still runs
+        session.messages.append({"role": "user", "content": f'Observation: user chose "{choice}".'})
+        await _advance(key, query.message)
+        return
+
     state = _STATE.get(key)
     if state is None:
         await query.message.reply_text("Ця сесія кодексу застаріла — спробуйте /orna ще раз.")
@@ -587,26 +876,6 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             parse_mode="HTML",
             reply_markup=_result_list_keyboard(entries, key2),
         )
-        return
-
-    if kind == "clarify":
-        idx = int(arg) if arg.isdigit() else -1
-        options = state.get("options") or []
-        if not (0 <= idx < len(options)):
-            return
-        choice = options[idx]
-        try:
-            await query.edit_message_text(f"{query.message.text}\n\n→ {choice}", reply_markup=None)
-        except TelegramError:
-            pass  # e.g. double-tapped - harmless, the search below still runs
-        original_text = state.get("text", "")
-        # clarified=True: plan_queries won't ask a second time (see its
-        # docstring) - this can never loop back into another clarify button.
-        try:
-            plan = await plan_queries(f"{original_text} ({choice})", clarified=True)
-        except OllamaError:
-            plan = _fallback_plan(original_text)
-        await _execute_queries(query.message, plan.get("queries") or [])
         return
 
 
