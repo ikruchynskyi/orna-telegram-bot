@@ -225,13 +225,14 @@ async def parse_conditions(text: str) -> Dict:
         '"defense","cmp":"<","value":0}. But "what lowers defense" / "what '
         'reduces attack" (asking for a DEBUFF effect, not an item\'s own stat) is '
         'usually "kind":"effect" instead - see below.\n'
-        '  {"kind":"effect","field":"immunities|causes|gives|","value":"<effect '
-        "text>\"} - immunity to / causes / grants a NAMED status or buff/debuff "
-        '(e.g. value "stunned", "T Mag 3", or "Def Down" - a specific effect name, '
-        "never a bare number). field: \"immunities\" for \"immune\"/\"resistant "
-        'to", "causes" for inflicts-on-enemy (e.g. "what lowers enemy defense" -> '
-        'value "Def Down", field "causes"), "gives" for grants/self-or-team buffs, '
-        "empty if unclear.\n"
+        '  {"kind":"effect","field":"immunities|causes|gives|cures|","value":'
+        '"<effect text>"} - immunity to / causes / grants / cures a NAMED status or '
+        'buff/debuff (e.g. value "stunned", "T Mag 3", or "Def Down" - a specific '
+        "effect name, never a bare number). field: \"immunities\" for \"immune\"/"
+        '"resistant to", "causes" for inflicts-on-enemy (e.g. "what lowers enemy '
+        'defense" -> value "Def Down", field "causes"), "gives" for grants/self-or-'
+        'team buffs, "cures" for "what cures poisoned"/"removes stun", empty if '
+        "unclear.\n"
         "IMPORTANT: if the request has a NUMBER/threshold on a stat (magic, "
         'attack, crit damage, follower stats, etc.) it is ALWAYS "kind":"stat", '
         'even if the wording uses "gives"/"has"/"with" - e.g. "what gives magic '
@@ -242,9 +243,19 @@ async def parse_conditions(text: str) -> Dict:
         "stat threshold attached.\n"
         '  {"kind":"text","field":"description|name|","value":"<substring>"} - the '
         "name or description should contain this text.\n"
-        '  {"kind":"attr","field":"<tier|rarity|useable_by|place|type|item_type|'
-        'family|element>","cmp":"=|>|<|>=|<=","value":"<text or number>"} - a flat '
-        'attribute, e.g. rarity="legendary" or tier>=8.\n'
+        '  {"kind":"attr","field":"<snake_case field name>","cmp":"=|>|<|>=|<=",'
+        '"value":"<text, number, or true/false>"} - a flat attribute, not limited '
+        "to a fixed list - infer the field from the record structure Orna data "
+        'uses: "tier" (number), "rarity" (common/legendary/godly/arisen/...), '
+        '"useable_by" (which classes), "place" (where found), "type" (e.g. '
+        'weapon subtype - daggers/axes_&_hammers/curved_swords), "item_type" (the '
+        'equipment SLOT - armor/weapon/off-hand/field/...), "family" (monster '
+        'family, e.g. magical/undead), "element" (item elemental type - fire/'
+        'water/arcane/...), "events" (which game event, e.g. "which items are '
+        'from thronemakers"), "tags" (misc labels like found_in_chests), "price" '
+        '(classes only), and boolean flags "exotic"/"new"/"hidden" (value "true" '
+        'or "false" - e.g. "what new items were added" -> field "new", value '
+        '"true"). Example: rarity="legendary" or tier>=8.\n'
         '"combinator": "and" if ALL conditions must hold, "or" if ANY - default '
         '"and" unless the user clearly says "or"/"either".\n'
         '"category": set only if the user named a specific category (e.g. "which '

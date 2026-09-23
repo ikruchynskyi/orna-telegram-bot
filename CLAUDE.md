@@ -343,6 +343,53 @@ stat/effect/attribute language to trigger "query" intent, so the name
 search has to be the one that recovers rather than trying to get the
 classifier prompt to somehow guess this belongs to the other path.
 
+**`kind: "attr"` reaches every real flat field, not a hand-picked
+subset - cross-checked directly against aussiescodex.com's own advanced
+item-filter sidebar (user shared a screenshot: 6 "Basic Filters" groups
++ 12 "Unique Stats" groups totaling 130 stat filters) to find what was
+still missing.** `orna_aussies._all_attr_fields()` scans every record in
+every category and builds the field vocabulary from what's actually
+there, the same "discover, don't hardcode" approach as the stat-field
+fix above, with `_resolve_attr_field` doing the same exact-then-fuzzy
+lookup as `_resolve_stat_field`. `_EXCLUDED_ATTR_FIELDS` deliberately
+drops cross-link fields (`drops`, `skills`, `abilities`,
+`upgrade_materials`, `learned_by`, `used_by`, ...) - those are already
+browsable via codex-bootstrap's own `sections`, not meaningful as a
+filter value. Comparing against the screenshot surfaced four concrete
+gaps, all fixed:
+- **`cures`** was missing from the effect kind entirely (only
+  `immunities`/`causes`/`gives` existed) - items and spells both have a
+  real `cures` list (e.g. Antidote cures `poisoned`). Added as a fourth
+  `_EFFECT_LIST_FIELDS` entry.
+- **Boolean flag fields** (`exotic`, `new`, `hidden`) are **presence-only**
+  in the source data - the key exists and is `True` on a match, and is
+  simply **absent** otherwise (verified directly: 0 records anywhere have
+  `"exotic": false` explicitly, out of 1388 that have the key at all out
+  of 2764 items). A naive `raw is False` check for the "false" case would
+  therefore match nothing - had to treat "missing key" as a match for a
+  false/no query too. Verified the fix produces `1388 + 1376 = 2764`,
+  i.e. every item now falls into exactly one bucket.
+- **List-valued fields** (`events`, `tags`) needed membership matching,
+  not the old scalar substring compare.
+- **`stats.element`** is a genuinely strange one: aussiescodex encodes it
+  as a list of individual characters (`"arcane"` → `['a','r','c','a',
+  'n','e']`), apparently an upstream `list(str)` bug on their end. The
+  attr branch detects "list of single-char strings" and rejoins before
+  comparing, rather than trying to match characters one at a time. Also
+  needed a stats-dict fallback in the attr branch generally, since
+  `element` isn't a top-level field the way `tier`/`rarity` are.
+- **`type` vs `item_type`** are two distinct real fields on items - `type`
+  is the weapon/armor *subtype* (`daggers`, `curved_swords`,
+  `axes_&_hammers`), `item_type` is the equipment *slot*
+  (`armor`/`weapon`/`off-hand`/`field`). The prompt spells out the
+  difference explicitly since the names alone don't make it obvious.
+
+`_parse_number` also picked up comma-stripping (`"2,500_orns"` → `2500.0`)
+while fixing this, since `classes.price` is comma-formatted and the old
+regex fallback stopped at the first comma. All of the above verified
+directly against live data first, then with 3 repeated real-model calls
+per phrasing before deploying, same as every other prompt change.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

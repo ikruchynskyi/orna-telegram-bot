@@ -257,7 +257,7 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> None:
     )
 
 
-_FIELD_LABELS = {"immunities": "імунітет до", "causes": "спричиняє", "gives": "дає"}
+_FIELD_LABELS = {"immunities": "імунітет до", "causes": "спричиняє", "gives": "дає", "cures": "лікує"}
 
 
 def _describe_condition(cond: dict) -> str:

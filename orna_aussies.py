@@ -111,8 +111,8 @@ def _translations() -> dict:
 
 def refresh_cache() -> None:
     """Force a re-download next time either file is needed."""
-    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache
-    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = None
+    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache, _attr_field_cache
+    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = _attr_field_cache = None
     for name in ("codex.json", "translations.en.json"):
         _cache_path(name).unlink(missing_ok=True)
 
@@ -305,6 +305,7 @@ class EffectMatch:
 _CMP_OPS = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operator.le,
             "=": operator.eq, "==": operator.eq, "!=": operator.ne}
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_EFFECT_LIST_FIELDS = ("immunities", "causes", "gives", "cures")
 
 _stat_field_cache: Optional[dict] = None
 
@@ -337,17 +338,59 @@ def _resolve_stat_field(field: str, record_keys=()) -> Optional[str]:
     return fields.get(close[0], close[0])
 
 
+# flat top-level fields that are cross-links to OTHER codex entries (an
+# item's "dropped_by" monster, a spell's "learned_by" class, ...) - these
+# are already browsable via codex-bootstrap's own "sections", not
+# meaningful as a query_records filter value, so excluded from the
+# discovered attribute vocabulary below.
+_EXCLUDED_ATTR_FIELDS = {
+    "id", "category", "stats", "immunities", "causes", "gives", "cures",
+    "drops", "dropped_by", "skills", "abilities", "upgrade_materials",
+    "learned_by", "used_by", "off-hands", "summons", "celestial_classes",
+    "bestial_bond", "source", "ability", "follower",
+}
+
+_attr_field_cache: Optional[dict] = None
+
+
+def _all_attr_fields() -> dict:
+    """normalized -> real top-level field name, discovered by scanning
+    every real record across every category - the flat, filterable
+    (non-cross-link) attribute vocabulary. Built from live data rather
+    than hand-maintained, so a field like "events" or "exotic" (or
+    whatever the game adds next) is usable without a code change."""
+    global _attr_field_cache
+    if _attr_field_cache is None:
+        keys = set()
+        for records in _codex()["main"].values():
+            for rec in records.values():
+                keys.update(rec.keys())
+        keys -= _EXCLUDED_ATTR_FIELDS
+        _attr_field_cache = {k.lower().replace(" ", "_").replace("-", "_"): k for k in keys}
+    return _attr_field_cache
+
+
+def _resolve_attr_field(field: str) -> Optional[str]:
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    fields = _all_attr_fields()
+    if norm in fields:
+        return fields[norm]
+    close = difflib.get_close_matches(norm, fields.keys(), n=1, cutoff=0.6)
+    return fields[close[0]] if close else None
+
+
 def _parse_number(raw) -> Optional[float]:
-    """'130', '+5', '2%', '-10', 5 -> 130.0, 5.0, 2.0, -10.0, 5.0. None on failure."""
+    """'130', '+5', '2%', '-10', '2,500_orns', 5 -> 130.0, 5.0, 2.0, -10.0,
+    2500.0, 5.0. None on failure."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
         return float(raw)
-    s = str(raw).strip().rstrip("%").lstrip("+")
+    s = str(raw).replace(",", "").strip().rstrip("%").lstrip("+")
     try:
         return float(s)
     except ValueError:
-        m = _NUM_RE.search(str(raw))
+        m = _NUM_RE.search(s)
         return float(m.group(0)) if m else None
 
 
@@ -357,9 +400,10 @@ def _eval_condition(record: dict, cond: dict) -> bool:
       {"kind": "stat", "field": "<stats key e.g. magic/attack/crit>",
        "cmp": ">"|"<"|">="|"<="|"=", "value": <number>}
       {"kind": "text", "field": "description"|"name"|"", "value": "<substring>"}
-      {"kind": "effect", "field": "immunities"|"causes"|"gives"|"", "value": "<human text>"}
-      {"kind": "attr", "field": "<tier/rarity/useable_by/place/type/item_type/family/element>",
-       "cmp": "="|">"|"<"|">="|"<=", "value": <text or number>}
+      {"kind": "effect", "field": "immunities"|"causes"|"gives"|"cures"|"", "value": "<human text>"}
+      {"kind": "attr", "field": "<any flat record field - tier/rarity/useable_by/
+       place/type/item_type/family/element/events/tags/exotic/new/hidden/price/...>",
+       "cmp": "="|">"|"<"|">="|"<=", "value": <text, number, or true/false>}
     An unrecognised kind/field never matches (fails closed, not open)."""
     kind = cond.get("kind")
     field = cond.get("field") or ""
@@ -387,17 +431,43 @@ def _eval_condition(record: dict, cond: dict) -> bool:
         codes = resolve_codes(str(cond.get("value", "")))
         if not codes:
             return False
-        target_fields = [field] if field in ("immunities", "causes", "gives") else ["immunities", "causes", "gives"]
+        target_fields = [field] if field in _EFFECT_LIST_FIELDS else list(_EFFECT_LIST_FIELDS)
         return any(e.get("name") in codes for f in target_fields for e in (record.get(f) or []))
 
     if kind == "attr":
-        raw = record.get(field)
+        real_field = field if field in record else _resolve_attr_field(field)
+        raw = record.get(real_field) if real_field else None
+        if raw is None:
+            # a handful of stats-dict entries (e.g. items' "element") aren't
+            # numeric and don't belong in the "stat" kind - fall back to
+            # the stats dict for anything not found as a top-level field.
+            raw = (record.get("stats") or {}).get(field)
         cmp_op = cond.get("cmp", "=")
         if cmp_op in (">", "<", ">=", "<="):
             val, target = _parse_number(raw), _parse_number(cond.get("value"))
             op = _CMP_OPS.get(cmp_op)
             return val is not None and target is not None and op is not None and op(val, target)
         target_text = str(cond.get("value", "")).strip().lower()
+        if isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
+            # boolean-flag fields (exotic/new/hidden/...) are presence-only
+            # in the source data - the key exists and is True on a match,
+            # and is simply ABSENT (never explicitly False) otherwise - so
+            # "false"/"no" must treat a missing field as a match too.
+            if target_text in ("true", "yes", "1"):
+                return raw is True
+            if target_text in ("false", "no", "0"):
+                return raw is False or raw is None
+            return False
+        if isinstance(raw, list):
+            # aussiescodex sometimes encodes a single string as a list of
+            # its individual characters (seen on items' stats.element,
+            # e.g. "arcane" -> ['a','r','c','a','n','e']) - rejoin before
+            # comparing rather than doing per-character matching.
+            if raw and all(isinstance(x, str) and len(x) == 1 for x in raw):
+                raw_text = "".join(raw).strip().lower()
+                return bool(target_text) and (raw_text == target_text or target_text in raw_text)
+            norm_items = [str(x).strip().lower().replace(" ", "_") for x in raw]
+            return bool(target_text) and any(target_text.replace(" ", "_") in item for item in norm_items)
         raw_text = str(raw or "").strip().lower()
         return bool(target_text) and (raw_text == target_text or target_text in raw_text)
 
