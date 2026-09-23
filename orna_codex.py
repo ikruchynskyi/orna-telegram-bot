@@ -7,10 +7,18 @@ fetch its page, and parse out the base stats + flags into a CodexEntry
 that can be fed to orna_assess.
 
 Network: uses `requests`. Pages are cached in-process with lru_cache.
+
+Also: fetch_codex_json/codex_search, a general-purpose reader for ANY
+codex page (item, class, monster, boss, follower, raid, spell, building,
+or dungeon) - see their docstrings. Unlike the item-specific parsing
+above (which extracts just the fields orna_assess needs), these expose
+the site's own universal `codex-bootstrap` JSON blob as-is, for
+telegram_orna.py's generic browse-and-render UI.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -638,8 +646,54 @@ def lookup_by_name(
     return None, None
 
 
+# -----------------------------------------------------------------------------
+# General-purpose codex reader (any category, not just items)
+# -----------------------------------------------------------------------------
+# Every codex page - item, class, monster, boss, follower, raid, spell,
+# building, dungeon, and the search results page itself - embeds the exact
+# same data as a <script id="codex-bootstrap" type="application/json">
+# blob. A single entry page has data["detail"] = {name, description,
+# sprite, tier, rarity, facts: [{label, value}, ...], effects: [str, ...],
+# tags: [str, ...], sections: [{title, entries: [{category, name, url,
+# tier, rarity, ...}, ...], texts: [...]}, ...]}. A search/listing page has
+# data["results"] = [{category, name, url, ...}, ...] instead. Cross-links
+# in `sections[].entries[].url` point at other codex pages of possibly a
+# different category - that's the site's own site-wide link graph, already
+# structured, so no per-category HTML parsing is needed at all.
+
+_BOOTSTRAP_RE = re.compile(
+    r'<script id="codex-bootstrap" type="application/json">(.*?)</script>', re.S
+)
+
+
+@lru_cache(maxsize=512)
+def fetch_codex_json(url_or_path: str, lang: str = "en", extra_params: Optional[Tuple[Tuple[str, str], ...]] = None) -> dict:
+    """Fetch any codex page (absolute URL or a path like '/codex/items/foo/')
+    and return its embedded bootstrap JSON, dict as described above."""
+    url = url_or_path if url_or_path.startswith("http") else urljoin(CODEX_BASE, url_or_path)
+    params: Dict[str, str] = dict(extra_params or ())
+    if lang and lang != "en":
+        params["lang"] = lang
+    html_text = _http_get(url, params=params or None)
+    m = _BOOTSTRAP_RE.search(html_text)
+    if not m:
+        raise ValueError(f"no codex-bootstrap data found on {url}")
+    return json.loads(m.group(1))
+
+
+@lru_cache(maxsize=256)
+def codex_search(query: str, lang: str = "en") -> dict:
+    """Search the codex across every category. Returns the raw bootstrap
+    JSON - `results` (list), `count`, `pages` (page 1 only; pagination
+    beyond page 1 isn't implemented here, see the `page` param the site's
+    own bootstrap JSON reports if that's ever needed)."""
+    return fetch_codex_json(f"{CODEX_BASE}/codex/search/", lang=lang, extra_params=(("q", query),))
+
+
 def clear_cache() -> None:
     """Useful in tests or if you suspect stale codex data."""
     search_first_url.cache_clear()
     fetch_codex_entry.cache_clear()
     fetch_material_meta.cache_clear()
+    fetch_codex_json.cache_clear()
+    codex_search.cache_clear()

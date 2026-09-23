@@ -26,11 +26,32 @@ glue around three live, unmocked external services.
   `ConversationHandler`, and the shared report builder (`build_report`,
   `send_report_blocks`) both this and `telegram_offerings.py` use.
 - `telegram_nlp.py` — Ollama REST client (`/api/chat`, `format="json"`).
-  Two calls: extract resource names from free text, extract quantities from
-  a reply.
+  Three calls: extract resource names from free text, extract quantities
+  from a reply, and route/translate a free-text `/orna` request. All three
+  set `"think": True` — see the note below on why that isn't optional.
 - `orna_sheets.py` — Google Sheets access for the Material Forecast tab.
-- `orna_codex.py` — scrapes playorna.com codex pages: item stats (for
-  assess) and material tier/rarity (for proof pricing).
+- `orna_codex.py` — two layers over playorna.com's codex: the original
+  item-specific scraper (stats for assess, material tier/rarity for proof
+  pricing), and `fetch_codex_json`/`codex_search`, a general-purpose reader
+  for *any* codex page — see the `/orna` section below.
+- `orna_aussies.py` — a *different* Orna data source: aussiescodex.com's
+  own bulk `codex.json`/`translations.en.json` dump (committed to the
+  repo, see the `/orna` section for why), which (unlike playorna's
+  per-page JSON) exposes every item/monster/etc.'s buffs, debuffs,
+  immunities, and description as short internal codes/plain text plus a
+  flat code→human-name table. `query_records` is a generic multi-attribute
+  evaluator (numeric stat thresholds, description/name substrings, effect
+  codes, flat attributes, combined with AND/OR) — the only way to answer
+  "mag > 250 and crit > 3%" or "what gives immunity to X" as a real search
+  instead of guessing. Also cached to disk (`.aussies_cache/`), 24h TTL.
+  See the `/orna` section.
+- `telegram_orna.py` — `/orna <text>`, a unified natural-language entry
+  point that routes into today's-resources / when's-it-available / codex
+  browsing / effect search. See its own section below.
+- `telegram_remind.py` — hidden `/remind` command (same allowlist as
+  `/go`): schedules a one-off reminder via PTB's `JobQueue`, persisted to
+  `reminders.json` so it survives the frequent `launchctl` reloads this
+  repo's development involves.
 - `orna_assess.py` — pure math: upgrade-projection from OCR'd stats.
 - `orna_proofs.py` — pure math: guild-proof pricing, ported from
   OrnaCodex's `ProofView.vue`. See the docstring for the formula.
@@ -39,6 +60,229 @@ glue around three live, unmocked external services.
   user's timezone are both unknown, so a timed event would just be wrong.
 - `orna_material_names_uk.py` / `.json` / `orna_scrape_material_names.py` —
   static EN↔UK material name table + the script that generates it.
+- `telegram_go.py` — hidden `/go` command, deliberately unrelated to Orna.
+  See its own section below; it's the most complex module in the repo and
+  most of its design is a direct response to bugs found the hard way.
+
+## The hidden `/go` command (`telegram_go.py`)
+
+Personal-use feature, not for the Orna users this bot otherwise serves:
+`/go [nsfw] <request>` runs a small ReAct loop (search / youtube / open /
+ask / finish) against an LLM, built around the "only Telegram works, wifi
+is slow and metered" case (an actual plane-wifi use case, not hypothetical).
+It's deliberately never registered via `setMyCommands`, so it doesn't
+appear in any command menu, and `GO_ALLOWED_USER_IDS` gates it to specific
+Telegram user ids — anyone else's `/go` is silently ignored (no "not
+authorized" reply, since that reply would itself confirm the command
+exists).
+
+**Two model backends, picked per-request, never mixed mid-conversation.**
+Normal mode: Ollama Cloud (`GO_MODEL`, default `gemma4:31b` — confirmed via
+`/api/show` to genuinely support vision, tools, and thinking), falling back
+to the same local Ollama the Orna NLP features use (`telegram_nlp.
+OLLAMA_MODEL`, `gpt-oss:20b` — text-only, no vision) if the cloud call
+fails for any reason. `/go nsfw ...` never touches the cloud at all: it
+always uses a local model (`NSFW_MODEL`, an uncensored GGUF) and DuckDuckGo
+instead of Tavily, since a hosted service would likely refuse this content
+outright. Before assuming any given Ollama Cloud model's capabilities,
+check for real via `POST https://ollama.com/api/show {"model": "..."}`
+(with the same bearer token) rather than guessing from the name — it
+returns a `capabilities` list (`vision`, `tools`, `thinking`, ...) plus
+param count, and has already caught one wrong assumption during
+development (see the multimodal note below).
+
+**The video pipeline re-encodes unconditionally; it does not trust
+yt-dlp's own merge.** `_download_source` grabs whatever yt-dlp can get
+(any codec, any container) up to a generous size backstop, and
+`_fit_to_size` always re-encodes to H.264/AAC via a direct `ffmpeg` call
+with a bitrate computed from the actual duration to hit `MAX_VIDEO_MB`,
+stepping down a fixed resolution ladder (360p→240p→144p) only as far as
+needed. This replaced three earlier designs that each seemed reasonable
+and each broke in a different way in production:
+  1. Filtering yt-dlp's own format selector to `height<=N` and trusting
+     whatever it merged — broke when a video's only sub-360p option was
+     VP9, which plays audio-only on most phone players once muxed into an
+     `.mp4` (VP9-in-MP4 is technically valid but poorly supported).
+  2. Using `--max-filesize` as the real size cap — it's checked per
+     *fragment* (the video-only and audio-only streams independently)
+     before merging, not on the merged result. On a longer video, whichever
+     fragment is bigger can quietly get dropped while yt-dlp still exits 0,
+     silently leaving a merge that's actually just one lone track. This is
+     why the real cap lives entirely in `_fit_to_size`'s post-encode size
+     check now, and `--max-filesize` in `_download_source` is just a
+     generous backstop (`FRAGMENT_SAFETY_MB`) against pathological cases.
+  3. The subtlest one: **yt-dlp needs its own `ffmpeg` to do the bv+ba
+     merge, found via `PATH` unless `--ffmpeg-location` is passed
+     explicitly.** Under launchd (see the deployment note below), `PATH`
+     is minimal and doesn't include `/opt/homebrew/bin` — so without
+     `--ffmpeg-location`, yt-dlp silently left the two fragments unmerged
+     (still exit code 0) and `_download_source`'s file-selection logic
+     would pick whichever fragment happened to be bigger as "the"
+     download. This produced several rounds of "video but no audio" /
+     "audio but no video" bug reports that looked unrelated until the
+     actual yt-dlp/ffmpeg output was logged (see below) and the pattern
+     became obvious. Every yt-dlp invocation in this file passes
+     `--ffmpeg-location` now; don't drop it.
+  Because of #3, `_download_source` also refuses to pick a file whose name
+  still carries yt-dlp's per-fragment suffix (`<id>.f<format>.<ext>`) — a
+  real merge always produces a clean `<id>.<ext>` — rather than trusting
+  "biggest file in the directory" alone.
+
+**Log the actual subprocess output, not just the final exception
+message.** Early rounds of the video pipeline only surfaced failures as a
+brief Telegram message, never server-side — every real bug above was
+eventually found by adding `logger.info`/`logger.warning` with the full
+yt-dlp/ffmpeg stdout+stderr tail at each step (`_download_source`,
+`_fit_to_size`, `_has_audio`, `_probe_duration`), then reproducing the
+exact failing video directly via a throwaway `asyncio.run(...)` script.
+Guessing from the user-facing error text alone repeatedly pointed at the
+wrong cause; the log almost always didn't.
+
+**Deployment: the launchd plist runs from this repo, not a separate
+copy.** `~/Library/LaunchAgents/com.username.telegrambot.plist` points at
+`orna-telegram-bot/telegram_bot.py` with this directory as
+`WorkingDirectory`, loading `orna-telegram-bot/.env` (gitignored, not the
+one in `~`). This used to not be true — an earlier, stale flat copy in
+`~/telegram_bot.py` was what launchd actually ran, silently missing every
+`/go`-related change until that was noticed and fixed. Reload after any
+change with `launchctl unload/load` on that plist, and note launchd's
+`PATH` is minimal (see the `--ffmpeg-location` point above) — never assume
+a Homebrew binary is reachable by bare name from code that runs as this
+service; use the absolute path (`FFMPEG_PATH`/`FFPROBE_PATH`/`YTDLP_PATH`
+env vars, defaulted to absolute paths already).
+
+**The "ask" ReAct action only offers tappable options, never free text —
+on purpose.** Routing a model's clarifying question through free-text
+reply would need a general-purpose text `MessageHandler`, and this repo's
+other conversations (`telegram_assess`, `telegram_resources`) already
+depend on fragile registration-order-based text handling (see the handler
+ordering note above). Buttons avoid that risk entirely. The one place
+`/go` *does* accept free text/photo again is the "Continue" button
+(`_PENDING_CONTINUE`), and that was made safe the same way: a custom
+`filters.MessageFilter` that only matches a chat with an active,
+unexpired pending-continue flag, registered before the Orna conversation
+handlers — for every chat that hasn't just tapped Continue, it's a
+guaranteed no-op and falls straight through, so it can't interfere with
+the assess/resources flows no matter what.
+
+**Multimodal continuation degrades gracefully, because not every
+configured model supports it.** `/go`'s "Continue" button lets a photo be
+attached to a follow-up message; verified directly (see the `/api/show`
+note above) that `GO_MODEL` supports vision for real, but the two local
+fallbacks (`gpt-oss:20b`, `NSFW_MODEL`) don't. Ollama returns a clean
+`400 "does not support multimodal requests"` for those rather than
+crashing — `_call_model` detects that specific error, strips the image
+from the message in place (so `session.messages` doesn't keep re-sending
+a doomed image on every later turn), notes it in that message's text, and
+retries once. No per-model capability table to maintain; it just asks
+Ollama and reacts to what comes back.
+
+## The `/orna` command (`telegram_orna.py`)
+
+Unlike `/go`, this is a real, visible feature for the Orna users the bot
+otherwise serves — introduced *alongside* the existing `/res_today`,
+`/res_next`, `/need`, and the free-text auto-detect flow rather than
+replacing them (a deliberate choice made with the user: zero risk to what
+guild members already rely on while `/orna` is proven out; the old
+commands can be retired later).
+
+**One LLM call routes and translates in a single round trip, then the LLM
+is out of the picture entirely.** `telegram_nlp.route_query` classifies a
+free-text message (English or Ukrainian) into `"today"` / `"next"` /
+`"codex"` and translates the relevant part to English, all in one prompt —
+this only became reliable after the `"think": True` fix above; the
+combined classify-and-translate ask was actually the *first* thing that
+surfaced the flakiness during development, and got no more reliable from
+simplifying the prompt or splitting it into separate calls until the real
+cause (`think: False`) was found and fixed. `"today"` and `"next"` reuse
+the exact same Google Sheet data `/res_today`/`/res_next` already serve;
+`"next"` falls through to codex search if the named thing isn't a known
+Material Forecast material (a boss, a non-shop item — codex search's own
+"no results" is a better dead end than a hard failure).
+
+**Every codex page - regardless of category - is one universal JSON
+schema, no per-category parsing needed.** Confirmed by fetching real pages
+across every category (items, classes, monsters, bosses, followers, raids,
+spells, buildings, dungeons): each embeds a `<script id="codex-bootstrap"
+type="application/json">` blob with `detail: {name, description, sprite,
+facts: [{label, value}], effects: [str], tags: [str], sections: [{title,
+entries: [{category, name, url, tier, rarity, ...}]}]}` for a single
+entry, or `results: [...]` in the same per-entry shape for a search/
+listing page. `orna_codex.fetch_codex_json`/`codex_search` just extract
+and return this as-is — `telegram_orna.py` is purely a rendering/
+navigation layer over already-structured data, exactly the split the user
+asked for (LLM only for routing, Telegram as the UI for the actual codex).
+`sections[].entries[].url` is the site's own cross-link graph (an item's
+"Dropped by" monster, its "Upgrade materials", a monster's "Skills", ...)
+and can point at a different category than the current page — that's
+what makes drilling from an item into the monster that drops it, then
+into that monster's own skills, "just work" with the same two functions
+recursively.
+
+**Navigation sends new messages, never edits in place — except paging
+through one result list.** Same pattern as `telegram_go.py`: tapping a
+button to view an entry or drill into a section replies with a *new*
+message rather than editing the current one, so Telegram's own scrollback
+becomes the browsing history for free — no back-button, no navigation
+stack to maintain. Only "next/prev page" of a single search-results list
+edits the existing message's keyboard in place, since that's genuinely
+the same list, not a new one.
+
+**Generic multi-attribute query ("mag > 250 and crit > 3%", "what gives
+immunity to stunned", "items with 'dragon' in the description") is a
+two-step LLM pipeline into one generic evaluator, not per-query-shape
+code.** `telegram_nlp.route_query` first classifies + translates (as
+before); when it returns intent `"query"`, a *second*, separately-focused
+call (`parse_conditions`) turns the already-English text into a flat list
+of typed conditions (`kind`: `"stat"` for a numeric threshold, `"effect"`
+for immunity/causes/gives, `"text"` for a description/name substring,
+`"attr"` for a flat field like rarity/tier), plus an `"and"`/`"or"`
+combinator and an optional category. Splitting classification from
+condition-extraction into two focused prompts was a deliberate choice —
+one mega-prompt doing both proved less reliable during development, the
+same lesson as the `"think"` fix above but about prompt *scope* rather
+than a request parameter. `orna_aussies.query_records` then evaluates
+every condition against every record with `_eval_condition` and combines
+with `all`/`any` — a single generic evaluator, not bespoke code per query
+shape, so a new `kind` is the only thing a new query type needs.
+`resolve_codes` (used by `kind: "effect"` conditions) first tries a small
+rule-based parser for the team/stat/direction/magnitude pattern
+(`_parse_buff_query` — e.g. "T Mag 3" → `t__mag_uuu`) before falling back
+to fuzzy string matching against `translations.en.json`'s ~220 simple
+status names ("stunned", "paralyzed", ...). **Team and non-team tiers are
+genuinely asymmetric in the real game data** — e.g. non-team "Att Down"
+only goes to tier 1, but "T. Att Down" goes to tier 3 — so the
+valid-tiers cache (`_build_stem_directions`) keys on `(team, stat)`, not
+just `stat`; an earlier version merged them into one set per stat and
+silently offered a non-team tier that doesn't exist. Verified directly
+against the live data before and after that fix, not just by reading the
+code. Results are capped at 50 (`query_records`'s `limit`) since a single
+loose condition like "mag > 250" alone can match hundreds of records.
+
+**Query results link to aussiescodex.com (`orna_aussies.build_url`), not
+playorna, and use Telegram `url=` buttons instead of the "open" callback
+`_send_entry` uses for a name search.** aussiescodex only actually has
+browsable pages for `items`/`bosses`/`followers`/`spells` (its URL
+segment for spells is `orna-skills`, not `orna-spells` — verified by
+checking a real page's own outbound links, not guessed) — every other
+category 404s there and isn't in its own nav, so `build_url` falls back
+to playorna's `/codex/<category>/<id>/` for `monsters`/`raids`/`classes`/
+`buildings`/`dungeons`. Since these are direct links (no server-side
+fetch+render needed the way a "codex" name-search result gets), the
+result-list keyboard uses a link-mode variant (`_link_list_keyboard`,
+`InlineKeyboardButton(url=...)`) instead of `orna|open|` callback buttons
+— pagination still needs the callback (`orna|page|`) since flipping pages
+edits the message's keyboard in place either way; the `page` handler
+branches on a `link_mode` flag stored alongside the entries to pick the
+right keyboard builder.
+
+**aussiescodex.com's `codex.json`/`translations.en.json` are committed to
+the repo, not just cached at runtime.** `orna_aussies` still caches both
+to `.aussies_cache/` with a 24h TTL for normal operation, but unlike
+`reminders.json` (genuinely per-deployment state, gitignored), these are
+upstream reference data the user explicitly wants version-controlled -
+don't add `.aussies_cache/` back to `.gitignore` without checking with
+them first.
 
 ## Things that aren't obvious from reading one file at a time
 
@@ -50,16 +294,27 @@ photo/text handlers only match when *that* conversation is actually active
 for the chat; when it isn't, it correctly falls through to the resources
 conversation. Don't reorder these without re-checking that interaction.
 
-**Never call the LLM as a single source of truth.** `gpt-oss:20b` (a small
-local model) is measurably flaky: the same input to
-`telegram_nlp.extract_resources` can return the right answer on one call
-and an empty list on the next (verified by repeated identical calls during
-development). This is why `orna_material_names_uk.json` exists at all —
-Ukrainian material names are resolved via that static table first, with the
-LLM only as a last-resort fallback for names the table doesn't cover. If
-you're tempted to route more logic through the LLM, prefer a deterministic
-lookup wherever one is feasible, and keep the LLM for genuinely fuzzy
-natural-language parsing only.
+**`"think": False` was the actual cause of `gpt-oss:20b`'s flakiness, not
+the model itself.** This section used to warn that the same input to
+`telegram_nlp.extract_resources` could return the right answer on one call
+and an empty list on the next. Root-caused during the `/orna` work
+(2026-09-22): with `"think": False` in the `/api/chat` payload, this
+model/quantization returns empty or truncated-mid-reasoning content
+instead of the requested JSON *close to 100% of the time* under repeated
+testing - not occasional flakiness, a near-total failure rate. Switching to
+`"think": True` (now the default in `telegram_nlp._chat_json_once`) was
+100% reliable across the same repeated tests, including free-text
+Ukrainian input: Ollama separates the reasoning out on its own and
+`content` comes back as clean JSON. The tradeoff is a bit more latency per
+call (the model actually thinks now), which has been an acceptable trade
+so far. `orna_material_names_uk.json`'s static EN↔UK table is used by
+`telegram_offerings.py` specifically (OCR'd offerings-screen rows), not by
+`extract_resources` — don't assume it's a universal fallback underneath
+every LLM call in this repo. The general principle still holds even with
+the fix: prefer a deterministic lookup wherever one is feasible, and keep
+the LLM for genuinely fuzzy natural-language parsing (`telegram_orna.py`'s
+routing is a good example of leaning on it appropriately once it was
+actually reliable).
 
 **OCR text needs defensive parsing, not clean regexes.** Real OCR output
 puts junk in front of every offerings row (a misread icon — a stray letter,
@@ -114,3 +369,16 @@ no mocking layer. When debugging an OCR-related report, the actual OCR
 output for a real screenshot is logged (never sent to the user) via
 `telegram_assess._log_ocr_dump` — check the bot's log for `OCR DUMP` blocks
 rather than guessing at OCR formatting.
+
+`telegram_go.py` changes follow the same no-mocks philosophy, one level
+further: call its internal functions directly (`_download_youtube`,
+`_run_search`, `_call_model`, ...) against real YouTube/DDG/Ollama in a
+throwaway script before ever touching the live bot, especially for the
+video pipeline — every real bug in it turned out to be video-specific
+(a particular ID's format ladder, a particular fragment getting dropped),
+never reproducible in the abstract. After confirming a fix works standalone,
+reload the live service (`launchctl unload` then `load` on
+`~/Library/LaunchAgents/com.username.telegrambot.plist`) and check
+`orna-telegram-bot/telegrambot_error.log` for the `go:`-prefixed lines
+`telegram_go.py` logs at each pipeline step — they carry the actual
+yt-dlp/ffmpeg output, not just the final error message the user saw.

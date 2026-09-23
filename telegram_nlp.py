@@ -50,7 +50,14 @@ async def _chat_json_once(system: str, user: str) -> dict:
         ],
         "stream": False,
         "format": "json",
-        "think": False,
+        # Verified empirically (2026-09-22): "think": False makes this
+        # model/quantization return empty or truncated-mid-reasoning
+        # content instead of the requested JSON, near 100% of the time in
+        # testing - the exact flakiness this module's docstring already
+        # warned about. "think": True is completely reliable in the same
+        # tests (Ollama separates the reasoning out on its own, content
+        # comes back as clean JSON) at the cost of a bit more latency.
+        "think": True,
     }
     headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
     try:
@@ -111,6 +118,128 @@ async def extract_resources(text: str, known: List[str]) -> List[str]:
             seen.add(canon)
             out.append(canon)
     return out
+
+
+_ORNA_CATEGORIES = (
+    "items", "monsters", "bosses", "raids", "followers",
+    "classes", "spells", "buildings", "dungeons",
+)
+
+
+async def route_query(text: str) -> Dict[str, str]:
+    """
+    Classify a free-text /orna message (English or Ukrainian) into one of
+    four intents, translating to English along the way in one round trip.
+
+    Returns {"intent": "today"|"next"|"codex"|"query", "query": "<English
+    text>"}. For "query", "query" is passed to parse_conditions (a
+    separate call - keeps each prompt's schema simple rather than one
+    mega-prompt doing classification and structured condition extraction
+    at once, which proved less reliable during development).
+
+    Falls back to {"intent": "codex", "query": text} if the model can't be
+    reached - codex search's own "no results" reply is a safer default
+    than silently failing the whole command.
+    """
+    system = (
+        'You route a Telegram message about the mobile RPG "Orna" (English or '
+        'Ukrainian) into exactly one intent. Reply with strict JSON: {"intent": '
+        '"today"|"next"|"codex"|"query", "query": "<English text>"}.\n'
+        '"today": asks what crafting materials/resources are available today, no '
+        'specific material named. "query" empty.\n'
+        '"next": asks about a SPECIFIC named crafting material and when/where it '
+        'becomes available - "query" is just that material\'s name, translated to '
+        "English.\n"
+        '"query": asks which items/monsters/etc. match one or more criteria - a '
+        "game effect (immunity to a status, causes a status on a target, grants a "
+        'stat buff/debuff), a stat threshold (e.g. "magic over 250", "crit above '
+        '3%"), text that should appear in the description, or an attribute like '
+        'rarity/tier/useable-by. Covers both a single simple ask ("what gives '
+        'immunity to stunned") and combined ones ("mag > 250 and crit > 3%"). '
+        '"query" is the request translated to English, otherwise unchanged - exact '
+        "wording matters, it gets parsed into structured conditions separately.\n"
+        '"codex": anything else - a lookup about one specific item, monster, boss, '
+        'class, spell, building, dungeon, or general Orna info by name - "query" '
+        "is the translated English search text.\n"
+        'Always translate Ukrainian in "query" to English. For "today", "query" '
+        "can be empty."
+    )
+    try:
+        data = await _chat_json(system, text)
+    except OllamaError:
+        return {"intent": "codex", "query": text}
+    intent = data.get("intent") if data.get("intent") in ("today", "next", "codex", "query") else "codex"
+    query = str(data.get("query") or text).strip()
+    return {"intent": intent, "query": query}
+
+
+_CONDITION_KINDS = ("stat", "effect", "text", "attr")
+
+
+async def parse_conditions(text: str) -> Dict:
+    """
+    Turn an already-English "query"-intent request into structured search
+    conditions for orna_aussies.query_records. A separate, focused call
+    from route_query (see its docstring for why) - this one's whole job
+    is producing a list of:
+      {"kind":"stat","field":"<hp|mana|attack|magic|defense|resistance|
+       dexterity|ward|crit|foresight>","cmp":">|<|>=|<=|=","value":<number>}
+      {"kind":"effect","field":"immunities|causes|gives|","value":"<text,
+       e.g. 'stunned' or 'T Mag 3'>"}
+      {"kind":"text","field":"description|name|","value":"<substring>"}
+      {"kind":"attr","field":"<tier|rarity|useable_by|place|type|
+       item_type|family|element>","cmp":"=|>|<|>=|<=","value":"<text or number>"}
+
+    Returns {"conditions": [...], "combinator": "and"|"or", "category":
+    "<one of _ORNA_CATEGORIES or empty>"}. Never returns an empty
+    conditions list (orna_aussies.query_records treats that as "nothing
+    matches") - falls back to one {"kind":"text"} condition on the raw
+    text if the model can't be reached or returns nothing usable, so a
+    genuinely-asked query doesn't just dead-end silently.
+    """
+    system = (
+        "Parse an Orna RPG database search into structured conditions. Reply with "
+        'strict JSON: {"conditions": [...], "combinator": "and"|"or", "category": '
+        '"<one of items, monsters, bosses, raids, followers, classes, spells, '
+        'buildings, dungeons, or empty>"}.\n'
+        "Each condition is one of:\n"
+        '  {"kind":"stat","field":"<hp|mana|attack|magic|defense|resistance|'
+        'dexterity|ward|crit|foresight>","cmp":">|<|>=|<=|=","value":<number>} - a '
+        'numeric stat threshold, e.g. "magic > 250", "crit above 3%" (strip the % '
+        "sign, value is just the number).\n"
+        '  {"kind":"effect","field":"immunities|causes|gives|","value":"<effect '
+        "text>\"} - immunity to / causes / grants a status or stat buff/debuff, "
+        'e.g. value "stunned" or "T Mag 3". field: "immunities" for '
+        '"immune"/"resistant to", "causes" for inflicts-on-enemy, "gives" for '
+        'grants/self-or-team buffs, empty if unclear.\n'
+        '  {"kind":"text","field":"description|name|","value":"<substring>"} - the '
+        "name or description should contain this text.\n"
+        '  {"kind":"attr","field":"<tier|rarity|useable_by|place|type|item_type|'
+        'family|element>","cmp":"=|>|<|>=|<=","value":"<text or number>"} - a flat '
+        'attribute, e.g. rarity="legendary" or tier>=8.\n'
+        '"combinator": "and" if ALL conditions must hold, "or" if ANY - default '
+        '"and" unless the user clearly says "or"/"either".\n'
+        '"category": set only if the user named a specific category (e.g. "which '
+        'spells..." -> "spells"), else empty to search everything.\n'
+        'Example: "mag > 250 and crit > 3%" -> conditions: '
+        '[{"kind":"stat","field":"magic","cmp":">","value":250},'
+        '{"kind":"stat","field":"crit","cmp":">","value":3}], combinator: "and".'
+    )
+    fallback = {"conditions": [{"kind": "text", "field": "", "value": text}], "combinator": "and", "category": ""}
+    try:
+        data = await _chat_json(system, text)
+    except OllamaError:
+        return fallback
+
+    raw_conditions = data.get("conditions")
+    conditions = [c for c in raw_conditions if isinstance(c, dict) and c.get("kind") in _CONDITION_KINDS] \
+        if isinstance(raw_conditions, list) else []
+    if not conditions:
+        return fallback
+
+    combinator = data.get("combinator") if data.get("combinator") in ("and", "or") else "and"
+    category = data.get("category") if data.get("category") in _ORNA_CATEGORIES else ""
+    return {"conditions": conditions, "combinator": combinator, "category": category}
 
 
 async def extract_quantities(text: str, resources: List[str]) -> Dict[str, int]:

@@ -11,7 +11,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_resource_conversation
-from telegram_go import build_go_callback_handler, build_go_handler
+from telegram_go import build_go_callback_handler, build_go_continue_handler, build_go_handler
+from telegram_remind import build_remind_handler, reschedule_pending
+from telegram_orna import build_orna_callback_handler, build_orna_handler
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 
 logging.basicConfig(
@@ -109,14 +111,26 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
+    # New unified entry point (routes "today"/"next"/codex-search intent via
+    # a small local-Ollama call) - introduced alongside the above rather
+    # than replacing them, so nothing existing breaks while this is proven
+    # out. See telegram_orna.py.
+    app.add_handler(build_orna_handler())
+    app.add_handler(build_orna_callback_handler())
     # Not exposed via setMyCommands anywhere in this repo, so it stays out
     # of the Telegram command menu / autocomplete for regular Orna users.
     app.add_handler(build_go_handler())
     app.add_handler(build_go_callback_handler())
+    # Registered before the Orna conversations: its filter only matches a
+    # chat that just tapped /go's "Continue" button, so it's a no-op (falls
+    # through to assess/resources below) for every other chat/message.
+    app.add_handler(build_go_continue_handler())
+    app.add_handler(build_remind_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.
     app.add_handler(build_resource_conversation())
+    reschedule_pending(app)
     logger.info("🤖 Bot is running...")
     app.run_polling()
 

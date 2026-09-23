@@ -6,16 +6,20 @@ doesn't call setMyCommands at all), so it's invisible to the Orna users this
 bot is otherwise for.
 
 Built for the "Telegram is the only thing that works" case - flaky/metered
-plane wifi - so on top of the ReAct loop (search / youtube / ask / finish)
-it:
+plane wifi - so on top of the ReAct loop (search / youtube / open / ask /
+finish) it:
   - never downloads a video blind: it looks up title+duration first and
     makes the user tap Video/Audio/Skip before spending any bandwidth,
   - offers audio-only, which is a fraction of the size of 360p video,
   - lets the model ask a clarifying question via tappable buttons instead
-    of guessing (no free-text follow-up - see _advance's "ask" branch for
-    why),
+    of guessing (no free-text follow-up there - see _advance's "ask"
+    branch for why),
   - replays already-fetched search images/sources via buttons instead of
-    re-querying Tavily/Ollama.
+    re-querying Tavily/Ollama/DuckDuckGo,
+  - lets the user tap "Continue" on a finished reply to send free-text
+    and/or a photo back into that same conversation (see
+    _PENDING_CONTINUE below for how this coexists safely with the
+    Orna bot's own text/photo handlers).
 
 Only GO_ALLOWED_USER_IDS may use it - anyone else's /go is silently
 ignored, so a curious Orna user poking at slash commands can't spend your
@@ -23,15 +27,19 @@ Tavily/Ollama Cloud credits or bandwidth.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import base64
 import json
 import logging
+import operator
 import os
 import re
 import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urljoin
 
@@ -39,7 +47,7 @@ import httpx
 from bs4 import BeautifulSoup
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 
@@ -89,6 +97,13 @@ FRAGMENT_SAFETY_MB = 500
 # outgrows one process's memory between bot restarts.
 SESSION_TTL_SECONDS = 15 * 60
 MAX_SESSIONS = 50
+# Continuing a finished /go reply keeps this many of its most recent
+# messages (system prompt always kept, plus this many of the rest) rather
+# than the full unbounded history.
+MAX_CONTEXT_MESSAGES = 20
+# How long a tapped "Continue" button stays armed before a stray later
+# message in the chat stops being treated as a continuation.
+CONTINUE_TTL_SECONDS = 10 * 60
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.S)
 _CLOUD_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
@@ -100,21 +115,26 @@ _TOOLS_BASE = (
     "- youtube(query): looks up a matching YouTube video. The bot shows "
     "the user its title/duration and lets them confirm before any "
     "download happens, so just give your best search query.\n"
+    "- open(url): fetches a page (one of the urls search gave you), returns its text, "
+    "and shows its main image to the user directly in the chat if it has one.\n"
+    "- calculate(expression): evaluates a numeric expression (+ - * / ** % and "
+    "parentheses) and returns the result - use this instead of doing arithmetic "
+    "yourself, you will get it wrong.\n"
 )
 # nsfw mode's search (DuckDuckGo) only returns links + short snippets, no
 # synthesized answer or images the way Tavily gives non-nsfw mode - search
-# alone can never show the user anything visual. open() is the only way an
-# image reaches the chat (it pulls the page's og:image), so the prompt has
-# to say that explicitly or the model just paraphrases snippets into a
-# links list and never opens anything (observed behavior without this).
-_TOOLS_OPEN = (
-    "- open(url): fetches a page (one of the urls search gave you), returns its text, "
-    "and shows its main image to the user directly in the chat if it has one. "
-    "IMPORTANT: search only returns text snippets and links - it never shows the user "
-    "anything visual by itself. If the user wants to see something rather than just read "
-    "about it, you must open() at least one promising result before finishing. Pasting "
-    "raw links into your final answer instead of opening them does not show the user any "
-    "image.\n"
+# alone can never show the user anything visual there. open() is the only way
+# an image reaches the chat in nsfw mode (it pulls the page's og:image), so
+# the prompt has to say that explicitly or the model just paraphrases
+# snippets into a links list and never opens anything (observed behavior
+# without this). Non-nsfw mode doesn't need this nudge: Tavily's search
+# already returns its own image directly.
+_NSFW_OPEN_NOTE = (
+    "IMPORTANT about open(): search here only returns text snippets and links - it never "
+    "shows the user anything visual by itself. If the user wants to see something rather "
+    "than just read about it, you must open() at least one promising result before "
+    "finishing. Pasting raw links into your final answer instead of opening them does not "
+    "show the user any image.\n"
 )
 _NSFW_GUIDANCE = (
     "If the user names a specific website (a domain like \"cats.com\", or a site name), "
@@ -129,12 +149,14 @@ _NSFW_GUIDANCE = (
 
 
 def _system_prompt(nsfw: bool) -> str:
-    tools = _TOOLS_BASE + (_TOOLS_OPEN if nsfw else "")
-    guidance = _NSFW_GUIDANCE if nsfw else ""
-    actions = '"search"|"youtube"|"open"|"ask"|"finish"' if nsfw else '"search"|"youtube"|"ask"|"finish"'
+    guidance = (_NSFW_OPEN_NOTE + _NSFW_GUIDANCE) if nsfw else ""
+    actions = '"search"|"youtube"|"open"|"calculate"|"ask"|"finish"'
+    now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
     return (
         "You are a ReAct agent for a Telegram bot used over slow/expensive "
-        f"airplane wifi, so be frugal with tool calls. You have these tools:\n{tools}"
+        f"airplane wifi, so be frugal with tool calls. Current date/time: {now} "
+        "(server local time) - use this for \"today\", \"this week\", or other relative "
+        f"dates. You have these tools:\n{_TOOLS_BASE}"
         f"{guidance}"
         "Each turn, reply with strict JSON only, no other text: "
         f'{{"thought": "<brief reasoning>", "action": {actions}, '
@@ -165,6 +187,15 @@ class GoSession:
 
 _SESSIONS: dict[str, GoSession] = {}
 
+# chat_id -> (session id, expiry). Set when "Continue" is tapped; the
+# custom filter below only claims a message for a chat present here (and
+# not expired), so it's a no-op - falls through to the Orna bot's own
+# handlers - for every chat that hasn't just tapped Continue. This is what
+# lets free-text/photo continuation coexist with telegram_assess's own
+# photo handler without the ordering fragility a blanket MessageHandler
+# would risk (see CLAUDE.md's "Handler registration order is load-bearing").
+_PENDING_CONTINUE: dict[int, tuple[str, float]] = {}
+
 
 def _new_session(messages: list, steps_left: int, nsfw: bool = False) -> str:
     now = time.monotonic()
@@ -178,10 +209,39 @@ def _new_session(messages: list, steps_left: int, nsfw: bool = False) -> str:
     return sid
 
 
+def _trim_context(messages: list) -> list:
+    """Keep the system prompt plus the most recent MAX_CONTEXT_MESSAGES-1
+    entries, so a long-running continued conversation doesn't grow the
+    per-turn model call unbounded."""
+    if len(messages) <= MAX_CONTEXT_MESSAGES:
+        return messages
+    return [messages[0]] + messages[-(MAX_CONTEXT_MESSAGES - 1):]
+
+
+class _PendingContinueFilter(filters.MessageFilter):
+    """Matches only a chat that just tapped "Continue" - see
+    _PENDING_CONTINUE above for why this needs to be this narrow."""
+
+    def filter(self, message) -> bool:
+        pending = _PENDING_CONTINUE.get(message.chat_id)
+        return bool(pending and time.monotonic() < pending[1])
+
+
+_pending_continue_filter = _PendingContinueFilter()
+
+
+class _UnsupportedMultimodal(Exception):
+    """Raised when Ollama rejects a request because the model has no
+    vision support - distinct from a generic HTTP error so _call_model can
+    retry text-only instead of just failing the whole turn."""
+
+
 async def _chat_json(host: str, model: str, messages: list[dict], headers: dict) -> dict:
     payload = {"model": model, "messages": messages, "stream": False, "format": "json"}
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
         resp = await client.post(f"{host}/api/chat", json=payload, headers=headers)
+        if resp.status_code == 400 and "multimodal" in resp.text.lower():
+            raise _UnsupportedMultimodal(resp.text[:300])
         resp.raise_for_status()
         content = resp.json().get("message", {}).get("content", "")
 
@@ -190,6 +250,21 @@ async def _chat_json(host: str, model: str, messages: list[dict], headers: dict)
     except json.JSONDecodeError:
         m = _JSON_OBJECT_RE.search(content)
         return json.loads(m.group(0)) if m else {}
+
+
+def _drop_images(messages: list[dict]) -> bool:
+    """Strip any attached images in place and note it in that message's
+    text - `messages` is the same list/dicts _advance holds as
+    session.messages, so this also prevents every future turn from
+    re-attempting the same doomed image. Returns whether anything was
+    actually dropped, so the caller knows a retry is worth it."""
+    dropped = False
+    for m in messages:
+        if m.get("images"):
+            m.pop("images")
+            m["content"] = f"{m.get('content', '')}\n[an attached image couldn't be processed - this model has no vision support]"
+            dropped = True
+    return dropped
 
 
 async def _call_model(messages: list[dict], nsfw: bool = False) -> dict:
@@ -201,15 +276,34 @@ async def _call_model(messages: list[dict], nsfw: bool = False) -> dict:
     falling back to the same local Ollama model/host the Orna bot already
     uses (telegram_nlp.py) if the cloud call fails for any reason (e.g.
     out of cloud credits, or the flaky plane wifi just times out).
+
+    Either way, if a "Continue"-attached image hits a model with no vision
+    support, drop it and retry once rather than failing the whole turn -
+    none of GO_MODEL/LOCAL_OLLAMA_MODEL/NSFW_MODEL support images today.
     """
     if nsfw:
-        return await _chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages, {})
+        host, model, headers = LOCAL_OLLAMA_HOST, NSFW_MODEL, {}
+    else:
+        host, model, headers = OLLAMA_CLOUD_HOST, GO_MODEL, ({"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {})
+
     try:
-        headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
-        return await _chat_json(OLLAMA_CLOUD_HOST, GO_MODEL, messages, headers)
+        return await _chat_json(host, model, messages, headers)
+    except _UnsupportedMultimodal:
+        logger.warning("go: %s has no vision support, dropping attached image(s)", model)
+        if _drop_images(messages):
+            return await _chat_json(host, model, messages, headers)
+        raise
     except httpx.HTTPError:
+        if nsfw:
+            raise
         logger.warning("go: Ollama Cloud unavailable, falling back to local Ollama", exc_info=True)
-        return await _chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, {})
+        try:
+            return await _chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, {})
+        except _UnsupportedMultimodal:
+            logger.warning("go: %s has no vision support, dropping attached image(s)", LOCAL_OLLAMA_MODEL)
+            if _drop_images(messages):
+                return await _chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, {})
+            raise
 
 
 async def _tavily_search(query: str) -> dict:
@@ -343,6 +437,34 @@ async def _run_open(url: str) -> tuple[str, str | None]:
         return await _open_url(url)
     except httpx.HTTPError as e:
         return f"couldn't open {url}: {e}", None
+
+
+_CALC_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod, ast.Pow: operator.pow,
+    ast.USub: operator.neg, ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval(node: ast.AST) -> float:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
+        return _CALC_OPS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
+        return _CALC_OPS[type(node.op)](_safe_eval(node.operand))
+    raise ValueError("only numbers and + - * / ** % () are allowed")
+
+
+def _calculate(expression: str) -> str:
+    """Synchronous, no I/O - ast-restricted eval (never Python's own eval)
+    so a model-supplied expression can't execute arbitrary code."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+        return str(_safe_eval(tree.body))
+    except Exception as e:
+        return f"couldn't calculate {expression!r}: {e}"
 
 
 async def _yt_lookup(query: str) -> dict:
@@ -625,6 +747,7 @@ async def _send_finish(sid: str, session: GoSession, message, answer: str) -> No
         buttons.append(InlineKeyboardButton("🖼 Next image", callback_data=f"go|img|{sid}"))
     if session.sources:
         buttons.append(InlineKeyboardButton("📄 Sources", callback_data=f"go|src|{sid}"))
+    buttons.append(InlineKeyboardButton("▶️ Continue", callback_data=f"go|cont|{sid}"))
 
     if session.image_urls:
         try:
@@ -645,7 +768,7 @@ async def _advance(sid: str, message) -> None:
         session.steps_left -= 1
         try:
             step = await _call_model(session.messages, nsfw=session.nsfw)
-        except (httpx.HTTPError, json.JSONDecodeError) as e:
+        except (httpx.HTTPError, json.JSONDecodeError, _UnsupportedMultimodal) as e:
             logger.exception("go: model call failed")
             await message.reply_text(f"Planning failed: {e}")
             return
@@ -688,8 +811,10 @@ async def _advance(sid: str, message) -> None:
             observation, image = await _run_open(action_input)
             if image:
                 session.image_urls.append(image)
+        elif action == "calculate":
+            observation = _calculate(action_input)
         else:
-            observation = f"unknown action {action!r}; valid actions are search, youtube, open, ask, finish."
+            observation = f"unknown action {action!r}; valid actions are search, youtube, open, calculate, ask, finish."
 
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
@@ -762,6 +887,11 @@ async def go_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.message.reply_text(text, disable_web_page_preview=True)
         return
 
+    if kind == "cont":
+        _PENDING_CONTINUE[query.message.chat_id] = (sid, time.monotonic() + CONTINUE_TTL_SECONDS)
+        await query.message.reply_text("💬 Send your follow-up (text and/or a photo) to continue this conversation.")
+        return
+
 
 async def handle_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
@@ -789,11 +919,62 @@ async def handle_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("OLLAMA_API_KEY is not set.")
         return
 
+    # A fresh /go always starts a clean conversation - drop any dangling
+    # "waiting for a Continue reply" state for this chat rather than
+    # letting it swallow whatever this new run eventually says.
+    _PENDING_CONTINUE.pop(message.chat_id, None)
+
     messages = [
         {"role": "system", "content": _system_prompt(nsfw)},
         {"role": "user", "content": request},
     ]
     sid = _new_session(messages, MAX_STEPS, nsfw=nsfw)
+    await _advance(sid, message)
+
+
+async def _encode_photo(message) -> str | None:
+    try:
+        photo = message.photo[-1]
+        file = await photo.get_file()
+        data = await file.download_as_bytearray()
+        return base64.b64encode(bytes(data)).decode("ascii")
+    except TelegramError:
+        logger.warning("go: failed to download continuation photo", exc_info=True)
+        return None
+
+
+async def handle_go_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    pending = _PENDING_CONTINUE.pop(message.chat_id, None)
+    if pending is None:
+        return  # filter already checked this, but stay defensive
+    sid, expires = pending
+    if time.monotonic() > expires:
+        await message.reply_text("That Continue prompt expired - use /go to start fresh.")
+        return
+
+    session = _SESSIONS.get(sid)
+    if session is None:
+        await message.reply_text("This /go conversation expired - use /go to start fresh.")
+        return
+
+    user = update.effective_user
+    if GO_ALLOWED_USER_IDS and (not user or user.id not in GO_ALLOWED_USER_IDS):
+        logger.warning("go: rejected continue from user_id=%s", user.id if user else None)
+        return
+
+    user_msg = {"role": "user", "content": message.text or message.caption or "(photo attached, no caption)"}
+    if message.photo:
+        image = await _encode_photo(message)
+        if image:
+            user_msg["images"] = [image]
+
+    session.messages = _trim_context(session.messages)
+    session.messages.append(user_msg)
+    session.steps_left = MAX_STEPS
     await _advance(sid, message)
 
 
@@ -803,3 +984,7 @@ def build_go_handler() -> CommandHandler:
 
 def build_go_callback_handler() -> CallbackQueryHandler:
     return CallbackQueryHandler(go_callback, pattern=r"^go\|")
+
+
+def build_go_continue_handler() -> MessageHandler:
+    return MessageHandler(_pending_continue_filter & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_go_continue)
