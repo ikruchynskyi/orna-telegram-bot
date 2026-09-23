@@ -36,6 +36,7 @@ paging through one result list, which edits that list's keyboard.
 from __future__ import annotations
 
 import asyncio
+import httpx
 import datetime
 import html
 import json
@@ -89,6 +90,15 @@ MAX_STEPS = 16
 # spending more cloud quota/cost on it isn't worth it when local can
 # still finish the reasoning for free.
 CLOUD_STEPS = 8
+# Shorter than ollama_client.DEFAULT_TIMEOUT's 90s read timeout (which
+# /go still uses, unchanged, via its own default call) - /orna's loop has
+# a hard step budget where a slow/hanging call is pure waste (it can
+# always fall back to local, or retry, or just move on), unlike /go's
+# single-shot-per-turn use where waiting out a genuinely-slow-but-working
+# cloud response is more worth it. Live incident: one step spent ~2.5
+# minutes (a full 90s cloud timeout, then a slow local response) before
+# giving up - this halves the worst case per attempt.
+STEP_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=20.0, pool=10.0)
 # Hard wall-clock ceiling on one /orna request, regardless of what's
 # happening inside it - MAX_STEPS bounds the number of turns, but each
 # turn's own timeouts (chat_json_with_fallback: up to 90s cloud + up to
@@ -788,7 +798,15 @@ async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
     if len(parts) < 3 or parts[0] != "codex":
         return f"couldn't resolve a codex id for {item_name!r}"
     category, record_id = parts[1], parts[2]
-    record = _aussies_codex()["main"].get(category, {}).get(record_id)
+    # _aussies_codex() can trigger a synchronous network fetch on a cache
+    # miss (see orna_aussies._fetch_json) - asyncio.to_thread keeps that
+    # off the event loop, same as every other tool's data access in this
+    # file; a raw blocking call here would stall the ENTIRE bot for every
+    # chat, not just this request (confirmed live incident, see
+    # concurrent_updates' own docstring in telegram_bot.py for why that
+    # alone isn't sufficient protection against a truly blocking call).
+    codex = await asyncio.to_thread(_aussies_codex)
+    record = codex["main"].get(category, {}).get(record_id)
     if record is None:
         return f"{results[0].get('name', item_name)!r} has no aussiescodex data (category {category!r})"
 
@@ -864,7 +882,12 @@ async def _run_knowledge_tool(message, query: str) -> str:
     real answer in finish()."""
     if not query:
         return "knowledge_search needs a query in action_input"
-    result = orna_knowledge.search(query)
+    # asyncio.to_thread: same reasoning as _run_assess_tool's aussies
+    # lookup - _load()'s first call does a synchronous disk read (306KB),
+    # and a fuzzy-correction miss runs difflib over a ~3500-word
+    # vocabulary; individually fast, but any blocking call on the event
+    # loop stalls every other chat's request too, not just this one.
+    result = await asyncio.to_thread(orna_knowledge.search, query)
     if not result:
         return f"no knowledge-base matches for {query!r} - try web_search instead"
     return result[:3000]
@@ -1206,12 +1229,17 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
                 # cloud call itself fails (out of credits, network, ...).
                 return await chat_json_with_fallback(
                     GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
+                    timeout=STEP_MODEL_TIMEOUT,
                 )
             # Past CLOUD_STEPS: skip the cloud attempt entirely, local only.
-            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages)
-        except (OllamaError, UnsupportedMultimodal):
+            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, timeout=STEP_MODEL_TIMEOUT)
+        except (OllamaError, UnsupportedMultimodal) as e:
             if attempt == 0:
-                logger.warning("orna: step %d model call failed, retrying once", step_number, exc_info=True)
+                # Light log here on purpose (no exc_info) - this is an
+                # anticipated, handled retry, not a crash; the full
+                # traceback is logged once, where it's actually useful, if
+                # the retry below also fails and the caller gives up.
+                logger.warning("orna: step %d model call failed (%s), retrying once", step_number, e)
                 continue
             raise
 

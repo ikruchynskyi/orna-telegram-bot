@@ -115,28 +115,41 @@ def drop_images(messages: list[dict]) -> bool:
 
 
 async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model: str, messages: list[dict],
-                                   api_key: Optional[str] = None, cloud_host: str = OLLAMA_CLOUD_HOST) -> dict:
+                                   api_key: Optional[str] = None, cloud_host: str = OLLAMA_CLOUD_HOST,
+                                   timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> dict:
     """Try Ollama Cloud first, falling back to a local Ollama model/host if
     the cloud call fails for any reason (out of credits, network, flaky
     wifi, ...). Either way, if a vision-carrying message hits a model with
     no vision support, drop the image(s) and retry once rather than
     failing the whole turn - mirrors telegram_go.py's original
     _call_model, generalized so telegram_orna.py's loop can use the same
-    logic instead of a third copy."""
+    logic instead of a third copy. `timeout` applies to both legs - a
+    caller with its own step/retry budget (telegram_orna's loop) can pass
+    something shorter than DEFAULT_TIMEOUT so a slow/hanging cloud call
+    fails over to local faster instead of eating most of that budget on
+    one attempt (live incident: a single step spent ~2.5 minutes - a full
+    90s cloud timeout, then a slow local response - before giving up).
+
+    Log level is deliberately light here (no exc_info): a cloud->local
+    fallback is an anticipated, handled path, not a crash - the caller
+    logs the full traceback if and when it actually gives up, so one
+    real failure doesn't produce several redundant stack traces across
+    every retry/fallback layer (verified live: 4 full tracebacks for one
+    failed step before this)."""
     cloud_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        return await chat_json(cloud_host, cloud_model, messages, cloud_headers)
+        return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", cloud_model)
         if drop_images(messages):
-            return await chat_json(cloud_host, cloud_model, messages, cloud_headers)
+            return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
         raise
-    except OllamaError:
-        logger.warning("ollama_client: Ollama Cloud unavailable, falling back to local Ollama", exc_info=True)
+    except OllamaError as e:
+        logger.warning("ollama_client: Ollama Cloud unavailable (%s), falling back to local Ollama", e)
         try:
-            return await chat_json(local_host, local_model, messages)
+            return await chat_json(local_host, local_model, messages, timeout=timeout)
         except UnsupportedMultimodal:
             logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", local_model)
             if drop_images(messages):
-                return await chat_json(local_host, local_model, messages)
+                return await chat_json(local_host, local_model, messages, timeout=timeout)
             raise

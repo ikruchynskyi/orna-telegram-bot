@@ -195,7 +195,19 @@ async def _post_init(app):
 
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
+    # concurrent_updates defaults to False (PTB processes every update one
+    # at a time, globally, regardless of chat) - live incident: a single
+    # complex /orna ReAct-loop request (which can legitimately run for
+    # minutes - MAX_STEPS=16, LOOP_TIMEOUT_SECONDS=300) blocked EVERY
+    # other command from EVERY user, including a trivial /res_today sent
+    # right after it, until it finished. PTB's own docs warn concurrent
+    # processing risks a race in stateful ConversationHandler flows (the
+    # assess/resources conversations) if the SAME chat sends two messages
+    # close together mid-flow - a real but narrow risk, far outweighed by
+    # "the whole bot hangs for minutes" being the default otherwise. A
+    # modest bound (not PTB's max-256 default for True) keeps most
+    # concurrent activity naturally isolated to different chats/users.
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).concurrent_updates(32).build()
     app.add_error_handler(_on_error)
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
