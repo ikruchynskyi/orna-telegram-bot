@@ -564,6 +564,37 @@ counts and vocabulary sizes for a confirmation reply. Gated by the same
 guild member needs, and not something to leave open to hammering
 aussiescodex's API on demand.
 
+**A name/set fragment combined with a filter ("Last Martyr items for
+mage") is `"query"` intent, not `"codex"` - was being misrouted.** Live
+report: `/orna last martyr речі на мага` found nothing (translated and
+searched literally as a codex NAME, which obviously doesn't exist),
+while `/orna last martyr` alone correctly found the 16-item set via
+`codex_search`. The gap: `route_query`'s prompt described `"query"` only
+in terms of stat/effect/attribute asks, never mentioning that a name
+fragment PLUS a restriction is really two conditions ANDed together
+(`kind:"text"` on name + an attr condition) - exactly what
+`orna_aussies.query_records` already handled fine once routed there
+correctly (verified directly: `"last martyr"` as a name-text condition
++ `useable_by="mage"` correctly narrows 16 results down to 4). Added an
+explicit rule + example; verified 9/9 across 3 phrasings that a
+fragment+filter request now goes to `"query"` while a bare fragment
+(`"last martyr"` alone) still correctly stays `"codex"`.
+
+**`kind:"attr"` conditions support `"cmp":"!="` for exclusion language
+("not X", "except X", "excluding X") - previously silently ignored.**
+Live ask: "helmets and armor for mages" implicitly excluding weapons,
+generalized to explicit NOT support. `_CMP_OPS` already had `"!="` as a
+key, but only the NUMERIC comparison branch in `_eval_condition`'s attr
+kind ever consulted `cmp` at all - the text/list/bool/`useable_by`
+branches always did a hardcoded equality-style match no matter what
+`cmp` said, so `{"field":"item_type","cmp":"!=","value":"weapon"}`
+silently behaved exactly like `cmp:"="` (verified the bug directly
+before fixing: a "mage, not weapon" query returned weapons). Restructured
+those branches to each set a local `matched` bool, then negate once at
+the end when `cmp` is `"!="`/`"<>"` - a single negation point instead of
+threading it through every branch separately. Verified: 0 weapons in the
+negated result set afterward, and the positive (`"="`) path unchanged.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

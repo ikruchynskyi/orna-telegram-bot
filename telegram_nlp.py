@@ -158,13 +158,20 @@ async def route_query(text: str) -> Dict[str, str]:
         "game effect (immunity to a status, causes a status on a target, grants a "
         'stat buff/debuff), a stat threshold (e.g. "magic over 250", "crit above '
         '3%"), text that should appear in the description, or an attribute like '
-        'rarity/tier/useable-by. Covers both a single simple ask ("what gives '
-        'immunity to stunned") and combined ones ("mag > 250 and crit > 3%"). '
-        '"query" is the request translated to English, otherwise unchanged - exact '
-        "wording matters, it gets parsed into structured conditions separately.\n"
-        '"codex": anything else - a lookup about one specific item, monster, boss, '
-        'class, spell, building, dungeon, or general Orna info by name - "query" '
-        "is the translated English search text.\n"
+        'rarity/tier/useable-by/place. Covers a single simple ask ("what gives '
+        'immunity to stunned"), combined ones ("mag > 250 and crit > 3%"), AND a '
+        "NAME or set/family fragment combined with a filter - e.g. \"Last Martyr "
+        'items for mage" or "Rainsong stuff except weapons" is "query", NOT '
+        '"codex", because it is really two things ANDed together (the name/set '
+        'text, plus a class/slot/attribute restriction) - "query" is still the '
+        'whole request translated to English, unchanged wording (e.g. "last '
+        'martyr items for mage"), parsed into a text-on-name condition plus '
+        "attribute condition(s) separately. Only a name/set fragment ALONE, with "
+        'no other restriction attached, is "codex".\n'
+        '"codex": a lookup about one specific item, monster, boss, class, spell, '
+        'building, dungeon, or general Orna info by NAME ALONE (no class/slot/'
+        'attribute restriction attached) - "query" is the translated English '
+        "search text.\n"
         'Always translate Ukrainian in "query" to English. For "today", "query" '
         "can be empty."
     )
@@ -229,9 +236,14 @@ _CONDITION_RULES = (
         "stat threshold attached.\n"
         '  {"kind":"text","field":"description|name|","value":"<substring>"} - the '
         "name or description should contain this text.\n"
-        '  {"kind":"attr","field":"<snake_case field name>","cmp":"=|>|<|>=|<=",'
+        '  {"kind":"attr","field":"<snake_case field name>","cmp":"=|!=|>|<|>=|<=",'
         '"value":"<text, number, or true/false>"} - a flat attribute, not limited '
-        "to a fixed list - infer the field from the record structure Orna data "
+        'to a fixed list. Use "cmp":"!=" for exclusion language - "not"/"except"/'
+        '"excluding"/"other than" - e.g. "helmets and armor for mages, not '
+        'weapons" -> a place/item_type condition for armor/head PLUS {"kind":'
+        '"attr","field":"item_type","cmp":"!=","value":"weapon"}; "any slot '
+        'except weapon" -> {"kind":"attr","field":"place","cmp":"!=","value":'
+        '"weapon"}. Infer the field from the record structure Orna data '
         'uses: "tier" (number), "rarity" (common/legendary/godly/arisen/...), '
         '"useable_by" (which classes can equip it - magic_users/melee_classes/'
         'thief_classes/warrior_classes/valhallan_summoner_classes/all_classes - a '

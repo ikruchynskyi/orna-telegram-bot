@@ -519,6 +519,11 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             val, target = _parse_number(raw), _parse_number(cond.get("value"))
             op = _CMP_OPS.get(cmp_op)
             return val is not None and target is not None and op is not None and op(val, target)
+        # "!=" ("not"/"except"/"excluding") negates whatever the equality-
+        # style match below would have returned - computed once at the end
+        # so every non-numeric branch (bool/list/scalar/useable_by) gets it
+        # for free instead of each needing its own negation logic.
+        negate = cmp_op in ("!=", "<>")
         target_text = str(cond.get("value", "")).strip().lower()
         if real_field == "useable_by":
             # real values are "magic_users"/"melee_classes"/"thief_classes"/
@@ -538,29 +543,33 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             # "all_classes", not "nothing" - defensive, not currently
             # load-bearing.
             raw_text = str(raw or "all_classes").strip().lower()
-            return target_text in raw_text or raw_text == "all_classes"
-        if isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
+            matched = target_text in raw_text or raw_text == "all_classes"
+        elif isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
             # boolean-flag fields (exotic/new/hidden/...) are presence-only
             # in the source data - the key exists and is True on a match,
             # and is simply ABSENT (never explicitly False) otherwise - so
             # "false"/"no" must treat a missing field as a match too.
             if target_text in ("true", "yes", "1"):
-                return raw is True
-            if target_text in ("false", "no", "0"):
-                return raw is False or raw is None
-            return False
-        if isinstance(raw, list):
+                matched = raw is True
+            elif target_text in ("false", "no", "0"):
+                matched = raw is False or raw is None
+            else:
+                matched = False
+        elif isinstance(raw, list):
             # aussiescodex sometimes encodes a single string as a list of
             # its individual characters (seen on items' stats.element,
             # e.g. "arcane" -> ['a','r','c','a','n','e']) - rejoin before
             # comparing rather than doing per-character matching.
             if raw and all(isinstance(x, str) and len(x) == 1 for x in raw):
                 raw_text = "".join(raw).strip().lower()
-                return bool(target_text) and (raw_text == target_text or target_text in raw_text)
-            norm_items = [str(x).strip().lower().replace(" ", "_") for x in raw]
-            return bool(target_text) and any(target_text.replace(" ", "_") in item for item in norm_items)
-        raw_text = str(raw or "").strip().lower()
-        return bool(target_text) and (raw_text == target_text or target_text in raw_text)
+                matched = bool(target_text) and (raw_text == target_text or target_text in raw_text)
+            else:
+                norm_items = [str(x).strip().lower().replace(" ", "_") for x in raw]
+                matched = bool(target_text) and any(target_text.replace(" ", "_") in item for item in norm_items)
+        else:
+            raw_text = str(raw or "").strip().lower()
+            matched = bool(target_text) and (raw_text == target_text or target_text in raw_text)
+        return (not matched) if negate else matched
 
     return False
 
