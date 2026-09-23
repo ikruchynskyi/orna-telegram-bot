@@ -512,6 +512,46 @@ rare clarify round-trip) that can fan out into multiple blocks:
   summoner(s)) onto a substring that's actually present, applied only to
   the `useable_by` field specifically.
 
+**"This item grants a spell/skill when equipped" needed a whole new
+`kind:"ability"` condition - it has THREE different real encodings in
+the data, none of them an "effect" (buff/debuff code).** Live report:
+"/orna мені треба магу щось на голову щоб ще давало додатковий spell"
+("something for a mage's head that also gives a bonus spell") returned
+nothing, and the user separately confirmed they expected "Hyades Wreath"
+(which grants Rainsong) to show up. Investigation in order:
+1. First attempt only checked items' top-level `"ability"` field (a
+   `["spells", id]` cross-link, e.g. `["spells", "focused-guard"]` on a
+   weapon's own signature move) - 213 items have this. Still missed
+   Hyades Wreath.
+2. Direct data inspection (`json.dumps(record).lower()`, searching every
+   item for "rainsong" - the same brute-force technique that cracked the
+   `follower_stats` bug earlier) found the real encoding: `stats["+spell"]
+   == "Rainsong"`, a plain string VALUE, not a cross-link at all. A whole
+   family of similar `"+"`-prefixed stats keys exists for the same
+   concept - `+spell`/`+skill` (a name the WIELDER gets), `+follower_
+   summon_spell`/`+follower_summon_skill` (a name their SUMMON gets -
+   deliberately excluded from `kind:"ability"`'s default scope, since
+   that benefits a different beneficiary than what a plain "gives me a
+   spell" ask means), and boolean-flag ones (`+weapon_proficiency`,
+   `+instrument_proficiency`, `+arch-alchemy`) with no name to compare.
+   `_eval_condition`'s `"ability"` branch now checks both the top-level
+   cross-link AND `stats["+spell"]`/`stats["+skill"]` as one unified
+   concept.
+3. Fixing that still didn't surface Hyades Wreath under a class-specific
+   query (`useable_by: "mage"`), because it's actually `"all_classes"` -
+   a query for one specific class must also match `"all_classes"` items
+   (that class genuinely can use them), which `_eval_condition`'s
+   `useable_by` handling didn't do before this. Also made a record with
+   no `useable_by` at all default to `"all_classes"` too (defensive - no
+   real item is currently missing the field, verified directly: 0/2764).
+4. The prompt's `"ability"` vs `"effect"` disambiguation also needed
+   sharpening - "what weapon grants Crush" (Crush being a real spell)
+   was initially misread as `kind:"effect"` (Crush isn't a status/buff
+   name, so `resolve_codes` correctly found nothing - a safe empty
+   result, but still the wrong path). Verified 3/3 correct after adding
+   an explicit example distinguishing a spell/skill's own name from an
+   obvious stat-buff word (Up/Down/a tier number/a status ailment).
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

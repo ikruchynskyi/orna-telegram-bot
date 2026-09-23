@@ -454,6 +454,36 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             haystacks.append(display_name(record["category"], record["id"]))
         return any(needle in h.lower() for h in haystacks if h)
 
+    if kind == "ability":
+        # "this item grants a spell/skill when equipped" has THREE
+        # different real encodings, all seen live - genuinely a different
+        # thing from an "effect" (a buff/debuff code). Live reports: (1)
+        # "gives an additional spell" was tried as kind:"effect" value:
+        # "spell", which can never match since "spell" isn't a status/buff
+        # name; (2) even after adding this kind checking only the top-
+        # level "ability" cross-link, "Hyades Wreath" (which DOES grant
+        # Rainsong) was still missed, because it encodes the grant as
+        # stats["+spell"] = "Rainsong" (a plain string VALUE, not a
+        # [category, id] link) - a "stat" condition can't reach this
+        # either, since _parse_number("Rainsong") is never a number.
+        value = str(cond.get("value", "")).strip().lower()
+        candidates = []
+        ability = record.get("ability")
+        if isinstance(ability, list) and len(ability) == 2:
+            spell_cat, spell_id = ability
+            candidates.append(display_name(spell_cat, spell_id))
+            candidates.append(spell_id.replace("-", " "))
+        stats = record.get("stats") or {}
+        for key in ("+spell", "+skill"):
+            granted = stats.get(key)
+            if isinstance(granted, str):
+                candidates.append(granted)
+        if not candidates:
+            return False
+        if not value:
+            return True  # bare "has any bonus ability/spell" check
+        return any(value in c.lower() for c in candidates)
+
     if kind == "effect":
         codes = resolve_codes(str(cond.get("value", "")))
         if not codes:
@@ -481,8 +511,19 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             # the natural class NAME a player types ("mage", "thief") often
             # isn't a literal substring of that (e.g. "mage" isn't in
             # "magic_users" - "magi" is, "mage" isn't), so map common class
-            # nicknames onto a substring that actually IS.
+            # nicknames onto a substring that actually IS. And a query for
+            # one specific class must ALSO match "all_classes" - that class
+            # genuinely can use those too (live case: Hyades Wreath, an
+            # "all_classes" item, is a valid answer to "something for a
+            # mage" and was wrongly excluded before this).
             target_text = _USEABLE_BY_ALIASES.get(target_text, target_text)
+            # every real item has this field populated today (verified
+            # directly - 0/2764 missing or empty), but a record with no
+            # restriction stated at all should read the same as
+            # "all_classes", not "nothing" - defensive, not currently
+            # load-bearing.
+            raw_text = str(raw or "all_classes").strip().lower()
+            return target_text in raw_text or raw_text == "all_classes"
         if isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
             # boolean-flag fields (exotic/new/hidden/...) are presence-only
             # in the source data - the key exists and is True on a match,

@@ -177,7 +177,7 @@ async def route_query(text: str) -> Dict[str, str]:
     return {"intent": intent, "query": query}
 
 
-_CONDITION_KINDS = ("stat", "effect", "text", "attr")
+_CONDITION_KINDS = ("stat", "effect", "text", "attr", "ability")
 
 
 _CONDITION_RULES = (
@@ -248,6 +248,19 @@ _CONDITION_RULES = (
         '(classes only), and boolean flags "exotic"/"new"/"hidden" (value "true" '
         'or "false" - e.g. "what new items were added" -> field "new", value '
         '"true"). Example: rarity="legendary" or tier>=8.\n'
+        '  {"kind":"ability","value":"<spell/skill name, or empty>"} - the item '
+        "ITSELF grants access to cast a specific spell/skill when equipped - a "
+        'completely DIFFERENT thing from "kind":"effect" (a buff/debuff code, e.g. '
+        'Mag Up/Stunned/T Def 2 - words like Up/Down/a tier number, or a status '
+        'ailment). "gives an extra/bonus/additional spell", "grants a skill", '
+        '"gives access to a spell" -> {"kind":"ability","value":""} (empty = has '
+        'ANY bonus spell, no specific one named). "what grants/gives Fireball" or '
+        '"what weapon grants Crush" -> {"kind":"ability","value":"fireball"} / '
+        '"crush" (a spell/skill\'s own NAME, not a buff word, is named - default '
+        'to "ability" whenever the named thing could plausibly be a spell rather '
+        'than obviously being a stat buff). Never use "kind":"effect" with value '
+        '"spell"/"skill"/"ability" literally - there is no buff/debuff by that '
+        "name, it will never match anything.\n"
         '"combinator": "and" if ALL conditions must hold, "or" if ANY - default '
         '"and" unless the user clearly says "or"/"either".\n'
         '"category": set only if the user named a specific category (e.g. "which '

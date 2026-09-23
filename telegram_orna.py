@@ -297,6 +297,8 @@ def _describe_condition(cond: dict) -> str:
         return f'"{value}" in {field or "name/description"}'
     if kind == "attr":
         return f"{field} {cond.get('cmp', '=')} {value}"
+    if kind == "ability":
+        return f"дає спелл {value}".strip() if value else "дає бонусний спелл"
     return str(cond)
 
 
