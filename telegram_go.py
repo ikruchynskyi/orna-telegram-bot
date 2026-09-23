@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import html
 import json
 import logging
 import operator
@@ -108,6 +109,69 @@ CONTINUE_TTL_SECONDS = 10 * 60
 
 _CLOUD_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
 _TAVILY_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0)
+
+# Nothing in the system prompt asks for Markdown, but the model writes it
+# anyway often enough (**bold**, "# Heading", bullet lists) - and every
+# reply_text() in this file sends plain text with no parse_mode, so that
+# syntax was showing up completely literally instead of rendering. Convert
+# to Telegram's own HTML parse mode instead of MarkdownV2: HTML only needs
+# a handful of characters escaped (<, >, &) versus MarkdownV2's much wider
+# escape set, which is the same reasoning every other HTML-rendering reply
+# in this codebase (telegram_orna.py, telegram_resources.py) already uses.
+_CODE_BLOCK_RE = re.compile(r"```(?:\w+\n)?(.*?)```", re.S)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
+_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+)$", re.M)
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
+_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.S)
+_BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+", re.M)
+
+
+def _markdown_to_html(text: str) -> str:
+    """Best-effort GitHub-flavored-Markdown -> Telegram HTML. Telegram's
+    HTML mode only understands b/i/u/s/code/pre/a - no headings, no lists -
+    so a heading becomes its own bold line and a bullet becomes a plain
+    "•", the closest real equivalent each has.
+
+    Code spans are pulled out and stashed BEFORE the rest of the text gets
+    html.escape()'d, so code content is escaped on its own (once) and never
+    re-interpreted as further Markdown syntax; everything else is escaped
+    first and only then gets its tags added back in, so a literal "<"/"&"
+    the model wrote never gets mistaken for one of ours.
+    """
+    stash: list[str] = []
+
+    def _keep(snippet: str) -> str:
+        stash.append(snippet)
+        return f"\x00{len(stash) - 1}\x00"
+
+    text = _CODE_BLOCK_RE.sub(lambda m: _keep(f"<pre>{html.escape(m.group(1).strip())}</pre>"), text)
+    text = _INLINE_CODE_RE.sub(lambda m: _keep(f"<code>{html.escape(m.group(1))}</code>"), text)
+
+    text = html.escape(text)
+
+    text = _HEADING_RE.sub(lambda m: f"<b>{m.group(1)}</b>", text)
+    text = _LINK_RE.sub(lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', text)
+    text = _BOLD_RE.sub(lambda m: f"<b>{m.group(1) or m.group(2)}</b>", text)
+    text = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
+    text = _BULLET_RE.sub("• ", text)
+
+    for i, snippet in enumerate(stash):
+        text = text.replace(f"\x00{i}\x00", snippet)
+    return text
+
+
+async def _reply_markdown(message, text: str, **kwargs):
+    """reply_text with _markdown_to_html applied, falling back to the
+    original plain text (no parse_mode) if Telegram rejects the converted
+    HTML as malformed - a converter edge case should degrade back to the
+    original bug (literal ** in the message) rather than the message
+    failing to send at all."""
+    try:
+        return await message.reply_text(_markdown_to_html(text), parse_mode="HTML", **kwargs)
+    except TelegramError:
+        logger.warning("go: HTML-formatted reply rejected, falling back to plain text", exc_info=True)
+        return await message.reply_text(text, **kwargs)
 
 _TOOLS_BASE = (
     "- search(query): web search, returns a short answer plus a few "
@@ -784,7 +848,7 @@ async def _send_finish(sid: str, session: GoSession, message, answer: str) -> No
             logger.warning("go: failed to send preview image", exc_info=True)
 
     markup = InlineKeyboardMarkup([buttons]) if buttons else None
-    await message.reply_text(answer, reply_markup=markup)
+    await _reply_markdown(message, answer, reply_markup=markup)
 
 
 async def _advance(sid: str, message) -> None:
@@ -822,7 +886,7 @@ async def _advance(sid: str, message) -> None:
                 InlineKeyboardButton(opt[:30], callback_data=f"go|ask|{sid}|{i}")
                 for i, opt in enumerate(options)
             ]])
-            await message.reply_text(action_input or "Which do you mean?", reply_markup=keyboard)
+            await _reply_markdown(message, action_input or "Which do you mean?", reply_markup=keyboard)
             return
 
         session.messages.append({"role": "assistant", "content": json.dumps(step)})

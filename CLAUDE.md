@@ -95,6 +95,31 @@ returns a `capabilities` list (`vision`, `tools`, `thinking`, ...) plus
 param count, and has already caught one wrong assumption during
 development (see the multimodal note below).
 
+**Model-authored replies go through `_markdown_to_html` + Telegram's HTML
+parse mode - nothing tells the model to write Markdown, but it does
+anyway often enough that plain `reply_text` (no `parse_mode`, the
+original state of every call site in this file) was showing `**bold**`/
+`# Heading`/bullet syntax completely literally instead of rendering it.**
+Converts to HTML rather than MarkdownV2 for the same reason every other
+HTML-rendering reply in this codebase (`telegram_orna.py`,
+`telegram_resources.py`) already does: Telegram's HTML mode only needs
+`<`/`>`/`&` escaped, versus MarkdownV2's much wider (and easy to get
+subtly wrong) escape set. Telegram's HTML mode has no heading or list
+tags, so a heading becomes its own bold line and a bullet becomes a
+plain "•" - the closest real equivalent each has. Applied only to the
+two call sites that actually carry model-generated prose (`_send_finish`'s
+final answer, the "ask" action's clarifying question) - button labels
+never get this treatment, since Telegram buttons are always plain text
+regardless of parse_mode, and injecting HTML tags into one would show the
+literal tags. `_reply_markdown` wraps the send in a try/except that falls
+back to the original unconverted plain text if Telegram ever rejects the
+generated HTML as malformed (caught `TelegramError`, not assumed
+impossible) - degrading back to the original literal-asterisks bug beats
+the reply failing to send at all. Verified the converter directly against
+headings/bold/italic/inline-code/fenced-code-blocks/links/bullets/literal-
+`<`-and-`&` samples, and the fallback path via a forced-malformed-HTML
+test, before deploying.
+
 **The video pipeline re-encodes unconditionally; it does not trust
 yt-dlp's own merge.** `_download_source` grabs whatever yt-dlp can get
 (any codec, any container) up to a generous size backstop, and
