@@ -63,7 +63,8 @@ from orna_aussies import query_records, refetch_now, resolve_codes as resolve_ef
 from orna_codex import codex_search, fetch_codex_json
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 from telegram_go import GO_ALLOWED_USER_IDS
-from telegram_nlp import OllamaError, plan_queries, route_query
+from telegram_nlp import OllamaError, extract_quantities, extract_resources, plan_queries, route_query
+from telegram_resources import build_report, send_report_blocks
 import usage_stats
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,51 @@ async def _next_text(resource_query: str) -> Optional[str]:
             lines.append(f"{guild}      {date}")
 
     return "\n".join(lines) if found else None
+
+
+async def _run_need_report(message, text: str) -> None:
+    """"need" intent: a quantity was given for one or more materials (e.g.
+    "треба 1000 балоріту") - reuse the exact same extraction + report
+    pipeline the free-text/`/need` flow (telegram_resources.py) already
+    has, rather than "next"'s plain date lookup with no proof-cost math.
+    Always sends SOME reply itself; never falls through to the caller,
+    since a bare CommandHandler can't open the same stateful "which
+    quantity did you mean" follow-up that conversation flow can when
+    extraction comes back incomplete."""
+    try:
+        sheet_values = await fetch_sheet_data()
+    except Exception as e:
+        await message.reply_text(f"Не вдалося отримати дані: {e}")
+        return
+
+    known = [row[0] for row in sheet_values if row]
+    try:
+        resources = await extract_resources(text, known)
+    except OllamaError:
+        resources = []
+    if not resources:
+        # Not a recognized Material Forecast material at all - might still
+        # be a real codex entry, same reasoning "next" already uses.
+        await _run_codex_search(message, text)
+        return
+
+    try:
+        quantities = await extract_quantities(text, resources)
+    except OllamaError:
+        quantities = {}
+
+    if quantities:
+        blocks, bundles = await build_report(quantities, sheet_values)
+        await send_report_blocks(message, blocks, bundles)
+
+    missing = [r for r in resources if r not in quantities]
+    for name in missing:
+        # Couldn't pin a quantity to this one in a single message - fall
+        # back to a plain "when does it appear" lookup for it instead of
+        # silently dropping it from the reply.
+        result = await _next_text(name)
+        if result:
+            await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
 
 
 # -----------------------------------------------------------------------------
@@ -479,6 +525,10 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if intent == "today":
         await message.reply_text(await _today_text())
+        return
+
+    if intent == "need":
+        await _run_need_report(message, query)
         return
 
     if intent == "next":

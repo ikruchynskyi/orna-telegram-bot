@@ -136,13 +136,24 @@ _ORNA_CATEGORIES = (
 async def route_query(text: str) -> Dict[str, str]:
     """
     Classify a free-text /orna message (English or Ukrainian) into one of
-    five intents, translating to English along the way in one round trip.
+    six intents, translating to English along the way in one round trip
+    (except "need" - see below).
 
-    Returns {"intent": "today"|"next"|"codex"|"query"|"other", "query":
-    "<English text>"}. For "query", "query" is passed to plan_queries (a
+    Returns {"intent": "today"|"next"|"need"|"codex"|"query"|"other",
+    "query": "<text>"}. For "query", "query" is passed to plan_queries (a
     separate call - keeps each prompt's schema simple rather than one
     mega-prompt doing classification and structured condition extraction
     at once, which proved less reliable during development).
+
+    "need" is for a request that gives an actual QUANTITY of material(s)
+    needed (e.g. "треба 1000 балоріту") - routes to the same guild-
+    availability + proof-cost report (and "remind me" buttons) the
+    free-text /need flow (telegram_resources.py) already gives, instead
+    of "next"'s plain date lookup with no proof-cost math. "query" is the
+    ORIGINAL, untranslated text - it gets fed straight to
+    telegram_nlp.extract_resources/extract_quantities, which already
+    handle Ukrainian directly, so translating first would only risk
+    mangling a material name before the exact-match step that needs it.
 
     "other" is the self-aware fallback: the request isn't actually about
     Orna's codex/resources at all - it's a meta "what can you do"/"help"
@@ -162,12 +173,21 @@ async def route_query(text: str) -> Dict[str, str]:
     system = (
         'You route a Telegram message about the mobile RPG "Orna" (English or '
         'Ukrainian) into exactly one intent. Reply with strict JSON: {"intent": '
-        '"today"|"next"|"codex"|"query"|"other", "query": "<English text>"}.\n'
+        '"today"|"next"|"need"|"codex"|"query"|"other", "query": "<text>"}.\n'
         '"today": asks what crafting materials/resources are available today, no '
         'specific material named. "query" empty.\n'
+        '"need": gives a QUANTITY of one or more crafting materials the player '
+        'needs - a number attached to a material name, e.g. "треба 1000 '
+        'балоріту", "need 500 mythril and 200 adamantine", "I need 300 solarite '
+        'for the guild". "query" is the ORIGINAL text COMPLETELY UNCHANGED - do '
+        "NOT translate it (the material-name/quantity extraction step this "
+        'feeds handles Ukrainian directly, translating first would only risk '
+        'mangling a material name it needs to match exactly). Different from '
+        '"next": "next" has no quantity, just "when does X appear" for one '
+        'named material.\n'
         '"next": asks about a SPECIFIC named crafting material and when/where it '
-        'becomes available - "query" is just that material\'s name, translated to '
-        "English.\n"
+        'becomes available, with NO quantity given - "query" is just that '
+        "material's name, translated to English.\n"
         '"query": asks which items/monsters/etc. match one or more criteria - a '
         "game effect (immunity to a status, causes a status on a target, grants a "
         'stat buff/debuff), a stat threshold (e.g. "magic over 250", "crit above '
@@ -198,15 +218,21 @@ async def route_query(text: str) -> Dict[str, str]:
         "matches one of these two cases - anything with an actual Orna subject "
         '(an item, a stat, an effect, a material) stays in "today"/"next"/'
         '"codex"/"query" as usual, even if oddly phrased.\n'
-        'Always translate Ukrainian in "query" to English. For "today" and '
+        'Always translate Ukrainian in "query" to English, EXCEPT for "need" '
+        '(always the original text, unchanged - see above). For "today" and '
         '"other", "query" can be empty.'
     )
     try:
         data = await _chat_json(system, text)
     except OllamaError:
         return {"intent": "codex", "query": text}
-    intent = data.get("intent") if data.get("intent") in ("today", "next", "codex", "query", "other") else "codex"
-    query = "" if intent == "other" else str(data.get("query") or text).strip()
+    intent = data.get("intent") if data.get("intent") in ("today", "next", "need", "codex", "query", "other") else "codex"
+    if intent == "other":
+        query = ""
+    elif intent == "need":
+        query = text  # always the untranslated original - see the prompt
+    else:
+        query = str(data.get("query") or text).strip()
     return {"intent": intent, "query": query}
 
 

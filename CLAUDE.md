@@ -634,6 +634,31 @@ query, a name+filter query, "next", "today") stayed correctly classified
 with zero false positives into `"other"`, since over-triggering here
 would break real functionality, not just add a redundant reply.
 
+**`route_query` has a sixth intent, `"need"`, for a quantity-bearing
+resource request ("треба 1000 балоріту") - routes to the same proof-cost
+report + reminder buttons the free-text `/need` flow gives, instead of
+`"next"`'s bare date lookup with no proof math.** Live report: `/orna
+треба 1000 балоріту` showed guild/date rows for both "Balorite" and
+"Lesser Balorite" (a plain substring match, `"next"`'s whole mechanism)
+with no proof-cost breakdown - the richer report already existed
+(`telegram_resources.build_report`, via the free-text/`/need`
+`ConversationHandler`), `/orna` just had no path to it.
+`telegram_orna._run_need_report` reuses `telegram_nlp.extract_resources`/
+`extract_quantities` directly (both already handle Ukrainian, so
+`"need"`'s `query` is deliberately the UNTRANSLATED original text -
+translating first would only risk mangling a material name before the
+exact-match step that needs it) rather than opening the stateful
+"which quantity did you mean" follow-up the conversation flow can -
+a bare `CommandHandler` has no conversation state to return into, so a
+material extracted without a resolvable quantity falls back to
+`_next_text` (still useful, just without proof math) instead of trying
+to ask a second message. Verified against live data: extraction on the
+exact reported phrase correctly resolves `Balorite` (not `Lesser
+Balorite` too) with quantity `1000`; verified 9/9 across 3 phrasings that
+`"need"` triggers correctly, and 10/10 that ordinary `"next"`/`"codex"`/
+`"query"` requests (including ones that also contain a number, like a
+stat threshold) don't get misclassified into it.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers
