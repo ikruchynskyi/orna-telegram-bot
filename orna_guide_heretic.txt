@@ -844,3 +844,63 @@ Masterforged | 1.3 | 45.6 | 49.5 | 56
 Total | 1.000 | 1.704 | 1.000 | 1.000 | Demonforged | 1.4 | 56.8 | 61 | 68
 Subtotal | 1.704 | Multiplied with subtotal above | Godforged | 1.5 | 68 | 72.5 | 80
 Total Multiplier | 7.112
+
+--- Your Ideal Inventory ---
+Your (Ideal) Inventory | Ratings:
+This page will highlight many items a growing Heretic would want for everyday prospects. | S | High demand chase item. Focus if you don't have it yet!
+Expect multiple of the same item if there are multiple different "configurations" for them (adornments, anguish bonuses, etc.). | A | Useful to have, a worthwhile focus.
+These can be separate items in your inventory, or goals to swap a single item to, if you so choose. | B | Good item, worthwhile in more niche cases.
+All notes and expectations are for the gear noted to be at Godforge and at least Anguish Level 1. | C | Not as useful, usually an alternative but still good!
+Weapons
+Weapons you should have multiple of the same EXACT version of will have a "2x" off to the left of the chart.
+Name | Event / Source | Adornments | Rating | Anguish Bonus (if applicable) | Notes
+Celestial Staff (Bloodray) | Towers | 5x Flukes of Oceanus | S | - | Crucial for bloodray flask builds, particularly in PvP
+Celestial Staff (Memories) | Towers (Giants & Titans) | 5x Hearts of Mnemosyne | A | - | Best in slot for memory hunting, ekes out Trialing Staff
+Celestial Staff (Quickcast) | Towers | 5x Lungs of Oceanus | A | - | When combined with Sequencer spec, makes all skills 1 turn quicker
+Celestial Staff (Shards) | Towers (Giants & Titans) | 5x Hands of Mnemosyne | A | - | Best in slot for boosting Tower Shard gain.
+Celestial Archistaff (Horde) | Towers (Cursed Queens) | 6x Salmon of Knowledge | A | - | Best in slot for boosting horde encounters - useful at higher AL, due to less Mag
+Celestial Staff (Crit) | Towers | 5x Hands of Prometheus (Broken) | B | - | Useful for generic crit-focused builds, low quality hands for less -Res
+2x | Ruiarc Archistaff | The Cursed Queens | Ferocious Bull's Eyes / Gorgon's Eyes | S | Crit Damage | Powerful for later-game Bloodray endless and Ara flask charge chicanery
+Yelmogus Greatstaff | Wyrmhunt | Ferocious Bull's Eyes, Solarite Mortar | S | Crit Damage | Low pierce AoE that can dominate medium Anguish content + Flask booster
+2x | (Any) Surtr's Sword | Ragnarok | Symbols of War | S | - | Best in slot for view distance - quality does not matter
+2x | Arisen / Fey Helhest | Ragnarok | Symbols of War | S | - | Best in slot for view distance (Corvus) - quality does not matter
+2x | Beheaded Scholar's Chargeblade | The Hallowed | Blackened Kerberos Eyes, Achlys Souls | S | Damage Limit Break | Great item for Omniflask builds, massively boosting elem weakness
+Zagreus Bident | Riftfall | Ferocious Bull's Eyes / Gorgon's Eyes | A | Crit Damage | Paired with a Fluke Celestial for bloodray crit builds
+Zagreus Bident | Riftfall | Blackened Kerberos Eyes, Achlys Souls | A | Damage Limit Break | Sometimes paired with Chargeblade for Omniflask builds
+2x | Arisen Terror | - | Blackened Kerberos Eyes | A | Crit Chance | Highest Orn-boosting weapon. Useful for Crit Poise Endless
+(Arisen) Palm Branch | Of Giants & Titans | - | B | - | Used for Aegir Stance in endless setup, quality does not matter
+Arisen Trevelyan's Archistaff | Legend of Lyonesse | Ferocious Bull's Eyes / Gorgon's Eyes | B | Crit Damage | Substitute for Yelmogus Greatstaff with lower Mag
+Arisen Kaladanda | - | Ferocious Bull's Eyes / Gorgon's Eyes | B | Crit Damage | All-rounder for a generic crit build
+Arisen Kaladanda | - | Souls of Achlys | B | Crit Chance | All-rounder for a generic Ultima build
+Trialing Staff | Wyrmhunt | - | B | - | Alternative Memory booster. Base adorns & bonus on what skill you kill with
+Arisen Qatvanga | - | Ferocious Bull's Eyes / Gorgon's Eyes | C | Def/Res Penetration | Alternative AoE source, not very good but still useable
+Headpieces
+Name | Event / Source | Adornments | Rating | Anguish Bonus (if applicable) | Notes
+Yelmogus Headrobe | Wyrmhunt | Eyes of Ptah, Jewels of Creation | S | Pet Act | Flask-boosting armor in high damage builds for Omniflask
+Argos | Ornaversary | - | S | - | Best in slot for view distance - quality does not matter
+Covyn's Porcelain Mask | Ornaversary | - | S | - | Best in slot for view distance - quality does not matter, 2H bonus is a bonus
+Hyades Wreath | Terra's Legacy: Rainsong | Lyncus Bristles / Ashen Pinions | S | Accuracy | Great AoE enabler, but be careful with its' water element
+Arisen Rift Cowl | Riftfall | Lyncus Bristles | A | Accuracy
+Yelmogus Headrobe | Wyrmhunt | Lyncus Bristles,  Crimson Eye of Centaurus | A | Pet Act | Flask-boosting armor in high damage builds for Blood-ray
+Mightiest Mimic Head | The Mimics Are Loose | Ashen Pinions / Jewels of Creation | A | Accuracy | Slightly less orn boost than Lost Helm but almost doubles luck
+Fallen Sky Hood | Wyrmhunt | - | B | - | View distance alternative for Argos, does not boost as high but more available
+Lost Helmet | - | Ashen Pinions / Jewels of Creation | B | Accuracy | Best in slot for boosting orns
+Hyperion Hood | Of Giants & Titans | Ashen Pinions / Jewels of Creation | B | Accuracy | Niche helmet if you need a little mana regen and some good ward wtith Mag
+Medea's Hairpin | - | - | C | - | Year-round view distance headpiece. Worst of all, but better than nothing
+Armor
+Name | Event / Source | Adornments | Rating | Anguish Bonus (if applicable) | Notes
+Yelmogus Robes | Wyrmhunt | Eyes of Ptah, Jewels of Creation | S | Ward Recovery | Flask-boosting armor in high damage builds for Omniflask
+Arisen Aaru Robe | Thronemakers | Lyncus Bristles | S | Ward Recovery | Gives pet Great Meditation. Useful with TMM pet to guarantee 100% GM time
+Darkrift Robe | Wyrmhunt | Lyncus Bristles,  Crimson Eye of Centaurus | A | Ward Recovery | Flask-boosting armor in high damage builds for Blood-ray
+Legs
+Name | Event / Source | Adornments | Rating | Anguish Bonus (if applicable) | Notes
+Fallen Sky Shoes | Wyrmhunt | Lyncus Bristles | S | Two-Handed Power | High mag gear crucial for BL2 builds in Torment/Melancholy/Despair
+Yelmogus Skirt | Wyrmhunt | Eyes of Ptah, Jewels of Creation | S | Ward Recovery | Flask-boosting armor in high damage builds for Omniflask or Endless
+Yelmogus Skirt | Wyrmhunt | Lyncus Bristles,  Crimson Eye of Centaurus | A | Ward Recovery | Flask-boosting armor in high damage builds for Blood-ray or Endless
+Fallen Sky Shoes | Wyrmhunt | Lyncus Bristles | B | Ward Start Turns | High mag gear great for most builds, ward start useful in towers especially
+Offhands
+Name | Event / Source | Adornments | Rating | Anguish Bonus (if applicable) | Notes
+Placeholder Item | S
+Accessories
+Name | Event / Source | Adornments | Rating | Fun Bonus Space | Notes
+Placeholder Item | A

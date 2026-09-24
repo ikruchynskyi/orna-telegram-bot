@@ -146,9 +146,14 @@ _SOURCES = [
         "kind": "sheet",
         "spreadsheet_id": "1unU5LcivK_lO-y5xB8U6rWd2JxbuS99zdKEYNQLp7Us",
         "source_url": "https://docs.google.com/spreadsheets/d/1unU5LcivK_lO-y5xB8U6rWd2JxbuS99zdKEYNQLp7Us/edit?gid=1378658536",
-        # excluded: "WIP - Your Inventory" (a per-reader inventory-tracking template, not
-        # guide content), "Example Build Page (DUPLICATE THIS)" (explicitly a template
-        # for the reader to copy), "Icon-Oclast" (icon-sourcing reference sheet).
+        # "Your (Ideal) Inventory" (gid 1489719792) was WRONGLY excluded in an earlier
+        # pass as "a per-reader inventory-tracking template, not guide content" - direct
+        # inspection (prompted by a live report: "/orna what are ideal items for heretic"
+        # answered with fabricated/misattributed items instead of this tab's real S/A/B/C
+        # rated list) showed it's real, substantial, populated content - the single most
+        # directly relevant tab for exactly that question - not a template at all. Still
+        # correctly excluded: "Example Build Page (DUPLICATE THIS)" (explicitly a template
+        # for the reader to copy) and "Icon-Oclast" (icon-sourcing reference sheet).
         "tabs": [
             ("Towers Purchases", "1378658536"),
             ("Early T10", "46578419"),
@@ -158,6 +163,7 @@ _SOURCES = [
             ("Raids", "818288178"),
             ("BoF Guild", "442063739"),
             ("Flask Calculators", "1887270385"),
+            ("Your Ideal Inventory", "1489719792"),
         ],
     },
     {
