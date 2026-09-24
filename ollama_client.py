@@ -87,6 +87,18 @@ def _is_no_vision_error(body: str) -> bool:
     return "multimodal" in low or ("image" in low and "support" in low)
 
 
+class OllamaUnavailable(OllamaError):
+    """The request never produced a reply: timeout, connection failure, or an
+    HTTP error status. Distinct from its parent, which also covers a reply
+    that ARRIVED but wasn't usable JSON - and the difference decides whether
+    the cloud circuit breaker trips. Live 2026-09-24: nemotron-3-super
+    answered one step with plain prose instead of the requested JSON, and
+    because that raised a bare OllamaError it parked the cloud leg for 300s -
+    i.e. one bad ANSWER took cloud away from every request for five minutes.
+    A model writing something unparseable says nothing about whether the
+    service is reachable, so only this subclass parks it."""
+
+
 class UnsupportedMultimodal(Exception):
     """Raised when Ollama rejects a request because the model has no
     vision support (a clean 400 "does not support multimodal requests") -
@@ -195,7 +207,7 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
             msg = resp.json().get("message") or {}
             content = msg.get("content") or ""
     except httpx.HTTPError as e:
-        raise OllamaError(f"Ollama request failed: {e}") from e
+        raise OllamaUnavailable(f"Ollama request failed: {e}") from e
     if not content.strip():
         recovered = _from_tool_calls(msg)
         if recovered is not None:
@@ -271,10 +283,19 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
             # this retry was a bare await inside the multimodal handler, so
             # its OllamaError bypassed local entirely.
             logger.warning("ollama_client: cloud retry after image-drop failed (%s), falling back to local", e)
-            _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
+            if isinstance(e, OllamaUnavailable):
+                _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
     except OllamaError as e:
-        _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
-        logger.warning("ollama_client: Ollama Cloud unavailable (%s), skipping it for %ds", e, CLOUD_COOLDOWN_SECONDS)
+        # Park the cloud leg only for a genuine availability failure. A reply
+        # that arrived but wasn't usable JSON is a CONTENT problem - still
+        # worth falling back over, never worth taking cloud away from every
+        # other request for five minutes.
+        if isinstance(e, OllamaUnavailable):
+            _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
+            logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
+                           e, CLOUD_COOLDOWN_SECONDS)
+        else:
+            logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
 
     return await _local_leg(local_host, local_model, messages, local_timeout, tools)
 
@@ -329,6 +350,16 @@ def _demo() -> None:
     assert _is_no_vision_error("does not support multimodal requests")
     assert not _is_no_vision_error('{"error":"model not found"}')
     assert not _is_no_vision_error('{"error":"rate limit exceeded"}')
+
+    # A transport failure is OllamaUnavailable (parks cloud); an unusable
+    # reply is a plain OllamaError (must NOT park it).
+    assert issubclass(OllamaUnavailable, OllamaError)
+    try:
+        _extract_json("Balor Sword:\n- Tier 5")
+    except OllamaError as e:
+        assert not isinstance(e, OllamaUnavailable), "bad content must not look like an outage"
+    else:
+        raise AssertionError("prose should not parse as JSON")
 
     # 4. an ordinary reply must NOT be rescued - it goes to _extract_json.
     assert _from_tool_calls({"content": '{"action":"finish"}'}) is None

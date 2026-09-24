@@ -785,6 +785,23 @@ feature used where debugging isn't an option (slow plane wifi). The prompt's
 action enum is now derived from the same `_ACTIONS` tuple, and came out
 byte-identical, so this added the tools array and changed nothing else.
 
+**"The model said something unusable" is NOT "the service is down", and
+conflating them takes cloud away from everyone.** `ollama_client.
+OllamaUnavailable` (a subclass of `OllamaError`) marks a request that never
+produced a reply — timeout, connection failure, HTTP error status — and
+ONLY that subclass parks the cloud circuit breaker. A reply that arrived
+but wasn't usable JSON stays a plain `OllamaError`: still worth falling
+back over for that turn, never worth a 300s cloud blackout for every other
+request. Live 2026-09-24, within minutes of switching `/orna` to
+nemotron-3-super: it answered one step with plain prose instead of the
+requested JSON, and because that raised a bare `OllamaError` the breaker
+parked cloud for five minutes. Measured afterwards, that model returns
+usable JSON 6/6 on the same step shape — so the bad reply was a one-off and
+the breaker's over-reaction was the actual defect. This is the second bug
+of exactly this shape in one session (see the no-vision 400 below): when
+adding a failure path, ask whether it means *unreachable* or merely
+*unhelpful*, because the breaker only ever belongs on the first.
+
 **Ollama has TWO different wordings for "this model can't take images",
 and only catching one of them is actively harmful under cloud-first
 routing.** `ollama_client._is_no_vision_error` matches both: local Ollama
