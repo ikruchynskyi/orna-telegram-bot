@@ -1112,6 +1112,30 @@ state flatly. Added 2026-09-24 on explicit ask.
   воїна? чи були зміни?" called `releases` and cited the real 1.334
   +5% Ward Power change in its answer.
 
+### The ephemeral status message
+
+A `/orna` request can legitimately run for minutes (`MAX_STEPS = 16`, plus
+the `LOOP_TIMEOUT_SECONDS` ceiling), and the chat was previously silent for
+all of it except whatever tools happened to post - no way to tell a working
+request from a stuck one. `_Status` sends ONE message on the first update
+("🤔 Думаю…"), EDITS it in place for each step ("🔎 Шукаю в кодексі…",
+"📚 Читаю гайд…", from `_ACTION_LABELS`), and DELETES it when the request
+ends, so a finished conversation reads exactly as it did before this
+existed. Added 2026-09-24 on ask.
+- **Edit one message, never send per step.** A line per step is precisely
+  the scrollback spam that dead-end tool messages already had to be removed
+  for (see the loop's session notes above).
+- **`_advance` owns its whole lifetime**, creating it and clearing it in a
+  `finally`. That is what stops it being orphaned by the timeout path
+  (which cancels `_advance_inner` mid-step), by an `ask` that returns to
+  wait on a button, or by an unexpected exception. Verified for both the
+  normal and the timeout path.
+- **Every Telegram call in it swallows its own errors** and `update()`
+  no-ops when the text is unchanged - a status line must never cost the
+  answer, or an extra API call per step for the same string.
+- An action with no label falls back to a generic "⏳ Працюю…" rather than
+  leaking the internal action name.
+
 ### `finish()` carries a "📚 Джерела" button - what the answer was actually built from
 
 Every tool that reads something with a URL appends `(label, url)` to

@@ -1858,6 +1858,7 @@ class OrnaSession:
     # (label, url) for everything the answer was actually built from, in the
     # order it was consulted - surfaced as a "Джерела" button on finish().
     sources: list = field(default_factory=list)
+    status: object = None  # the ephemeral _Status message, owned by _advance
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -1967,11 +1968,86 @@ async def _close_out(session: "OrnaSession", message, limit_hit: str, fallback: 
         logger.warning("orna: failed to send closing answer", exc_info=True)
 
 
+# What each tool is shown as while it runs. Anything missing falls back to a
+# generic "working" line rather than leaking the internal action name.
+_ACTION_LABELS = {
+    "today": "📅 Дивлюся, що сьогодні в гільдіях…",
+    "next": "📅 Шукаю, коли з'явиться матеріал…",
+    "need": "🧮 Рахую, скільки потрібно…",
+    "search_codex": "🔎 Шукаю в кодексі…",
+    "query": "🔎 Підбираю за характеристиками…",
+    "events": "🎪 Дивлюся календар подій…",
+    "open_entry": "📖 Читаю сторінку кодексу…",
+    "calculate": "🧮 Рахую…",
+    "assess": "⚒️ Прораховую прокачку предмета…",
+    "compare": "⚖️ Порівнюю предмети…",
+    "build_optimize": "🧩 Підбираю найкращий білд…",
+    "towers": "🗼 Перевіряю вежі…",
+    "class_guide": "📚 Читаю гайд…",
+    "knowledge_search": "📚 Шукаю в базі знань…",
+    "releases": "🆕 Перевіряю патч-ноти…",
+    "web_search": "🌐 Шукаю в інтернеті…",
+}
+_THINKING_LABEL = "🤔 Думаю…"
+
+
+class _Status:
+    """One ephemeral "what I'm doing now" message: sent on the first update,
+    EDITED in place on every later one, deleted when the request ends.
+
+    A /orna request can legitimately run for minutes (MAX_STEPS = 16, plus a
+    wall-clock ceiling of LOOP_TIMEOUT_SECONDS), during which the chat was
+    previously silent except for whatever tools happened to post - so there
+    was no way to tell a working request from a stuck one. Editing ONE
+    message rather than sending a new line per step is what keeps this from
+    becoming the scrollback spam that dead-end tool messages already had to
+    be removed for; deleting it at the end means a finished conversation
+    reads exactly as it did before this existed.
+
+    Every Telegram call here is best-effort: a failed status update must
+    never affect the answer, so all of them swallow their errors."""
+
+    def __init__(self, message):
+        self._message = message
+        self._sent = None
+        self._last = None
+
+    async def update(self, text: str) -> None:
+        if text == self._last:
+            return  # don't spend an API call re-writing the same line
+        self._last = text
+        try:
+            if self._sent is None:
+                self._sent = await self._message.reply_text(text)
+            else:
+                await self._sent.edit_text(text)
+        except Exception:
+            logger.debug("orna: status update failed", exc_info=True)
+
+    async def clear(self) -> None:
+        sent, self._sent, self._last = self._sent, None, None
+        if sent is None:
+            return
+        try:
+            await sent.delete()
+        except Exception:
+            logger.debug("orna: status delete failed", exc_info=True)
+
+
 async def _advance(sid: str, message) -> None:
     """Wraps _advance_inner in a hard wall-clock deadline - see
     LOOP_TIMEOUT_SECONDS. No matter what happens inside (a hung call, a
     pathologically slow chain of fallbacks, anything), this guarantees a
-    reply within a bounded time instead of the request just going quiet."""
+    reply within a bounded time instead of the request just going quiet.
+
+    Also owns the ephemeral status message's whole lifetime: created here and
+    cleared in `finally`, so it can't be orphaned by the timeout path (which
+    cancels _advance_inner mid-step), by an "ask" that returns to wait for a
+    button, or by an unexpected exception."""
+    session = _ORNA_SESSIONS.get(sid)
+    status = _Status(message)
+    if session is not None:
+        session.status = status
     try:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -1986,6 +2062,8 @@ async def _advance(sid: str, message) -> None:
             return
         usage_stats.record_tool_call("_loop_timeout")
         await _close_out(session, message, "the time limit for this request was reached", fallback)
+    finally:
+        await status.clear()
 
 
 async def _call_step_model(session: "OrnaSession", step_number: int):
@@ -2038,6 +2116,8 @@ async def _advance_inner(sid: str, message) -> None:
     while session.steps_left > 0:
         session.steps_left -= 1
         step_number = MAX_STEPS - session.steps_left
+        if session.status is not None:
+            await session.status.update(_THINKING_LABEL)
         try:
             step = await _call_step_model(session, step_number)
         except (OllamaError, UnsupportedMultimodal) as e:
@@ -2094,6 +2174,8 @@ async def _advance_inner(sid: str, message) -> None:
             await _reply_markdown(message, action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
             return
 
+        if session.status is not None:
+            await session.status.update(_ACTION_LABELS.get(action, "⏳ Працюю…"))
         session.messages.append({"role": "assistant", "content": json.dumps(step)})
         sig = json.dumps([action, action_input, args], sort_keys=True, ensure_ascii=False)
         if sig in session.seen_calls:
