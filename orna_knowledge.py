@@ -79,6 +79,53 @@ def _looks_like_header(line: str) -> bool:
     return sum(len(p) for p in parts) / len(parts) <= 15
 
 
+def _corpus_stats(text: str) -> dict:
+    """{section title: non-empty line count} - what _sane_rebuild compares.
+    PER SECTION on purpose: a whole-corpus line count is far too coarse, and
+    the realistic failure is one tab coming back empty while the other 15 are
+    fine. Emptying the largest tab only costs ~9% of the total lines, which a
+    whole-corpus ratio check waves straight through (measured)."""
+    out = {}
+    for chunk in text.split("\n=== ")[1:]:
+        title, _, rest = chunk.partition("\n")
+        out[title] = sum(1 for l in rest.split("\n") if l.strip())
+    return out
+
+
+# A section may keep this fraction of its committed lines and still pass.
+# Google returning HTTP 200 with a truncated or empty CSV is the failure this
+# guards: without it, one bad fetch is cached for a WEEK and silently answers
+# from a corpus missing a whole tab - exactly the quiet staleness the refresh
+# exists to prevent. Halving is generous for ordinary community edits, which
+# add and remove a few rows at a time.
+_MIN_SECTION_RATIO = 0.5
+# Sections this small are noise-prone (a 4-line tab losing 2 rows is not a
+# fetch failure), so they are only checked for existing at all.
+_SMALL_SECTION_LINES = 8
+
+
+def _sane_rebuild(text: str, fallback: str) -> bool:
+    """Whether a freshly-built corpus looks complete next to the committed
+    copy. A rejected rebuild is never cached, so the bot keeps serving the
+    last good data and the failure is visible in the log.
+
+    If the sheets ever legitimately shrink past this, the rebuild keeps being
+    rejected until someone re-runs orna_scrape_knowledge.py and commits - at
+    which point the fallback becomes the new baseline and it passes again.
+    That is deliberate: a human confirming a big shrink is right beats the
+    bot silently accepting one."""
+    new, old = _corpus_stats(text), _corpus_stats(fallback)
+    for title, old_lines in old.items():
+        if title not in new:
+            logger.warning("orna_knowledge: rebuild is missing section %r - rejecting", title[:60])
+            return False
+        if old_lines > _SMALL_SECTION_LINES and new[title] < old_lines * _MIN_SECTION_RATIO:
+            logger.warning("orna_knowledge: section %r came back with %d lines, committed copy has %d - rejecting",
+                           title[:60], new[title], old_lines)
+            return False
+    return True
+
+
 def _corpus_text() -> str:
     """The knowledge corpus, refreshed from the source sheets at most weekly.
 
@@ -101,8 +148,11 @@ def _corpus_text() -> str:
     try:
         from orna_scrape_knowledge import build_text
         text = build_text()
-        if text.count("\n=== ") < 2:
-            raise ValueError("rebuilt corpus has almost no sections - sheet access may have changed")
+        # Compare against the committed copy rather than a bare "looks
+        # non-empty" check: a partial fetch can still produce every section
+        # header with most of the rows missing.
+        if not _sane_rebuild(text, DATA_PATH.read_text(encoding="utf-8")):
+            raise ValueError("rebuilt corpus looks incomplete next to the committed copy")
         CACHE_DIR.mkdir(exist_ok=True)
         tmp = cached.with_suffix(cached.suffix + ".tmp")
         tmp.write_text(text, encoding="utf-8")
@@ -356,6 +406,26 @@ def _demo() -> None:
     hit = search("Temple of Wealth", limit=3)
     assert "| Orns |" in hit, hit
     assert "Temple of Wealth | - | Kingdom Research | - | 1.2" in hit, hit
+
+    # A truncated rebuild must be rejected, not cached for a week.
+    full = DATA_PATH.read_text(encoding="utf-8")
+    assert _sane_rebuild(full, full), "an identical rebuild must pass"
+    parts = full.split("\n=== ")
+    # the realistic failure: every header present, ONE tab came back empty.
+    # A whole-corpus ratio check passes this (it is ~9% of the lines), which
+    # is exactly why the comparison is per section.
+    biggest = max(range(1, len(parts)), key=lambda i: len(parts[i]))
+    emptied = list(parts)
+    emptied[biggest] = emptied[biggest].split("\n")[0] + "\n"
+    one_tab_gone = parts[0] + "".join("\n=== " + p for p in emptied[1:])
+    assert not _sane_rebuild(one_tab_gone, full), "an empty tab must be rejected"
+    # a section vanishing entirely
+    assert not _sane_rebuild(parts[0] + "".join("\n=== " + p for p in parts[2:]), full)
+    # ...while an ordinary edit (a few rows removed) must still pass
+    trimmed = list(parts)
+    trimmed[biggest] = "\n".join(trimmed[biggest].split("\n")[:-3])
+    assert _sane_rebuild(parts[0] + "".join("\n=== " + p for p in trimmed[1:]), full), \
+        "a few removed rows is a normal edit, not a failed fetch"
 
     # A multi-subject query must find every subject, with NO delimiter to
     # split on, and across a spelling the corpus doesn't use ("Volcan's" ->

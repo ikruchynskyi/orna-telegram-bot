@@ -1220,6 +1220,22 @@ fallback when it doesn't have the answer either.
   - Still worth re-running `python3 orna_scrape_knowledge.py` and committing
     occasionally, precisely BECAUSE that file is the safety net - left alone
     for a year it becomes a very old one.
+  - **A rebuild is validated PER SECTION against the committed copy before
+    it is cached** (`_sane_rebuild`), because the realistic failure is
+    Google returning HTTP 200 with one tab truncated or empty while the
+    other 15 are fine - and a rejected rebuild that got cached would answer
+    from a gutted corpus for a WEEK. A whole-corpus line ratio is far too
+    coarse for that: emptying the LARGEST tab costs only ~9% of the total
+    lines, which a 90% check waves straight through (measured, which is why
+    the first version of this guard was replaced). So: every committed
+    section must still exist, and one holding more than
+    `_SMALL_SECTION_LINES` may not come back with under
+    `_MIN_SECTION_RATIO` of its lines. A rejected rebuild is never cached,
+    so the bot keeps serving the last good data and the failure shows up in
+    the log. If the sheets ever legitimately shrink past this, rebuilds keep
+    being rejected until someone re-runs the scraper and commits - the
+    fallback then becomes the new baseline. That is deliberate: a human
+    confirming a big shrink beats the bot silently accepting one.
   - A rebuild is ~16 HTTP requests (one per tab). Every caller reaches
     `search()` through `asyncio.to_thread`
     (`telegram_orna._run_knowledge_tool`), which is what keeps that off the
