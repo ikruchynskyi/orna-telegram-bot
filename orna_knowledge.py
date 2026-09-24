@@ -17,12 +17,23 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
 DATA_PATH = Path(__file__).with_name("orna_knowledge.txt")
+# The sheets behind this corpus are hand-maintained by the community and DO
+# change, so the committed .txt goes stale between manual scraper runs. Same
+# treatment as orna_aussies/orna_releases: refresh into a gitignored cache on
+# a 1-week TTL. The committed file stays as the FALLBACK - if Google is
+# unreachable or a sheet was deleted, we serve the last good copy instead of
+# losing the knowledge base entirely, which is strictly better than what a
+# fetch-only design would do.
+CACHE_DIR = Path(__file__).parent / ".knowledge_cache"
+CACHE_FILE = "orna_knowledge.txt"
+CACHE_TTL_SECONDS = 7 * 24 * 3600
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 
 
@@ -68,11 +79,67 @@ def _looks_like_header(line: str) -> bool:
     return sum(len(p) for p in parts) / len(parts) <= 15
 
 
+def _corpus_text() -> str:
+    """The knowledge corpus, refreshed from the source sheets at most weekly.
+
+    Order: a fresh cache, else a rebuild from the sheets, else whatever we
+    have on disk (a stale cache first, since it is newer than the committed
+    file, then the committed file). Every fetch failure is a warning, never
+    an exception - a Google outage must not take the knowledge base down.
+
+    Blocking: a rebuild is ~16 HTTP requests. Every caller of search()
+    already goes through asyncio.to_thread (see
+    telegram_orna._run_knowledge_tool), which is what keeps that off the
+    event loop."""
+    cached = CACHE_DIR / CACHE_FILE
+    if cached.exists() and time.time() - cached.stat().st_mtime < CACHE_TTL_SECONDS:
+        try:
+            return cached.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("orna_knowledge: cache unreadable, rebuilding")
+
+    try:
+        from orna_scrape_knowledge import build_text
+        text = build_text()
+        if text.count("\n=== ") < 2:
+            raise ValueError("rebuilt corpus has almost no sections - sheet access may have changed")
+        CACHE_DIR.mkdir(exist_ok=True)
+        tmp = cached.with_suffix(cached.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(cached)  # atomic, so a crash mid-write can't leave a torn cache
+        logger.info("orna_knowledge: refreshed corpus from source sheets (%d bytes)", len(text))
+        return text
+    except Exception:
+        logger.warning("orna_knowledge: refresh failed, serving the copy on disk", exc_info=True)
+
+    if cached.exists():
+        try:
+            return cached.read_text(encoding="utf-8")  # stale, but newer than the committed file
+        except OSError:
+            pass
+    return DATA_PATH.read_text(encoding="utf-8")
+
+
+def refresh_cache() -> None:
+    """Force a rebuild from the sheets next time the corpus is needed."""
+    global _sections, _word_vocab
+    _sections = _word_vocab = None
+    (CACHE_DIR / CACHE_FILE).unlink(missing_ok=True)
+
+
+def refetch_now() -> dict:
+    """Rebuild from the sheets right now, ignoring the TTL; small stats for a
+    confirmation reply (see /update_codex)."""
+    refresh_cache()
+    sections = _load()
+    return {"sections": len(sections), "lines": sum(len(s.lines) for s in sections)}
+
+
 def _load() -> list:
     global _sections
     if _sections is not None:
         return _sections
-    text = DATA_PATH.read_text(encoding="utf-8")
+    text = _corpus_text()
     sections = []
     for chunk in text.split("\n=== ")[1:]:  # [0] is the file's own leading comment header
         title_line, _, rest = chunk.partition("\n")

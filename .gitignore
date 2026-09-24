@@ -8,3 +8,4 @@ reminders.json
 .aussies_cache/
 usage_stats.json
 .releases_cache/
+.knowledge_cache/

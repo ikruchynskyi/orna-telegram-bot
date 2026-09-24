@@ -2271,6 +2271,16 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
         lines.append(f"патч-ноти: не вдалося оновити ({rel['error']})")
     else:
         lines.append(f"патч-ноти: {rel['notes']} (останній: {rel['latest']}, {rel['newest']})")
+
+    # The community sheets too - they are hand-maintained and drift
+    # independently of any game patch, so "refresh everything" has to include
+    # them. This is the slow leg (one request per tab), hence it goes last.
+    try:
+        kb = await asyncio.to_thread(orna_knowledge.refetch_now)
+        lines.append(f"база знань: {kb['sections']} розділів, {kb['lines']} рядків")
+    except Exception as e:
+        logger.warning("update_codex: knowledge refetch failed", exc_info=True)
+        lines.append(f"база знань: не вдалося оновити ({e})")
     await message.reply_text("\n".join(lines))
 
 
