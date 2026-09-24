@@ -122,10 +122,17 @@ async def resolve_material_name(raw: str, known: List[str]) -> Optional[str]:
 
     # Cheap typo tolerance for same-alphabet OCR noise, tried against both
     # the English list and the Ukrainian one (each alphabet only matches
-    # noise in its own alphabet — that's fine, we try both).
-    close = difflib.get_close_matches(raw_norm, known, n=1, cutoff=0.7)
+    # noise in its own alphabet — that's fine, we try both). Match case-
+    # INSENSITIVELY (like the Ukrainian branch below): difflib is case-
+    # sensitive, so OCR that upper-cases a name AND misreads a char (e.g.
+    # "ADARMANTITE") scored far below cutoff against canonical "Adamantite"
+    # and silently missed - the exact combined case this fuzzy step is for.
+    known_lower = {}
+    for k in known:
+        known_lower.setdefault(k.lower(), k)
+    close = difflib.get_close_matches(raw_lower, list(known_lower), n=1, cutoff=0.7)
     if close:
-        return close[0]
+        return known_lower[close[0]]
     close_uk = difflib.get_close_matches(raw_lower, list(UK_TO_EN), n=1, cutoff=0.7)
     if close_uk:
         canon = UK_TO_EN[close_uk[0]]

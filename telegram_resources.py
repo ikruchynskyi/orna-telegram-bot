@@ -119,13 +119,23 @@ CONVERSATION_TIMEOUT = 600  # seconds; drop a stale request rather than let it l
 def _next_occurrence(date_str: str, today: datetime.date) -> Optional[datetime.date]:
     """'September 15' -> the next calendar date that matches, on or after today."""
     try:
-        parsed = datetime.datetime.strptime(date_str, "%B %d")
+        # Parse WITH an explicit leap year (2000): "%B %d" alone defaults to
+        # year 1900, which isn't a leap year, so strptime("February 29")
+        # always raised ValueError and that date was silently dropped.
+        parsed = datetime.datetime.strptime(f"{date_str.strip()} 2000", "%B %d %Y")
     except ValueError:
         return None
-    candidate = parsed.replace(year=today.year).date()
-    if candidate < today:
-        candidate = candidate.replace(year=today.year + 1)
-    return candidate
+    # Walk forward to the first real calendar date on/after today - skipping
+    # years where the day doesn't exist (Feb 29 in a non-leap year), which
+    # also stops replace(year=<non-leap>) from raising for a Feb 29 forecast.
+    for year in range(today.year, today.year + 9):
+        try:
+            candidate = datetime.date(year, parsed.month, parsed.day)
+        except ValueError:
+            continue
+        if candidate >= today:
+            return candidate
+    return None
 
 
 async def _start_flow(message, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
