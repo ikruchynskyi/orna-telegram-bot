@@ -141,15 +141,26 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
         return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", cloud_model)
-        if drop_images(messages):
+        if not drop_images(messages):
+            raise
+        try:
             return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
-        raise
+        except OllamaError as e:
+            # The post-image-drop retry can still fail for an ordinary
+            # transient reason (rate limit, network). Fall through to the
+            # local fallback below instead of letting it escape - previously
+            # this retry was a bare await inside the multimodal handler, so
+            # its OllamaError bypassed local entirely.
+            logger.warning("ollama_client: cloud retry after image-drop failed (%s), falling back to local", e)
     except OllamaError as e:
         logger.warning("ollama_client: Ollama Cloud unavailable (%s), falling back to local Ollama", e)
-        try:
+
+    # Local fallback - reached from a cloud OllamaError (first call OR the
+    # post-image-drop retry). Same drop-image-and-retry-once shape.
+    try:
+        return await chat_json(local_host, local_model, messages, timeout=timeout)
+    except UnsupportedMultimodal:
+        logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", local_model)
+        if drop_images(messages):
             return await chat_json(local_host, local_model, messages, timeout=timeout)
-        except UnsupportedMultimodal:
-            logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", local_model)
-            if drop_images(messages):
-                return await chat_json(local_host, local_model, messages, timeout=timeout)
-            raise
+        raise

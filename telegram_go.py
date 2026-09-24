@@ -127,7 +127,11 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 _HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+)$", re.M)
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
-_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.S)
+# `_` emphasis only at WORD BOUNDARIES ((?<![\w]) / (?![\w])), so intraword
+# underscores in identifiers/filenames ("my_var", "orna_guides.py") aren't
+# treated as italic delimiters. Both alternatives use [^\n] (not . under re.S)
+# so an unpaired * / _ can't swallow across lines into the next list item.
+_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)([^\n]+?)(?<!\*)\*(?!\*)|(?<![\w])_(?!_)([^\n]+?)(?<!_)_(?![\w])")
 _BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+", re.M)
 # A Markdown table's separator row - "|---|:--:|--:|" etc, dashes/colons
 # only per cell.
@@ -198,11 +202,19 @@ def _markdown_to_html(text: str) -> str:
 
     text = html.escape(text)
 
-    text = _HEADING_RE.sub(lambda m: f"<b>{m.group(1)}</b>", text)
+    # A heading line is already made bold as a whole, so strip any **bold**
+    # markers inside it first - otherwise the later _BOLD_RE pass re-wraps
+    # them and produces <b><b>..</b></b>.
+    text = _HEADING_RE.sub(
+        lambda m: f"<b>{_BOLD_RE.sub(lambda mm: mm.group(1) or mm.group(2), m.group(1))}</b>", text)
     text = _LINK_RE.sub(lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', text)
     text = _BOLD_RE.sub(lambda m: f"<b>{m.group(1) or m.group(2)}</b>", text)
-    text = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
+    # Bullets BEFORE italics: a "*"-marked list ("* item") otherwise has its
+    # leading "*"s paired up as italic delimiters and consumed before they're
+    # ever recognized as bullets. Converting "* "/"- " to "• " first leaves
+    # only genuine inline *emphasis* for the italic pass.
     text = _BULLET_RE.sub("• ", text)
+    text = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
 
     for i, snippet in enumerate(stash):
         text = text.replace(f"\x00{i}\x00", snippet)
@@ -508,12 +520,20 @@ _CALC_OPS = {
     ast.USub: operator.neg, ast.UAdd: operator.pos,
 }
 
+# ast.Pow is CPU-unbounded (big-int math): "9 ** (10**7)" runs for seconds
+# and, since _calculate is sync, would stall the whole event loop for every
+# chat. Cap the exponent - anything past this is never a real calc question.
+_MAX_POW_EXP = 10000
+
 
 def _safe_eval(node: ast.AST) -> float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
-        return _CALC_OPS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+        left, right = _safe_eval(node.left), _safe_eval(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_POW_EXP:
+            raise ValueError(f"exponent too large (max {_MAX_POW_EXP})")
+        return _CALC_OPS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
         return _CALC_OPS[type(node.op)](_safe_eval(node.operand))
     raise ValueError("only numbers and + - * / ** % () are allowed")
@@ -843,6 +863,12 @@ async def _advance(sid: str, message) -> None:
             return
 
         if action == "ask":
+            # Record the model's own question BEFORE returning - otherwise
+            # (this branch returns before the shared append below) its
+            # question/thought never enters session.messages, and after the
+            # user taps an option the model sees two consecutive user turns
+            # with its own question erased from its context.
+            session.messages.append({"role": "assistant", "content": json.dumps(step)})
             options = [str(o).strip() for o in (step.get("options") or []) if str(o).strip()][:4]
             if not options:
                 session.messages.append({
@@ -863,9 +889,16 @@ async def _advance(sid: str, message) -> None:
 
         if action == "search":
             observation, extra = await _run_search(action_input, nsfw=session.nsfw)
-            session.image_urls = extra["images"]
-            session.image_idx = 0
-            session.sources = extra["sources"]
+            # Only replace images/sources when this search actually produced
+            # some. _run_search returns empty lists on an HTTP failure too, so
+            # an unconditional overwrite let a transient error on a SECOND
+            # search silently discard a first search's still-valid results
+            # (dropping the "Next image"/"Sources" buttons from _send_finish).
+            if extra["images"]:
+                session.image_urls = extra["images"]
+                session.image_idx = 0
+            if extra["sources"]:
+                session.sources = extra["sources"]
         elif action == "youtube":
             await _propose_youtube(sid, action_input, message)
             return
@@ -1063,6 +1096,15 @@ def _demo() -> None:
     assert _markdown_to_html("# Heading\ntext") == "<b>Heading</b>\ntext"
     assert _markdown_to_html("**bold** and *italic*") == "<b>bold</b> and <i>italic</i>"
     assert _markdown_to_html("- one\n- two") == "• one\n• two"
+    # "*"-marked bullets must become bullets, not be paired into italic spans.
+    assert _markdown_to_html("* one\n* two\n* three") == "• one\n• two\n• three"
+    # intraword underscores (identifiers/filenames) are NOT italic delimiters.
+    assert _markdown_to_html("orna_knowledge.txt and orna_guides.py") == "orna_knowledge.txt and orna_guides.py"
+    assert _markdown_to_html("my_variable_name") == "my_variable_name"
+    # genuine _emphasis_ at word boundaries still italicizes.
+    assert _markdown_to_html("this is _emph_ here") == "this is <i>emph</i> here"
+    # a heading containing bold isn't double-wrapped (<b><b>..</b></b>).
+    assert _markdown_to_html("## **Important**") == "<b>Important</b>"
     assert _markdown_to_html("`code`") == "<code>code</code>"
     assert _markdown_to_html("```\nx = 1\n```") == "<pre>x = 1</pre>"
     assert _markdown_to_html("[Orna](https://playorna.com)") == '<a href="https://playorna.com">Orna</a>'
