@@ -13,8 +13,13 @@ same data /res_today, /res_next, and the free-text /need flow serve),
 search_codex/query (playorna.com's codex + aussiescodex.com's structured
 item/monster/etc. database via orna_aussies.query_records), events
 (playorna.com/calendar/'s live event list, via orna_calendar), open_entry
-(read one entry's full detail), ask (button-only clarifying question),
-finish. Every tool that produces browsable results posts its own rich
+(read one entry's full detail), calculate, assess (name+quality stat
+projection), compare (N items' assessed stats, diffed), build_optimize
+(native multi-slot stacking-bonus optimizer), towers (live Wild Tower of
+Olympia floor heights, orna_towers.py), class_guide (long-form community
+class/build guides, orna_guides.py), knowledge_search/web_search, ask
+(button-only clarifying question), finish. Every tool that produces
+browsable results posts its own rich
 Telegram message immediately (result-list buttons, entry detail, event
 cards, proof-cost report + reminder buttons) and returns a short text
 observation to the model - "finish" is always just a short closing
@@ -61,7 +66,9 @@ from orna_aussies import query_records, refetch_now, resolve_codes as resolve_ef
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
+import orna_guides
 import orna_knowledge
+import orna_towers
 from orna_assess import (
     AssessInput, CodexEntry, QUALITY_CODE_BONUS_KEYS, get_assess_result, get_quality_bonus, get_quality_code,
 )
@@ -153,6 +160,10 @@ def _capabilities_text() -> str:
         "• /orna що сьогодні — ресурси, доступні сьогодні\n"
         "• /orna <ресурс> — коли з'явиться ресурс\n"
         "• /orna коли наступний івент — календар подій гри\n"
+        "• /orna яка зараз висота веж Олімпії — стан 5 диких веж просто зараз\n"
+        "• /orna порівняй X і Y — порівняння речей за прокачаними характеристиками\n"
+        "• /orna найкращий орн-бонус по слотах для мага — оптимальний білд по слотах\n"
+        "• /orna що по білду summoner/thief/deity/gilgamesh/beowulf/swash/heretic — гайди спільноти по класах\n"
         "• /res_today, /res_next — те саме окремими командами\n"
         "• /remind <час> <текст> — поставити нагадування (це окрема команда, "
         "не /orna)"
@@ -601,6 +612,32 @@ async def _run_events_tool(message, keyword: str) -> str:
     return "\n".join(summaries)
 
 
+async def _run_towers_tool(message) -> str:
+    """Current floor of all 5 "Wild Towers of Olympia" - pure
+    deterministic math (orna_towers.py, ported line-for-line from
+    OrnaCodex's own tower.ts and cross-checked against the original TS
+    run under Node before deploying - see orna_towers._demo), not looked
+    up from any data source at all. No args needed - cheap enough to
+    always report all 5 and let the model read whichever one the request
+    actually asked about."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    floors = orna_towers.get_tower_floors(now)
+    lines = ["🗼 Вежі Олімпії зараз:"]
+    for tf in floors:
+        label = "МАКС (очищена, очікує скидання)" if tf.floor >= 50 else f"поверх {tf.floor}"
+        lines.append(f"  {tf.kind.capitalize()}: {label}")
+
+    upcoming = orna_towers.get_tower_floors_in_next_days(now, 1)
+    if upcoming:
+        nxt = upcoming[0]
+        delta_min = int((nxt["time"] - now).total_seconds() // 60)
+        lines.append(f"\nНаступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
+
+    await message.reply_text("\n".join(lines))
+    summary = "; ".join(f"{tf.kind}={tf.floor}" for tf in floors)
+    return f"posted current tower floors (out of 50, 50=cleared/at the top): {summary}"
+
+
 async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     """Posts the full rendered entry (sprite, facts/effects/tags, cross-
     link section buttons, Assess link) and returns its `detail` dict so a
@@ -763,6 +800,42 @@ def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
     )
 
 
+async def _resolve_aussies_entry(item_name: str):
+    """Resolve a free-text item name to (CodexEntry, playorna source url)
+    - the exact codex_search-for-the-name + aussiescodex-for-the-stats
+    lookup _run_assess_tool needed, factored out so compare()/
+    build_optimize() can reuse it instead of a third copy. On any failure
+    returns (None, <error text>) instead of raising, so a caller can
+    return that text directly as its tool observation."""
+    try:
+        data = await asyncio.to_thread(codex_search, item_name, "en")
+    except Exception as e:
+        logger.warning("orna: entry lookup failed for %r", item_name, exc_info=True)
+        return None, f"lookup failed for {item_name!r}: {e}"
+    results = data.get("results") or []
+    if not results:
+        return None, f"no codex entry found for {item_name!r} - try search_codex first to confirm the exact name"
+    url = results[0].get("url", "")
+    parts = [p for p in url.split("/") if p]
+    if len(parts) < 3 or parts[0] != "codex":
+        return None, f"couldn't resolve a codex id for {item_name!r}"
+    category, record_id = parts[1], parts[2]
+    # _aussies_codex() can trigger a synchronous network fetch on a cache
+    # miss (see orna_aussies._fetch_json) - asyncio.to_thread keeps that
+    # off the event loop, same as every other tool's data access in this
+    # file; a raw blocking call here would stall the ENTIRE bot for every
+    # chat, not just this request (confirmed live incident, see
+    # concurrent_updates' own docstring in telegram_bot.py for why that
+    # alone isn't sufficient protection against a truly blocking call).
+    codex = await asyncio.to_thread(_aussies_codex)
+    record = codex["main"].get(category, {}).get(record_id)
+    if record is None:
+        return None, f"{results[0].get('name', item_name)!r} has no aussiescodex data (category {category!r})"
+    entry = _aussies_record_to_codex_entry(record)
+    source_url = f"https://playorna.com{url}" if url.startswith("/") else url
+    return entry, source_url
+
+
 async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
     """Same projection pipeline the screenshot-upload /assess flow uses
     (orna_assess.get_assess_result) rendered the same way
@@ -785,33 +858,10 @@ async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
                 "(broken/poor/regular/superior/famed/legendary/ornate/masterforged/demonforged/godforged)")
     quality, level = parsed
 
-    try:
-        data = await asyncio.to_thread(codex_search, item_name, "en")
-    except Exception as e:
-        logger.warning("orna: assess lookup failed for %r", item_name, exc_info=True)
-        return f"assess lookup failed: {e}"
-    results = data.get("results") or []
-    if not results:
-        return f"no codex entry found for {item_name!r} - try search_codex first to confirm the exact name"
-    url = results[0].get("url", "")
-    parts = [p for p in url.split("/") if p]
-    if len(parts) < 3 or parts[0] != "codex":
-        return f"couldn't resolve a codex id for {item_name!r}"
-    category, record_id = parts[1], parts[2]
-    # _aussies_codex() can trigger a synchronous network fetch on a cache
-    # miss (see orna_aussies._fetch_json) - asyncio.to_thread keeps that
-    # off the event loop, same as every other tool's data access in this
-    # file; a raw blocking call here would stall the ENTIRE bot for every
-    # chat, not just this request (confirmed live incident, see
-    # concurrent_updates' own docstring in telegram_bot.py for why that
-    # alone isn't sufficient protection against a truly blocking call).
-    codex = await asyncio.to_thread(_aussies_codex)
-    record = codex["main"].get(category, {}).get(record_id)
-    if record is None:
-        return f"{results[0].get('name', item_name)!r} has no aussiescodex data (category {category!r})"
-
-    entry = _aussies_record_to_codex_entry(record)
-    source_url = f"https://playorna.com{url}" if url.startswith("/") else url
+    entry, source_or_error = await _resolve_aussies_entry(item_name)
+    if entry is None:
+        return source_or_error
+    source_url = source_or_error
 
     inp = AssessInput(entry=entry, level=level, boss_scaling=entry.boss_scaling, quality=quality, stats={})
     result = get_assess_result(inp, is_quality_calc=True)
@@ -852,6 +902,145 @@ async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
     return f"posted assessment for {entry.name} at quality={quality}% level={level}"
 
 
+async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str:
+    """Compare 2+ items' FULLY-UPGRADED, quality-scaled stats side by
+    side, diffed against the first item - not raw base stats (barely
+    comparable pre-upgrade for gear). Same "assess at max quality/level,
+    diff against the first entry" design OrnaCodex's own Compare feature
+    uses (src/stores/compare.ts, found surveying that repo for ideas
+    worth adopting) - reuses _resolve_aussies_entry + orna_assess.
+    get_assess_result, the exact pipeline assess() already uses, just run
+    once per item instead of once. Defaults to quality 200%/level 13
+    (OrnaCodex's own compare default: effectively "fully forged") since a
+    comparison is normally about a build's ceiling, not one specific
+    quality - pass quality_spec to compare at a specific one instead."""
+    names = [str(n).strip() for n in (item_names or []) if str(n).strip()][:6]
+    if len(names) < 2:
+        return "compare needs at least 2 item names in args"
+
+    quality, level = 200, 13
+    if quality_spec:
+        parsed = _parse_quality_spec(quality_spec)
+        if parsed is None:
+            return f"couldn't parse quality {quality_spec!r} - use a percentage or a quality name"
+        quality, level = parsed
+
+    rows = []
+    for name in names:
+        entry, source_or_error = await _resolve_aussies_entry(name)
+        if entry is None:
+            return source_or_error
+        item_level = level if entry.is_upgradable else 1
+        inp = AssessInput(entry=entry, level=item_level, boss_scaling=entry.boss_scaling, quality=quality, stats={})
+        result = get_assess_result(inp, is_quality_calc=True)
+        if result is not None and result.levels > 0:
+            stats = {k: row.values[-1] for k, row in result.stats.items() if row.values}
+        else:
+            # Not an upgradable/scaling item (a material, a flat-stat
+            # accessory, ...) - still worth comparing on its raw stats
+            # rather than showing an empty row.
+            stats = dict(entry.stats)
+        rows.append((entry.name, stats))
+
+    all_keys: list = []
+    for _, stats in rows:
+        for k in stats:
+            if k not in all_keys:
+                all_keys.append(k)
+    if not all_keys:
+        return "none of these items have any comparable stats"
+
+    base_name, base_stats = rows[0]
+    header = " vs ".join(html.escape(n) for n, _ in rows)
+    lines = [f"⚖️ <b>Порівняння</b> (якість {quality}%, рівень {level}):", header]
+    for key in all_keys:
+        base_val = base_stats.get(key, 0.0)
+        cells = [f"{base_val:g}"]
+        for _, stats in rows[1:]:
+            v = stats.get(key, 0.0)
+            diff = v - base_val
+            sign = "+" if diff >= 0 else ""
+            cells.append(f"{v:g} ({sign}{diff:g})")
+        lines.append(f"  {key}: " + " | ".join(cells))
+
+    await message.reply_text("\n".join(lines), parse_mode="HTML")
+    names_summary = ", ".join(n for n, _ in rows)
+    return f"posted comparison of {names_summary} at quality={quality}% level={level}"
+
+
+async def _run_build_optimize_tool(message, slots: list, stat: str, useable_by: str, quality_spec: str) -> str:
+    """Native multi-slot optimizer for STACKING BONUS STATS (orn_bonus/
+    exp_bonus/gold_bonus/luck_bonus/...) - deterministic Python instead
+    of the model orchestrating several query()+calculate() calls itself
+    the way _AGGREGATE_RULE used to require: that prompt-engineered
+    recipe needed real hardening (a dedicated calculate() tool, an
+    explicit worked example) just to get "max orn bonus across every
+    slot" to work reliably, and still cost several loop steps every time.
+    Reuses orna_aussies.query_records for the per-slot lookup and
+    orna_assess.get_quality_bonus for the SAME official scaling formula
+    _run_assess_tool's own bonus-stats section already uses - one
+    implementation of that formula, not two. Only meaningful for
+    QUALITY_CODE_BONUS_KEYS stats - a raw combat stat like attack/magic
+    doesn't stack across slots the same way (query's own sort_by, or
+    compare(), are the tools for that)."""
+    stat = (stat or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if stat not in QUALITY_CODE_BONUS_KEYS:
+        return (f"build_optimize is for stacking bonus stats only - one of {sorted(QUALITY_CODE_BONUS_KEYS)}, "
+                f"got {stat!r}. For a raw combat stat, use query with sort_by instead.")
+
+    slot_list = [str(s).strip().lower() for s in (slots or []) if str(s).strip()] or \
+        ["head", "weapon", "off-hand", "torso", "legs", "accessory", "accessory"]
+
+    quality, level = 100, 1
+    if quality_spec:
+        parsed = _parse_quality_spec(quality_spec)
+        if parsed is None:
+            return f"couldn't parse quality {quality_spec!r} - use a percentage or a quality name"
+        quality, level = parsed
+    quality_code = get_quality_code(quality, level)
+
+    try:
+        codex = await asyncio.to_thread(_aussies_codex)
+    except Exception as e:
+        return f"build_optimize failed to load codex data: {e}"
+
+    used_keys = set()
+    rows = []  # (slot, name_or_None, base, scaled)
+    for slot in slot_list:
+        conditions = [{"kind": "attr", "field": "place", "cmp": "=", "value": slot}]
+        if useable_by:
+            conditions.append({"kind": "attr", "field": "useable_by", "cmp": "=", "value": useable_by})
+        try:
+            matches = await asyncio.to_thread(query_records, conditions, "and", None, 10, stat, "desc")
+        except Exception as e:
+            return f"build_optimize lookup failed for slot {slot!r}: {e}"
+        chosen = next((m for m in matches if (m.category, m.id) not in used_keys), None)
+        if chosen is None:
+            rows.append((slot, None, 0.0, 0.0))
+            continue
+        used_keys.add((chosen.category, chosen.id))
+        record = codex["main"].get(chosen.category, {}).get(chosen.id)
+        entry = _aussies_record_to_codex_entry(record) if record else None
+        base = (entry.stats.get(stat) if entry else None) or 0.0
+        scaled = get_quality_bonus(base, quality, quality_code, entry.is_adornment if entry else False, stat)
+        rows.append((slot, chosen.name, base, scaled))
+
+    multiplier = 1.0
+    lines = [f"🏗 <b>Оптимізація {html.escape(stat)}</b> по слотах (якість {quality}%):"]
+    for slot, name, base, scaled in rows:
+        if name is None:
+            lines.append(f"  {slot}: — нічого не знайдено")
+            continue
+        multiplier *= (1 + scaled / 100)
+        lines.append(f"  {slot}: {html.escape(name)} — {scaled:.1f}% (база {base:g}%)")
+    total_pct = (multiplier - 1) * 100
+    lines.append(f"\n<b>Сумарний бонус (множення, не сума): {total_pct:.1f}%</b>")
+
+    await message.reply_text("\n".join(lines), parse_mode="HTML")
+    items_summary = "; ".join(f"{slot}={name}({scaled:.1f}%)" for slot, name, base, scaled in rows if name)
+    return f"posted build_optimize result [total={total_pct:.1f}]: total {stat} bonus = {total_pct:.1f}%. Items: {items_summary}"
+
+
 async def _run_calculate_tool(message, expression: str) -> str:
     """Reuses telegram_go._calculate directly (safe ast-based eval, no
     Python eval()) - same reasoning /go's own docstring already gives for
@@ -865,6 +1054,65 @@ async def _run_calculate_tool(message, expression: str) -> str:
     if not expression:
         return "calculate needs a numeric expression in action_input"
     return _calculate(expression)
+
+
+_GUIDE_EXCERPT_CHARS = 6000
+
+
+async def _run_class_guide_tool(message, topic: str, query: str) -> str:
+    """Long-form written community guides (strategy/build REASONING - why
+    a setup works, tradeoffs between two builds) for a specific class or
+    cross-class build - see orna_guides.py for the full topic list and
+    why this is separate from knowledge_search's short-fact corpus. These
+    guides run from ~10KB to ~180KB of prose - far too much to hand the
+    model whole every time - so this returns a query-focused excerpt
+    (matching paragraphs + surrounding context) when `query` is given,
+    or the guide's own opening otherwise.
+    # ponytail: plain substring matching on query, no fuzzy-correction
+    like orna_knowledge.search has - add difflib-based correction here
+    too if a class-guide ask with a typo turns up nothing in practice.
+    No reply_text - like knowledge_search/web_search, this is raw source
+    material for the model to read and write the real answer from in
+    finish(), not already-formatted content to show verbatim."""
+    available = ", ".join(k for k, _ in orna_guides.list_guides())
+    if not topic:
+        return f"class_guide needs a topic in args - one of: {available}"
+    key = orna_guides.resolve_guide(topic)
+    if key is None:
+        return f"no guide found for {topic!r} - available topics: {available}"
+
+    text = await asyncio.to_thread(orna_guides.read_guide, key)
+    if not text:
+        return f"guide for {key!r} is empty or missing on disk"
+
+    query = (query or "").strip()
+    if not query:
+        return text[:_GUIDE_EXCERPT_CHARS]
+
+    needle = query.lower()
+    lines = text.split("\n")
+    hit_indices = [i for i, l in enumerate(lines) if needle in l.lower()]
+    if not hit_indices:
+        # No literal match - the guide's own opening beats nothing, since
+        # it may still answer this in wording that just doesn't contain
+        # the exact query term.
+        return text[:_GUIDE_EXCERPT_CHARS]
+
+    seen = set()
+    out_lines = []
+    total = 0
+    for idx in hit_indices:
+        start, end = max(0, idx - 3), min(len(lines), idx + 4)
+        for i in range(start, end):
+            if i in seen:
+                continue
+            seen.add(i)
+            out_lines.append(lines[i])
+            total += len(lines[i])
+        out_lines.append("...")
+        if total >= _GUIDE_EXCERPT_CHARS:
+            break
+    return "\n".join(out_lines)[:_GUIDE_EXCERPT_CHARS]
 
 
 async def _run_knowledge_tool(message, query: str) -> str:
@@ -965,6 +1213,37 @@ _TOOLS_TEXT = (
     "pass whichever form the user gave verbatim, don't convert it yourself. This POSTS the full table to the "
     "user directly (same as search_codex/query results) - finish() just needs a short closing line, the table IS "
     "the answer.\n"
+    "- compare(args={\"items\":[\"<English item name>\", \"<English item name>\", ...],\"quality\":\"<optional, "
+    "same forms as assess>\"}): side-by-side stat comparison of 2-6 items at their FULLY ASSESSED stats (default "
+    "quality 200%/level 13 if not given - effectively \"fully forged\", since a comparison is normally about a "
+    "build's ceiling), diffed against the first item in the list. Use this for \"which is better, X or Y\" - never "
+    "open_entry both and compare by eye, the raw codex numbers aren't upgrade-projected and aren't a fair "
+    "comparison. POSTS the table directly - finish() just needs a short closing line.\n"
+    "- build_optimize(args={\"stat\":\"<a STACKING bonus stat - orn_bonus/exp_bonus/gold_bonus/luck_bonus/...>\","
+    "\"slots\":[\"head\",\"weapon\",\"off-hand\",\"torso\",\"legs\",\"accessory\",\"accessory\"] (optional - this "
+    "full 7-slot loadout, with accessory TWICE for Orna's 2 accessory slots, is the default if omitted),"
+    "\"useable_by\":\"<optional class filter>\",\"quality\":\"<optional, same forms as assess>\"}): for \"best/max "
+    "STAT across every slot\" questions - finds the best item per slot AND computes the correctly-stacked "
+    "(multiplicative, quality-scaled) total in ONE call. This REPLACES manually calling query() once per slot "
+    "plus calculate() to stack them yourself - always prefer build_optimize for this question shape, it's faster "
+    "and can't arithmetic-drift the way doing it across several turns can. Only for STACKING BONUS stats (orn/exp/"
+    "gold/luck bonus and similar %-bonus stats) - for a single raw combat stat like magic/attack, use query's "
+    "sort_by instead (that's a \"pick the best one\" ask, not a \"stack across slots\" ask). POSTS the full "
+    "breakdown - finish() just needs a short closing line.\n"
+    "- towers(): no input. Current floor (15-50, 50=cleared/at the top awaiting reset) of all 5 real-time \"Wild "
+    "Towers of Olympia\" (Selene/Eos/Oceanus/Themis/Prometheus) - pure deterministic math from the current time, "
+    "always available, never a dead end. Use for \"how tall is tower X now\"/\"which tower is at max\" etc. For "
+    "GEAR/REWARDS/mechanics ABOUT the towers (not their live height), use class_guide(topic=\"towers\") instead - "
+    "these are two different things sharing a name. POSTS the result - finish() just needs a short closing line.\n"
+    "- class_guide(args={\"topic\":\"<class or build name, e.g. summoner/thief/realmshifter/deity/gilgamesh/"
+    "beowulf/swash/heretic/towers>\",\"query\":\"<optional specific sub-topic/keyword to focus the excerpt on>\"}): "
+    "long-form WRITTEN COMMUNITY GUIDES (strategy reasoning - why a build works, gear priorities, playstyle "
+    "tradeoffs) for a SPECIFIC class or cross-class build the user is clearly asking about - use whenever the "
+    "request names one of these classes/builds AND wants strategy/gear/build advice, not just a stat lookup (a "
+    "stat lookup is still query/search_codex/assess). Give a `query` whenever the ask has a specific angle (a gear "
+    "slot, a stat, a playstyle word) - without one you only see the guide's own opening, which may not be the "
+    "relevant part for a long guide. No reply_text - like knowledge_search/web_search, read this as source "
+    "material and write the real answer in finish().\n"
     "- knowledge_search(action_input=<search term>): a curated community reference (player-maintained sheets) for "
     "exactly what Orna's own codex genuinely doesn't track: PER-MONSTER/BOSS ELEMENTAL DAMAGE RESISTANCES/"
     "IMMUNITIES most of all (the codex has NO immunity field for bosses at all - not even an empty one - even "
@@ -1059,6 +1338,20 @@ _MULTI_PART_EXAMPLE = (
     '  3. finish(action_input="Ось варіанти для обох слотів.")'
 )
 
+_CLASS_GUIDE_RULE = (
+    "MANDATORY RULE for CLASS/BUILD STRATEGY questions: when the request names a SPECIFIC class/build from "
+    "class_guide's list (summoner, thief/realmshifter, deity, gilgamesh, beowulf, swash, heretic) and asks for "
+    "BUILD ADVICE/STRATEGY/GEAR PRIORITIES/how to play it (not a plain stat/item lookup, that's still query/"
+    "search_codex/assess) - e.g. \"дай пораду по білду для класу thief\", \"how do I play Beowulf\", \"best "
+    "Summoner build\" - you MUST call class_guide(topic=<the class>) AT LEAST ONCE before finish, even if you "
+    "already feel confident from general knowledge. Live-verified failure: skipping straight to a query()-based "
+    "gear search plus your own general \"glass cannon, max attack\" knowledge produced a generic, possibly-"
+    "outdated answer instead of using the actual curated guide - these guides are written specifically for this "
+    "and kept current; general training knowledge about a live-patched mobile game is exactly the kind of thing "
+    "that goes stale. Give a specific `query` argument (a gear slot, a stat, a playstyle word from the request) "
+    "to focus the excerpt on the relevant part of a long guide, then base finish() on what it actually says.\n"
+)
+
 _STRATEGY_RULE = (
     "MANDATORY RULE for any \"how do I beat/kill/defeat X\" or \"what's X weak to\" question about a specific "
     "boss/monster: you MUST call knowledge_search AT LEAST ONCE (and web_search too if that doesn't help) before "
@@ -1072,44 +1365,27 @@ _STRATEGY_RULE = (
 
 _AGGREGATE_RULE = (
     "MULTI-SLOT / BUILD-OPTIMIZATION QUESTIONS (e.g. \"what's the max orn bonus from wearing the best orn item in "
-    "every slot: head, weapon/off-hand, torso, legs, accessories\"): this is several independent lookups PLUS a "
-    "final combination, not one query. Do it step by step:\n"
-    '  1. One query() PER SLOT to find that slot\'s best item for the relevant stat - e.g. '
-    '{"conditions":[{"kind":"attr","field":"place","cmp":"=","value":"head"}],"sort_by":"orn_bonus",'
-    '"sort_dir":"desc"} for head, then place="weapon", place="off-hand", place="torso", place="legs", '
-    '"accessory" (note: there are TWO accessory slots in Orna, so take the top TWO accessory results, not just '
-    'one - increase limit/read further down the result list, or run it once more with a lower sort_dir cutoff in '
-    'mind). Real slot values: head, weapon, off-hand, torso, legs, accessory. A slot with zero matches genuinely '
-    "has no bonus item available for that stat - treat it as contributing no bonus (1x), not an error.\n"
-    "  2. Each query's own observation text already shows every result's ranked number as "
-    '"[sort_by=value]" (e.g. "Dark Mage Hood [orn_bonus=5]") - that IS the number to use, note it down as you go. '
-    "Do NOT open_entry an item just to re-read a number you already have in the observation - that wastes a "
-    "turn for nothing; only open_entry if you need a DIFFERENT fact the query didn't already give you.\n"
-    "  2b. QUALITY: a query's orn_bonus/exp_bonus/gold_bonus/luck_bonus number is the item's BASE value at Normal "
-    "quality (100%) - if the user asked about a SPECIFIC quality (Superior/Famed/Legendary/Ornate/Masterforged/"
-    "Demonforged/Godforged, or an explicit %), scale each item's base bonus BEFORE combining across slots, using "
-    "Orna's real formula: scaled = ((100 + base) * (100 + scaling) - 10000) / 100, where scaling is a FIXED "
-    "number per quality tier: superior=+10, famed=+15, legendary=+20, ornate=+25, masterforged=+30, "
-    "demonforged=+40, godforged=+50 (regular/poor/normal quality = +0 scaling, i.e. scaled = base, no change). "
-    "Use calculate() for this per item too - e.g. a +5% orn_bonus item at Legendary: "
-    'calculate("((100 + 5) * (100 + 20) - 10000) / 100") = 26, i.e. +26% at Legendary, not +5%. If the user '
-    "gave no quality at all, assume Normal/base quality (scaling +0, use the number as-is) and say so in finish().\n"
-    "  3. These kinds of per-slot % bonuses stack MULTIPLICATIVELY (this is Orna's real bonus-stacking model, "
-    "also documented in knowledge_search's gear-boost tables): total multiplier = (1 + slot1%/100) * "
-    "(1 + slot2%/100) * ... across every slot. Use calculate() for this - e.g. if you found 5%, 10%, 20%, 50%, "
-    "50%, 25%, call calculate(\"1.05 * 1.10 * 1.20 * 1.50 * 1.50 * 1.25\") - NEVER multiply more than two numbers "
-    "in your own head/thought text, that is exactly the kind of compounding arithmetic you get wrong.\n"
-    "  4. finish() with the computed total bonus percentage AND which item was used for each slot - the per-slot "
-    "query results are the supporting evidence for your answer, the computed total is the actual answer the "
-    "question asked for. Don't finish with just a list of items and no combined number, and don't finish with "
-    "just a number and no breakdown of which items produced it."
+    "every slot\"): call build_optimize ONCE with the relevant stat (and quality/useable_by if given) - it does "
+    "the per-slot lookup, quality scaling, and multiplicative stacking natively and posts the full breakdown "
+    "itself. Do NOT do this by hand with several query() calls plus calculate() - that manual recipe used to be "
+    "the only way and needed real hardening (it still exists as a fallback below for a case build_optimize can't "
+    "cover, e.g. a non-standard slot combination), but build_optimize is faster and can't arithmetic-drift the "
+    "way doing it across several turns can. After build_optimize posts its breakdown, finish() just needs a short "
+    "closing line referencing the total it already computed - don't recompute or restate the numbers yourself.\n"
+    "FALLBACK (only if build_optimize's fixed slot/stat shape genuinely doesn't fit the ask): the same idea done "
+    "manually - one query() per slot with sort_by=<stat>, note each result's \"[sort_by=value]\" from the "
+    "observation text (never open_entry just to re-read a number you already have), scale each with calculate() "
+    "using scaled = ((100 + base) * (100 + scaling) - 10000) / 100 (scaling per quality tier: superior=+10, "
+    "famed=+15, legendary=+20, ornate=+25, masterforged=+30, demonforged=+40, godforged=+50, regular/poor=+0), "
+    "then calculate() the multiplicative stack: (1 + slot1%/100) * (1 + slot2%/100) * ... - never multiply more "
+    "than two numbers in your own head, write the calculate() expression out."
 )
 
 
 def _orna_system_prompt() -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = ('"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"calculate"|"assess"|'
-               '"knowledge_search"|"web_search"|"ask"|"finish"')
+               '"compare"|"build_optimize"|"towers"|"class_guide"|"knowledge_search"|"web_search"|"ask"|"finish"')
     return (
         'You are a ReAct agent answering /orna requests about the mobile RPG "Orna" for a Telegram bot used by '
         f'its guild - requests come in English or Ukrainian. Current date/time: {now} (server local time) - use '
@@ -1120,6 +1396,7 @@ def _orna_system_prompt() -> str:
         f"{_CONDITION_RULES}\n\n"
         f"{_MULTI_PART_EXAMPLE}\n\n"
         f"{_STRATEGY_RULE}\n\n"
+        f"{_CLASS_GUIDE_RULE}\n\n"
         f"{_AGGREGATE_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
@@ -1188,11 +1465,23 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
             return await _run_calculate_tool(message, action_input)
         if action == "assess":
             return await _run_assess_tool(message, str(args.get("item") or ""), str(args.get("quality") or ""))
+        if action == "compare":
+            return await _run_compare_tool(message, args.get("items") or [], str(args.get("quality") or ""))
+        if action == "build_optimize":
+            return await _run_build_optimize_tool(
+                message, args.get("slots") or [], str(args.get("stat") or ""),
+                str(args.get("useable_by") or ""), str(args.get("quality") or ""),
+            )
+        if action == "towers":
+            return await _run_towers_tool(message)
+        if action == "class_guide":
+            return await _run_class_guide_tool(message, str(args.get("topic") or ""), str(args.get("query") or ""))
     except Exception as e:
         logger.warning("orna: tool %r failed", action, exc_info=True)
         return f"{action} failed: {e}"
     return (f"unknown action {action!r}; valid actions are today, next, need, search_codex, query, events, "
-            "open_entry, knowledge_search, web_search, calculate, assess, ask, finish.")
+            "open_entry, knowledge_search, web_search, calculate, assess, compare, build_optimize, towers, "
+            "class_guide, ask, finish.")
 
 
 async def _advance(sid: str, message) -> None:

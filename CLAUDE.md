@@ -57,16 +57,22 @@ glue around three live, unmocked external services.
   instead of guessing. Also cached to disk (`.aussies_cache/`), 24h TTL.
   See the `/orna` section.
 - `telegram_orna.py` — `/orna <text>`, a real ReAct loop (today/next/need/
-  search_codex/query/events/open_entry/knowledge_search/web_search/
-  calculate/assess/ask/finish tools) over Orna's data. See its own section
-  below — this is now the second most complex module in the repo after
-  `telegram_go.py`, and deliberately mirrors that file's loop design.
+  search_codex/query/events/open_entry/calculate/assess/compare/
+  build_optimize/towers/class_guide/knowledge_search/web_search/ask/finish
+  tools) over Orna's data. See its own section below — this is now the
+  second most complex module in the repo after `telegram_go.py`, and
+  deliberately mirrors that file's loop design.
 - `orna_calendar.py` — scrapes `playorna.com/calendar/`'s live event list
   (no `codex-bootstrap` JSON there, unlike every other codex page — plain
   server-rendered `article.event-card` HTML). Filters to live/upcoming
   events by real parsed datetimes, not left to the model — see the `/orna`
   section for the live bug this fixes. Cached to disk like
   `orna_aussies.py` but with a 6h TTL, not 1 week.
+- `orna_towers.py` — deterministic estimate of Orna's 5 "Wild Towers of
+  Olympia"'s current floor, ported line-for-line from OrnaCodex's own
+  `tower.ts` (pinned commit) and cross-checked against that original
+  TypeScript's actual output under Node before deploying — see the `/orna`
+  section. Pure time-based math, no external data source at all.
 - `orna_knowledge.py` / `orna_knowledge.txt` / `orna_scrape_knowledge.py` —
   a curated community-knowledge reference (flattened text, fuzzy-searched)
   for what playorna's codex genuinely doesn't track at all — most notably
@@ -75,6 +81,13 @@ glue around three live, unmocked external services.
   `orna_material_names_uk.json`/`orna_scrape_material_names.py`. See the
   `/orna` section for sources and why this is flattened text rather than
   typed tables.
+- `orna_guides.py` / `orna_guide_<topic>.txt` (×8) / `orna_scrape_guides.py`
+  — long-form WRITTEN community class/build guides (Summoner, Realmshifter/
+  Thief, Deity, Gilgamesh, Beowulf, Swash, Heretic, Towers of Olympia
+  mechanics), one static file per topic, deliberately NOT merged into
+  `orna_knowledge.txt`'s single fuzzy-searched corpus — see the `/orna`
+  section for why a "select by class name" reader shape fits these better
+  than a "grep across everything" one.
 - `telegram_remind.py` — hidden `/remind` command (same allowlist as
   `/go`): schedules a one-off reminder via PTB's `JobQueue`, persisted to
   `reminders.json` so it survives the frequent `launchctl` reloads this
@@ -780,8 +793,9 @@ appropriate because of that gate.
 
 **Tool-call counters (`usage_stats.record_tool_call`)** — every loop
 action (`today`/`next`/`need`/`search_codex`/`query`/`events`/
-`open_entry`/`knowledge_search`/`web_search`/`calculate`/`assess`/`ask`/
-`finish`, plus the synthetic `_step_budget_exhausted` when a session runs
+`open_entry`/`knowledge_search`/`web_search`/`calculate`/`assess`/
+`compare`/`build_optimize`/`towers`/`class_guide`/`ask`/`finish`, plus
+the synthetic `_step_budget_exhausted` when a session runs
 out of steps without finishing) increments a `usage_stats._orna_tools`
 counter, surfaced in `/stats` as a "Дії /orna (ReAct loop)" section
 (`telegram_bot.handle_stats`). This is what replaced `route_query`'s old
@@ -971,6 +985,121 @@ above) - `_run_assess_tool` appends a "Бонус-статистики" section 
 via `get_quality_bonus()` for any `QUALITY_CODE_BONUS_KEYS` the item
 actually has, since that's exactly the number a "best build" bonus
 question needs and the core table alone wouldn't surface it.
+
+### `towers`, `compare`, `build_optimize`, `class_guide` - four tools added after surveying OrnaCodex's own source
+
+All four came out of one research pass through `github.com/67au/OrnaCodex`
+(a different, more feature-complete Orna codex web app) explicitly looking
+for ideas worth adopting, plus a direct ask to port its wild-tower math.
+
+**`towers` (`orna_towers.py`) is a line-for-line port of OrnaCodex's
+`src/utils/tower.ts` (pinned at commit `4201d034`), not a reimplementation
+from a description - and it was cross-checked against the ORIGINAL
+TypeScript's actual output, not just read and trusted.** Orna's 5 "Wild
+Towers of Olympia" (Selene/Eos/Oceanus/Themis/Prometheus) each climb over
+a fixed 35-day UTC cycle, gaining floor(s) at 6 fixed checkpoints per day
+(01:00/05:00/10:00/15:00/15:36/20:00 UTC) plus a +6 jump at every day
+boundary, wrapping/capping near the top into floor 50 - a sentinel meaning
+"cleared, waiting for the next cycle," not a literal value from the raw
+`(... % 35) + 15` formula. This needs **no external data at all** - not
+the live game, not a spreadsheet - it's pure deterministic math from the
+current UTC time, which is exactly why it's a good target for a from-
+scratch port: the checkpoint times, the +6-per-day term, and the
+floor-50 wraparound rule are all non-obvious game-specific constants a
+plausible-looking guess could easily get subtly wrong. Verification: the
+*actual* `tower.ts` (types stripped only, otherwise unmodified) was run
+under Node against 9 fixed timestamps (including a cycle-epoch instant, a
+day-boundary jump, and a floor-50 wraparound) plus a 2-day
+`getTowerFloorsInNextDays` projection - `orna_towers._demo()` pins the
+Python port's output against those exact real outputs, so a future edit
+that silently diverges from upstream fails loudly instead of just looking
+plausible. `_run_towers_tool` needs no LLM args at all (posts all 5
+towers' current floor + the next floor-change checkpoint) - cheap enough
+to always report everything and let the model read what was actually
+asked about.
+
+**`compare` is modeled directly on OrnaCodex's own Compare feature
+(`src/stores/compare.ts`) - assess-then-diff, not a raw side-by-side stat
+dump.** Reading that file surfaced the actual design worth copying: it
+doesn't compare items' raw base stats (barely meaningful pre-upgrade for
+gear) - it runs each item through the SAME quality/level projection an
+assess does (defaulting to quality 200%/level 13, i.e. "fully forged" -
+copied directly, since a comparison is normally about a build's ceiling,
+not one arbitrary quality), then diffs every later item against the
+FIRST one in the list across the union of both items' stat keys.
+`_run_compare_tool` reuses `_resolve_aussies_entry` (factored out of
+`_run_assess_tool` for this, see below) + `orna_assess.get_assess_result`
+- the exact same pipeline `assess()` already has, just run once per item
+(2-6 items) instead of once. A non-scaling item (a material, a flat-stat
+accessory `get_assess_result` returns `levels=0` for) falls back to its
+raw `entry.stats` rather than an empty row, so it's still comparable on
+whatever it does have.
+
+**`build_optimize` replaces `_AGGREGATE_RULE`'s old LLM-orchestrated
+per-slot recipe with deterministic Python, for exactly the question
+shape that recipe was built for** ("max orn bonus across every slot") -
+before this, answering that reliably needed a dedicated `calculate` tool
+PLUS a long worked-example prompt section, and still cost several loop
+steps and real risk of the model mis-tracking a number across turns.
+`_run_build_optimize_tool` does the per-slot `query_records` lookup, the
+official quality-scaling formula, and the multiplicative stack across
+slots natively in one call - reusing `orna_assess.get_quality_bonus`
+(the SAME formula `_run_assess_tool`'s own bonus-stats section already
+uses, not a second implementation of it) and defaulting to the standard
+7-slot loadout (head/weapon/off-hand/torso/legs/accessory×2 - Orna has
+two accessory slots) when the model doesn't specify one. Only meaningful
+for `QUALITY_CODE_BONUS_KEYS` stats (orn/exp/gold/luck bonus and similar
+%-stacking stats) - a raw combat stat like magic/attack doesn't stack
+across slots the same way, that's `query`'s `sort_by` or `compare`'s
+job. `_AGGREGATE_RULE` keeps the old manual per-slot-query+calculate
+recipe as an explicit fallback for a case `build_optimize`'s fixed shape
+doesn't cover, rather than deleting it outright. Verified: a live rerun
+of the exact "max orn bonus across every slot" question this session's
+`_AGGREGATE_RULE` was originally built to answer independently arrived
+at the same ~160% total this file's earlier manual-verification pass
+already confirmed by hand - a real cross-check, not just "it ran without
+an exception."
+
+**`class_guide` reads long-form written community guides
+(`orna_guides.py` / `orna_guide_<topic>.txt` ×8 / `orna_scrape_guides.py`)
+for a SPECIFIC named class/build** - Summoner, Realmshifter/Thief, Deity,
+Gilgamesh, Beowulf, the Swash build (usable by any class, not a class
+itself), Heretic, plus a Towers of Olympia mechanics/rewards guide
+(unrelated to the `towers` tool's live floor-height math - same name,
+two different things, called out explicitly in both the prompt and
+`orna_guides.py`'s own docstring to head off exactly the confusion the
+old `orna_calendar.py` filename collision caused elsewhere in this
+file). **Deliberately a separate per-topic-file system, not more
+sections in `orna_knowledge.txt`**: that corpus is short community-wiki
+FACTS (a tier/HP/resistance row IS the complete answer, hence one
+flattened blob fuzzy-searched as a whole), where these guides are
+long-form REASONING (why a build works, tradeoffs between two setups) -
+grepping a fragment out would lose the argument around it, so the right
+unit to hand the model is "the whole guide for the class this question
+is about," selected by name via `orna_guides.resolve_guide` (exact/alias
+match, then a difflib fallback for typos), not searched piecemeal.
+Guides run from ~10KB to ~180KB (Summoner) of prose - `_run_class_guide_tool`
+returns a `query`-focused excerpt (matching lines + surrounding context)
+when given one, or just the guide's opening otherwise, capped at 6000
+chars either way; unlike a fact lookup this has no `reply_text` of its
+own, same as `knowledge_search`/`web_search` - it's source material the
+model reads and writes the real answer from in `finish()`.
+
+**Live-verified prompt gap, fixed before this shipped**: the first
+version of `class_guide`'s tool description alone was NOT enough - a
+direct loop run for "дай пораду по білду для класу thief" skipped the
+new tool entirely, instead running a plain `query`-based gear search
+plus the model's own general training knowledge, and finished with a
+generic "glass cannon, max attack" answer that never touched the actual
+curated guide. Same failure shape `_STRATEGY_RULE` already exists to
+prevent for boss immunities (a plausible-looking answer from general
+knowledge, when a specific tool exists precisely because general
+knowledge isn't reliable here) - fixed the same way, with a new
+`_CLASS_GUIDE_RULE` making `class_guide` MANDATORY at least once before
+`finish` for any class/build strategy question naming one of the 8
+topics. Verified 3/3 across different phrasings (English and Ukrainian)
+after the fix, where the first attempt had already shown it doesn't
+happen reliably on its own.
 
 ## Things that aren't obvious from reading one file at a time
 
