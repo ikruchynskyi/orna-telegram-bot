@@ -1,0 +1,22 @@
+[
+  {"query": "the /orna balorite 100 command is printing ugly unaligned rows again, can you look into telegram_resources", "should_trigger": true},
+  {"query": "add a new tool to the /orna ReAct loop that reports a boss's elemental weaknesses", "should_trigger": true},
+  {"query": "i just changed guide_excerpt in orna_guides.py — make sure /orna class_guide still returns the right heretic raid build", "should_trigger": true},
+  {"query": "why is /orna showing items from the wrong omniflask build for heretic", "should_trigger": true},
+  {"query": "offerings screenshot parser keeps missing 'adamantite' on some images, figure out why", "should_trigger": true},
+  {"query": "test that my fix to build_report actually works before I reload the bot", "should_trigger": true},
+  {"query": "/go is showing ** literally instead of bolding the text, whats broken in the markdown converter", "should_trigger": true},
+  {"query": "verify the assess quality math is correct for a 170% legendary item", "should_trigger": true},
+  {"query": "the query tool returns nothing for tier 1 items even though they exist, investigate", "should_trigger": true},
+  {"query": "before I push this telegram_orna change, confirm /res_today and /res_next still render correctly", "should_trigger": true},
+  {"query": "in orna rpg what tier is the Balor Sword and which element is it weak to", "should_trigger": false},
+  {"query": "help me debug why my FastAPI websocket handler keeps dropping connections after 30s", "should_trigger": false},
+  {"query": "write a python-telegram-bot from scratch that just echoes whatever the user sends", "should_trigger": false},
+  {"query": "optimize this pandas groupby, it's really slow on my 2GB sales.csv", "should_trigger": false},
+  {"query": "review this Postgres migration that adds a users.last_login column", "should_trigger": false},
+  {"query": "explain how python's asyncio.to_thread actually works under the hood", "should_trigger": false},
+  {"query": "is aussiescodex.com down right now or is it just me", "should_trigger": false},
+  {"query": "convert my inventory.json into a csv with one row per item", "should_trigger": false},
+  {"query": "what's a good difflib cutoff for fuzzy matching city names in a spreadsheet", "should_trigger": false},
+  {"query": "write a launchd plist to run my photo-backup script every night", "should_trigger": false}
+]
