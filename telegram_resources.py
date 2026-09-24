@@ -271,6 +271,38 @@ def _pack_chunks(units: List[str], limit: int, sep: str = "\n\n") -> List[str]:
     return chunks
 
 
+def pre_table(rows: List, gap: int = 2) -> str:
+    """Render `rows` (each a sequence of string cells) as a monospace,
+    column-aligned <pre> block - the "pretty table" look /res_today uses.
+
+    This is the ONE place that alignment style is defined, so every report
+    and codex-entry view stays visually consistent. Columns are left-padded
+    to their widest RAW cell and only then HTML-escaped, so alignment is by
+    VISIBLE characters (and </>/& stay safe inside <pre>); the last cell of
+    each row is never padded, to avoid trailing spaces. Telegram renders
+    <pre> in a monospace font that preserves runs of spaces - plain
+    space-padding without <pre> collapses in the proportional font and reads
+    as ragged text, which is exactly the "not pretty" look this fixes.
+    Returns "" for no rows."""
+    rows = [[str(cell) for cell in row] for row in rows]
+    if not rows:
+        return ""
+    ncols = max(len(row) for row in rows)
+    widths = [0] * ncols
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+    lines = []
+    for row in rows:
+        last = len(row) - 1
+        cells = [
+            html.escape(cell.ljust(widths[i] + gap) if i < last else cell)
+            for i, cell in enumerate(row)
+        ]
+        lines.append("".join(cells))
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 async def send_report_blocks(
     message, blocks: List[str], bundles: Optional[List[ReminderBundle]] = None
 ) -> None:
@@ -375,20 +407,23 @@ async def build_report(
                 material_rows.append((guild, date_str, when, None, None, occurrence))
         per_material.append((name, header, material_rows))
 
-    # Pass 2: render (plain text now - no more per-row calendar link).
+    # Pass 2: render. The header stays normal HTML (bold name + tier/rarity);
+    # the per-guild rows go in a monospace <pre> table (pre_table) so their
+    # columns line up the way /res_today's do. Plain space-padding collapses
+    # in Telegram's proportional font and reads as ragged text - the exact
+    # "not so pretty" formatting this replaces. Cells are passed RAW here;
+    # pre_table does the escaping (double-escaping would corrupt them).
     blocks: List[str] = []
     for name, header, material_rows in per_material:
-        lines = list(header)
-        for guild, date_str, when, proofs, currency, occurrence in material_rows:
-            date_esc = html.escape(date_str)
-            padded_date = f"{date_esc:<14}"
-            if proofs is not None:
-                lines.append(
-                    f"    {guild:<12}{padded_date}{when:<10}{proofs} × {html.escape(currency)}"
-                )
-            else:
-                lines.append(f"    {guild:<12}{padded_date}{when}")
-        blocks.append("\n".join(lines))
+        table_rows = [
+            [guild, date_str, when, f"{proofs} × {currency}"] if proofs is not None
+            else [guild, date_str, when]
+            for guild, date_str, when, proofs, currency, occurrence in material_rows
+        ]
+        block = "\n".join(header)
+        if table_rows:
+            block += "\n" + pre_table(table_rows)
+        blocks.append(block)
 
     reminder_bundles = [
         ReminderBundle(guild=key[0], occurrence=key[1], materials=materials)
@@ -552,3 +587,23 @@ def build_resource_conversation() -> ConversationHandler:
         ],
         conversation_timeout=CONVERSATION_TIMEOUT,
     )
+
+
+def _demo() -> None:
+    """`python3 telegram_resources.py` (needs env loaded to import) - checks
+    pre_table, the shared monospace-table renderer every report/entry view
+    uses. Guards the two things easy to get wrong: column alignment by
+    VISIBLE width, and HTML-escaping happening AFTER padding (inside <pre>)."""
+    assert pre_table([]) == ""
+    # 2-col: first col padded to widest+2, last col never padded.
+    assert pre_table([["a", "1"], ["bbb", "2"]]) == "<pre>a    1\nbbb  2</pre>"
+    # escaping is applied after padding, so </>/& are safe and alignment is
+    # by visible characters (the padded "x<" is 4 visible chars, then escaped).
+    assert pre_table([["x<", "&"]]) == "<pre>x&lt;  &amp;</pre>"
+    # ragged column counts: pad by each row's own last-cell rule.
+    assert pre_table([["g", "d", "when", "5 x p"], ["g2", "d2", "now"]]).startswith("<pre>")
+    print("telegram_resources._demo: pre_table checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

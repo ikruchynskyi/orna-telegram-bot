@@ -82,7 +82,7 @@ from telegram_go import (
 )
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
-from telegram_resources import build_report, send_report_blocks
+from telegram_resources import build_report, pre_table, send_report_blocks
 import usage_stats
 
 logger = logging.getLogger(__name__)
@@ -202,11 +202,8 @@ async def _today_text() -> str:
     if not tdg:
         return f"Сьогодні ({today}) немає ресурсів."
 
-    guild_w = max((len(g) for g in tdg), default=10) + 2
-    table_text = "\n".join(
-        f"{html.escape(guild).ljust(guild_w)}{html.escape(', '.join(materials))}" for guild, materials in tdg.items()
-    )
-    return f"<b>Ресурси {html.escape(today)}</b>\n<pre>{table_text}</pre>"
+    table = pre_table([[guild, ", ".join(materials)] for guild, materials in tdg.items()])
+    return f"<b>Ресурси {html.escape(today)}</b>\n{table}"
 
 
 async def _next_text(resource_query: str) -> Optional[str]:
@@ -230,9 +227,7 @@ async def _next_text(resource_query: str) -> Optional[str]:
         except ValueError:
             continue
         lines.append(f"<b>{html.escape(res[0])}:</b>")
-        guild_w = max((len(g) for g, _ in guild_dates), default=10) + 2
-        table_text = "\n".join(f"{html.escape(g).ljust(guild_w)}{html.escape(d)}" for g, d in guild_dates)
-        lines.append(f"<pre>{table_text}</pre>")
+        lines.append(pre_table([[g, d] for g, d in guild_dates]))
 
     return "\n".join(lines) if found else None
 
@@ -362,8 +357,12 @@ def _format_entry(detail: dict) -> str:
     lines = [f"<b>{html.escape(detail.get('name') or '?')}</b>"]
     if detail.get("description"):
         lines.append(html.escape(detail["description"]))
-    for fact in detail.get("facts") or []:
-        lines.append(f"{html.escape(fact.get('label', ''))}: {html.escape(fact.get('value', ''))}")
+    # Stats/facts as a monospace <pre> table (label | value), the same
+    # aligned "pretty table" look /res_today uses (pre_table), instead of
+    # ragged "Label: value" lines that don't line up.
+    facts = [[fact.get("label", ""), fact.get("value", "")] for fact in (detail.get("facts") or [])]
+    if facts:
+        lines.append(pre_table(facts))
     effects = detail.get("effects") or []
     if effects:
         lines.append("")
