@@ -8,7 +8,7 @@ Python port of the TypeScript assess module.
 import math
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # =============================================================================
@@ -25,10 +25,7 @@ CELESTIAL_WEAPON_SLOTS: Tuple[int, ...] = (
     1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5,
 )
 
-COMMON_SKIP_KEYS = frozenset({"crit", "dexterity", "level", "quality", "angLevel"})
-ANGUISHED_BONUS_KEYS = frozenset({"follower_stats", "summon_stats"})
 ANGUISHED_SKIP_KEYS = frozenset({"ward", "foresight"})
-APPROXIMATION_MAX_DEPTH = 10
 
 
 # =============================================================================
@@ -96,25 +93,6 @@ class CodexEntry:
     has_scaling_slots: bool = False
     boss_scaling: int = 0  # 0 none | 1 boss-scaled | -1 celestial
 
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "CodexEntry":
-        def pick(*keys, default=None):
-            for k in keys:
-                if k in d:
-                    return d[k]
-            return default
-        return cls(
-            name=pick("name", default=""),
-            stats=dict(pick("stats", default={}) or {}),
-            is_adornment=bool(pick("is_adornment", "isAdornment", default=False)),
-            is_accessory=bool(pick("is_accessory", "isAccessory", default=False)),
-            is_celestial_weapon=bool(pick("is_celestial_weapon", "isCelestialWeapon", default=False)),
-            is_two_handed=bool(pick("is_two_handed", "isTwoHanded", default=False)),
-            is_upgradable=bool(pick("is_upgradable", "isUpgradable", default=True)),
-            has_scaling_slots=bool(pick("has_scaling_slots", "hasScalingSlots", default=False)),
-            boss_scaling=int(pick("boss_scaling", "bossScaling", default=0)),
-        )
-
 
 @dataclass
 class AssessInput:
@@ -143,28 +121,11 @@ class AssessResult:
     stats: Dict[str, StatRow] = field(default_factory=dict)
     levels: int = 0
     exact: bool = False
-    range: Optional[Tuple[int, int]] = None
-
-
-@dataclass
-class FullResult:
-    entry: CodexEntry
-    quality: int = 100
-    quality_code: int = -1
-    boss_scaling: int = 0
-    ang_level: int = 0
-    level: int = 1
-    stats: Dict[str, Any] = field(default_factory=dict)
 
 
 # =============================================================================
 # JS-compat helpers
 # =============================================================================
-
-def js_round(x: float) -> int:
-    """JS Math.round: ties round toward +infinity."""
-    return math.floor(x + 0.5)
-
 
 def in_range(n: float, lo: float, hi: float) -> bool:
     return lo <= n < hi
@@ -188,20 +149,6 @@ def get_base_delta(base: float, is_boss_scaling: bool) -> int:
 
 def get_quality_delta(level: int, is_celestial_weapon: bool = False) -> int:
     return level - 10 if level > 10 and not is_celestial_weapon else 0
-
-
-def get_upgraded_stat(
-    base: float,
-    level: int,
-    quality: int,
-    is_boss_scaling: bool,
-    is_celestial_weapon: bool = False,
-    ang_level: int = 0,
-) -> int:
-    base_delta = get_base_delta(base, is_boss_scaling)
-    quality_delta = get_quality_delta(level, is_celestial_weapon)
-    level_bonus = 0 if level == 1 else level * base_delta
-    return math.ceil(((base + level_bonus) * (quality + quality_delta + ang_level * 3)) / 100)
 
 
 def get_upgraded_stat_array(
@@ -236,52 +183,6 @@ def get_upgraded_stat_array(
         v = math.ceil(((base + level_bonus) * (quality + ang_delta + quality_delta)) / 100)
         out.append(v)
     return out
-
-
-def _approximate(
-    input_value: float,
-    base: float,
-    initial_test: float,
-    initial_quality: int,
-    get_stat: Callable[[int], float],
-) -> int:
-    test = initial_test
-    quality = initial_quality
-    direction = 0
-
-    for _ in range(APPROXIMATION_MAX_DEPTH):
-        delta = test - input_value
-        if delta == 0:
-            return quality
-
-        direction_fix = 1 if (base > 0) != (delta > 0) else -1
-        quality_fix = quality + direction_fix
-        fix = get_stat(quality_fix)
-
-        if direction != 0 and direction != direction_fix:
-            if abs(fix - input_value) - abs(delta) > 0:
-                return quality
-            return quality_fix
-
-        direction = direction_fix
-        quality = quality_fix
-        test = fix
-    return 0
-
-
-def get_item_quality(input_value: float, base: float, level: int, is_boss_scaling: bool) -> int:
-    if base == 0:
-        return 100
-    quality_delta = get_quality_delta(level)
-    base_upgraded = get_upgraded_stat(base, level, 100, is_boss_scaling)
-    if base_upgraded == 0:
-        return 100
-    quality = js_round((input_value / base_upgraded) * (100 + quality_delta) - quality_delta)
-    test_upgraded = get_upgraded_stat(base, level, quality, is_boss_scaling)
-    return _approximate(
-        input_value, base_upgraded, test_upgraded, quality,
-        lambda fix: get_upgraded_stat(base, level, fix, is_boss_scaling),
-    )
 
 
 def get_additional_slots(quality: int, level: Optional[int] = None) -> int:
@@ -364,18 +265,6 @@ def _meta_flags(entry: CodexEntry) -> Dict[str, bool]:
     }
 
 
-def make_input(entry: CodexEntry) -> AssessInput:
-    return AssessInput(
-        entry=entry,
-        level=1,
-        boss_scaling=-1 if entry.is_celestial_weapon else entry.boss_scaling,
-        quality=100,
-        quality_code=-1,
-        ang_level=0,
-        stats=pick_assess_stats(entry.stats),
-    )
-
-
 def get_assess_result(inp: AssessInput, is_quality_calc: bool = False) -> Optional[AssessResult]:
     entry = inp.entry
     base_stats = entry.stats or {}
@@ -394,52 +283,11 @@ def get_assess_result(inp: AssessInput, is_quality_calc: bool = False) -> Option
     if inp.boss_scaling == 0 and flags["is_upgradable"]:
         return result
 
-    if is_quality_calc:
-        result.exact = True
-    else:
-        # Pick the largest-magnitude observed stat that ALSO has a non-zero
-        # base in the codex. Otherwise we'd try to back-calc quality from a
-        # stat the codex doesn't track (base=0), which short-circuits to 100%
-        # and produces a meaningless answer.
-        observed = [
-            (k, v) for k, v in inp.stats.items()
-            if k not in COMMON_SKIP_KEYS
-            and v != 0                           # 0 observation tells us nothing
-            and base_stats.get(k, 0) != 0        # need a base to back-calc against
-        ]
-        if not observed:
-            # No usable signal - leave result.quality at its default and bail.
-            return result
-
-        max_key, max_value = max(observed, key=lambda kv: abs(kv[1]))
-        base_stat = base_stats[max_key]
-        result.quality = get_item_quality(max_value, base_stat, inp.level, inp.boss_scaling > 0)
-
-        def upgraded(q: int) -> int:
-            return get_upgraded_stat(base_stat, inp.level, q, inp.boss_scaling > 0)
-
-        current_stat = upgraded(result.quality)
-        result.exact = current_stat == max_value
-
-        if result.exact and abs(max_value) < 100 and base_stat != 0:
-            sign_offset_neg = -1 if current_stat > 0 else 0
-            sign_offset_pos = 0 if current_stat > 0 else 1
-            left = math.ceil(((current_stat + sign_offset_neg) / base_stat) * 100)
-            right = math.ceil(((current_stat + sign_offset_pos) / base_stat) * 100)
-            left_out = upgraded(left)
-            right_out = upgraded(right)
-
-            def normalize(n: int, out: int) -> int:
-                if current_stat == out:
-                    return n
-                return n + (1 if n != 0 else -1)
-
-            result.range = (normalize(left, left_out), normalize(right, right_out))
-
-            if current_stat > 0:
-                result.quality = max(result.quality, result.range[1])
-            else:
-                result.quality = min(result.quality, result.range[0])
+    # Every caller passes is_quality_calc=True (the assess UI computes quality
+    # itself). The old `else` reverse-engineered quality from OCR'd observed
+    # stats but was unreachable dead code - removed here along with its
+    # helpers (get_item_quality/_approximate/get_upgraded_stat).
+    result.exact = True
 
     result.quality_code = get_quality_code(result.quality, 1)
 
@@ -492,71 +340,6 @@ def get_assess_result(inp: AssessInput, is_quality_calc: bool = False) -> Option
                 base=base_slots,
                 values=[base_slots] * result.levels,
             )
-
-    return result
-
-
-def get_full_result(inp: AssessInput) -> FullResult:
-    entry = inp.entry
-    base_stats = entry.stats or {}
-    flags = _meta_flags(entry)
-
-    result = FullResult(
-        entry=entry,
-        quality=inp.quality,
-        quality_code=inp.quality_code,
-        boss_scaling=inp.boss_scaling,
-        ang_level=inp.ang_level,
-        level=inp.level,
-        stats={},
-    )
-
-    if inp.boss_scaling == 0 and not (flags["is_accessory"] or flags["is_adornment"]):
-        return result
-    if not base_stats:
-        return result
-
-    assess_result = get_assess_result(inp, is_quality_calc=True)
-    if assess_result is None:
-        return result
-
-    quality_code = (
-        inp.quality_code if inp.quality_code > -1
-        else get_quality_code(inp.quality, inp.level)
-    )
-
-    for k, v in base_stats.items():
-        result.stats[k] = v
-        assess_stat = assess_result.stats.get(k)
-        if assess_stat is not None:
-            if 1 <= inp.level <= len(assess_stat.values):
-                result.stats[k] = assess_stat.values[inp.level - 1]
-        else:
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                result.stats[k] = get_quality_bonus(
-                    v, inp.quality, quality_code, flags["is_adornment"], k,
-                )
-
-        if inp.ang_level > 0 and k in ANGUISHED_BONUS_KEYS:
-            result.stats["_" + k] = inp.ang_level * 3
-
-    if flags["is_upgradable"]:
-        slots_key = "adornment_slots"
-        if flags["is_celestial_weapon"]:
-            idx = inp.level
-            slot = CELESTIAL_WEAPON_SLOTS[idx] if 0 <= idx < len(CELESTIAL_WEAPON_SLOTS) else 0
-            result.stats[slots_key] = slot + (1 if flags["is_two_handed"] else 0)
-        else:
-            base_slots = base_stats.get(slots_key, 0) or 0
-            if flags["has_scaling_slots"]:
-                if inp.ang_level > 0:
-                    result.stats[slots_key] = base_slots + 4
-                else:
-                    additional = get_additional_slots(inp.quality, inp.level)
-                    if additional > 0 or base_slots > 0:
-                        result.stats[slots_key] = base_slots + additional
-            elif base_slots > 0:
-                result.stats[slots_key] = base_slots
 
     return result
 
