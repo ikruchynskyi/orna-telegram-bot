@@ -773,6 +773,46 @@ matter what `default` has. `_post_init` now writes the same full list to
 `AllChatAdministrators` explicitly. `/go` is deliberately left out of
 this list, unlike everything else.
 
+**`/go` declares its action names as `tools` too (`_GO_TOOLS`), for the
+same reason `/orna` does** — its prompt is the identical "pick one of
+these named actions" shape (`search`/`youtube`/`open`/`calculate`/`ask`/
+`finish`), which makes a Harmony-format model emit a native tool call that
+Ollama then can't map back, logging `no reverse mapping found for function
+name` and 500ing about a third of the time. No model in `/go`'s config is
+Harmony-format today, but `gpt-oss:20b` was the local default until
+2026-09-24 and is still installed — this was one env-var away, on the one
+feature used where debugging isn't an option (slow plane wifi). The prompt's
+action enum is now derived from the same `_ACTIONS` tuple, and came out
+byte-identical, so this added the tools array and changed nothing else.
+
+**Ollama has TWO different wordings for "this model can't take images",
+and only catching one of them is actively harmful under cloud-first
+routing.** `ollama_client._is_no_vision_error` matches both: local Ollama
+says `does not support multimodal requests`, Ollama Cloud says `this model
+does not support image input`. The original check looked for `"multimodal"`
+only, so the cloud phrasing fell through as a generic `OllamaError` — which
+is indistinguishable from an outage, so it would trip the cloud circuit
+breaker and park cloud for 300s **for every caller**, degrading `/orna`
+because someone sent `/go` a photo. Found 2026-09-24 while trialling a
+vision-less `GO_MODEL`, by actually POSTing an image and reading the 400
+body rather than trusting the existing check — the graceful path (drop the
+image, note it in the message, retry once) silently wasn't running. Pinned
+in `ollama_client._demo()`.
+
+**Model configuration is three separate settings, deliberately.**
+`OLLAMA_MODEL` (local, shared by `/orna`, `/go` and `telegram_nlp`),
+`GO_MODEL` (`/go`'s cloud) and `ORNA_CLOUD_MODEL` (`/orna`'s cloud,
+defaulting to `GO_MODEL` so it changes nothing unless set). The split
+exists because the two loops want different things: `/orna` is text-only
+and wants the biggest reasoner available, while `/go`'s "Continue" button
+attaches photos and needs VISION. Live 2026-09-24: `/orna` moved to
+`nemotron-3-super` (120B, tools+thinking, no vision) while `/go` stayed on
+`gemma4:31b` for exactly that reason — a single shared setting would have
+silently cost `/go` its images. Local moved to
+`nemotron-3.5-lightning:30b-mlx` (30B MoE, 3B active, MLX-native): measured
+on the real `/orna` prompt at 1.9–2.2s per step after a 16s cold load,
+against `gpt-oss:20b`'s 5–20s, and it isn't Harmony-format either.
+
 **A live "Extra data" `JSONDecodeError` (`telegram_go.py`, both the cloud
 and local-fallback paths) traced to two compounding issues, both fixed.**
 1. `_chat_json`'s payload never set `"think": True` - the exact fix

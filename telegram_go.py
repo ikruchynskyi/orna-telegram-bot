@@ -272,9 +272,37 @@ _NSFW_GUIDANCE = (
 )
 
 
+# The loop's action names, in ONE place - both the prompt's action enum and
+# the `tools` array below are built from this. Mirrors telegram_orna._ACTIONS.
+_ACTIONS = ("search", "youtube", "open", "calculate", "ask", "finish")
+# Declared to Ollama on every model call - NOT because this loop wants native
+# tool calling (it reads its action out of either channel, see
+# ollama_client._from_tool_calls), but because a "pick one of these named
+# actions" prompt makes a Harmony-format model emit a native tool call, and
+# with nothing declared Ollama has no name to map it back to: it logs
+# "harmony parser: no reverse mapping found for function name" and fails the
+# whole request with a bare 500 on about a third of them. That outage was
+# diagnosed and fixed in /orna first (see telegram_orna._STEP_TOOLS and
+# CLAUDE.md); THIS loop has the identical prompt shape and was simply one
+# env-var away from the same failure - none of GO_MODEL/LOCAL_OLLAMA_MODEL/
+# NSFW_MODEL is Harmony-format right now, but gpt-oss:20b was the local
+# default until 2026-09-24 and is still installed. Declaring the names is
+# free insurance, and /go is the one feature used where debugging isn't an
+# option (slow plane wifi).
+_GO_TOOLS = [{"type": "function", "function": {
+    "name": name,
+    "description": f"The /go ReAct action {name!r}.",
+    "parameters": {"type": "object", "properties": {
+        "thought": {"type": "string"},
+        "action_input": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}},
+    }},
+}} for name in _ACTIONS]
+
+
 def _system_prompt(nsfw: bool) -> str:
     guidance = (_NSFW_OPEN_NOTE + _NSFW_GUIDANCE) if nsfw else ""
-    actions = '"search"|"youtube"|"open"|"calculate"|"ask"|"finish"'
+    actions = "|".join(f'"{a}"' for a in _ACTIONS)
     now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
     return (
         "You are a ReAct agent for a Telegram bot used over slow/expensive "
@@ -370,14 +398,15 @@ async def _call_model(messages: list[dict], nsfw: bool = False) -> dict:
     """
     if nsfw:
         try:
-            return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages)
+            return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages, tools=_GO_TOOLS)
         except _UnsupportedMultimodal:
             logger.warning("go: %s has no vision support, dropping attached image(s)", NSFW_MODEL)
             if drop_images(messages):
-                return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages)
+                return await chat_json(LOCAL_OLLAMA_HOST, NSFW_MODEL, messages, tools=_GO_TOOLS)
             raise
 
-    return await chat_json_with_fallback(GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages, api_key=OLLAMA_API_KEY)
+    return await chat_json_with_fallback(GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages,
+                                         api_key=OLLAMA_API_KEY, tools=_GO_TOOLS)
 
 
 async def _tavily_search(query: str) -> dict:

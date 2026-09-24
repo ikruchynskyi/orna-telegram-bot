@@ -70,6 +70,23 @@ class OllamaError(RuntimeError):
     isn't an object - see module docstring)."""
 
 
+def _is_no_vision_error(body: str) -> bool:
+    """Whether a 400 body means "this model can't accept images".
+
+    Ollama does NOT use one wording for this. Two real ones, both seen live:
+    local Ollama says "does not support multimodal requests", Ollama Cloud
+    says "this model does not support image input". The original check looked
+    for "multimodal" only, so the cloud phrasing fell through as a generic
+    OllamaError - which, with a cloud-first loop, is actively harmful: it is
+    indistinguishable from an outage, so it would trip the cloud circuit
+    breaker and park cloud for CLOUD_COOLDOWN_SECONDS for every caller,
+    degrading /orna because someone sent /go a photo. Caught 2026-09-24 while
+    switching GO_MODEL to a vision-less model, by actually posting an image
+    and reading the body rather than trusting the existing check."""
+    low = body.lower()
+    return "multimodal" in low or ("image" in low and "support" in low)
+
+
 class UnsupportedMultimodal(Exception):
     """Raised when Ollama rejects a request because the model has no
     vision support (a clean 400 "does not support multimodal requests") -
@@ -172,7 +189,7 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{host}/api/chat", json=payload, headers=headers or {})
-            if resp.status_code == 400 and "multimodal" in resp.text.lower():
+            if resp.status_code == 400 and _is_no_vision_error(resp.text):
                 raise UnsupportedMultimodal(resp.text[:300])
             resp.raise_for_status()
             msg = resp.json().get("message") or {}
@@ -305,6 +322,13 @@ def _demo() -> None:
         "args": {"category": "items", "combinator": "or", "conditions": [{"kind": "text"}]}}}}]})
     assert got == {"action": "query", "args": {
         "category": "items", "combinator": "or", "conditions": [{"kind": "text"}]}}, got
+
+    # Both real "no vision" wordings must be recognised - a miss here looks
+    # like an outage and parks the cloud leg for everyone (see the function).
+    assert _is_no_vision_error('{"error":"this model does not support image input (ref: abc)"}')
+    assert _is_no_vision_error("does not support multimodal requests")
+    assert not _is_no_vision_error('{"error":"model not found"}')
+    assert not _is_no_vision_error('{"error":"rate limit exceeded"}')
 
     # 4. an ordinary reply must NOT be rescued - it goes to _extract_json.
     assert _from_tool_calls({"content": '{"action":"finish"}'}) is None
