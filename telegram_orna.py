@@ -58,7 +58,7 @@ from typing import Dict, Optional
 from PIL import Image
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from ollama_client import OllamaError, UnsupportedMultimodal, chat_json, chat_json_with_fallback
 from orna_aussies import build_url as build_aussies_url
@@ -195,6 +195,27 @@ _STATE_MAX = 200
 # _ORNA_SESSIONS because that is pruned on SESSION_TTL_SECONDS (15 min) while
 # a posted answer stays in the chat forever - tapping the button an hour later
 # should still work. Same short-id-in-callback_data pattern as _STATE.
+# An "ask" whose answer the user wants to TYPE. Live report 2026-09-24:
+# the model often offers an "Інше"/"Other" option, tapping it fed the loop
+# `user chose "Інше"` - literally no information - and it carried on guessing.
+# Now that tap (and the always-present "своя відповідь" button below) waits
+# for one typed message instead.
+#
+# Free text is never safe by default in this bot: a bare MessageHandler would
+# race the assess/resources ConversationHandlers, whose registration order is
+# load-bearing. Same guard as /go's Continue and the timezone ask - a
+# MessageFilter that matches ONLY a chat with a live pending ask, registered
+# before those conversations, so everywhere else it is a guaranteed no-op.
+# Deliberately NOT armed for an ordinary option tap: someone who picked a
+# real option may well type something unrelated next (a /need request, an
+# assess screenshot caption), and swallowing that would be worse than the bug
+# this fixes. Tapping "I want to type" is the unambiguous signal.
+_PENDING_ASK_TEXT: dict = {}  # chat_id -> (sid, expires_monotonic)
+ASK_TEXT_TTL_SECONDS = 600
+# "Інше", "Other", "свій варіант", ... - a model-authored option that really
+# means "none of these". Matched loosely because the model writes it freely.
+_OTHER_OPTION_RE = re.compile(r"^(інше|инше|іньше|other|своя|свій|свое|своє)\b|\b(варіант|answer|option)$", re.IGNORECASE)
+
 _SOURCES: dict[str, list] = {}
 _SOURCES_MAX = 200
 _MAX_SOURCE_BUTTONS = 8
@@ -1626,8 +1647,9 @@ _TOOLS_TEXT = (
     "ignored in favor of invented content. If the results only support a general insight (e.g. \"immune to "
     "everything except arcane damage\"), give exactly that general insight and stop there rather than padding it "
     "with specifics you don't actually have.\n"
-    "- ask(action_input=<question>, options=[2-4 short choices]): a clarifying question. The user can only TAP a "
-    "button, never type free text - always give options. Only when a specific missing detail would materially "
+    "- ask(action_input=<question>, options=[2-4 short choices]): a clarifying question. Give only REAL choices - "
+    "an \"Інше\"/\"Other\" escape option is added automatically for you, so never include one yourself (a "
+    "duplicate just wastes a button). Only when a specific missing detail would materially "
     'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class, or a '
     'name/search matches several unrelated things and it genuinely matters which). Most requests do NOT need '
     "this. Never ask twice in the same conversation.\n"
@@ -2167,10 +2189,16 @@ async def _advance_inner(sid: str, message) -> None:
                 })
                 continue
             session.ask_options = options
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(opt[:30], callback_data=f"orna|ask|{sid}|{i}")
-                for i, opt in enumerate(options)
-            ]])
+            # One option per row. Four 30-char labels in a single row is the
+            # same shape that made the old UTC picker unreadable on a phone -
+            # Telegram shrinks buttons to fit and clips the text with no
+            # ellipsis, and a clarification option is a phrase, not "+3".
+            rows = [[InlineKeyboardButton(opt[:60], callback_data=f"orna|ask|{sid}|{i}")]
+                    for i, opt in enumerate(options)]
+            # Always an escape hatch, so answering in your own words never
+            # depends on the model having thought to offer "Інше".
+            rows.append([InlineKeyboardButton("✍️ Своя відповідь", callback_data=f"orna|askfree|{sid}|0")])
+            keyboard = InlineKeyboardMarkup(rows)
             await _reply_markdown(message, action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
             return
 
@@ -2219,6 +2247,54 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _advance(sid, message)
 
 
+async def _await_ask_text(query, sid: str) -> None:
+    """Arm the one-shot free-text wait for this chat and prompt for it."""
+    _PENDING_ASK_TEXT[query.message.chat_id] = (sid, time.monotonic() + ASK_TEXT_TTL_SECONDS)
+    await query.message.reply_text("✍️ Напишіть уточнення одним повідомленням:")
+
+
+class _PendingAskTextFilter(filters.MessageFilter):
+    """Matches only a chat waiting on a typed clarification - see
+    _PENDING_ASK_TEXT for why this can't be a plain MessageHandler."""
+
+    def filter(self, message) -> bool:
+        pending = _PENDING_ASK_TEXT.get(message.chat_id)
+        return bool(pending and time.monotonic() < pending[1])
+
+
+_pending_ask_text_filter = _PendingAskTextFilter()
+
+
+async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The typed answer to a clarifying question, resuming the loop with it."""
+    message = update.effective_message
+    if not message or not message.text:
+        return
+    pending = _PENDING_ASK_TEXT.pop(message.chat_id, None)
+    if pending is None:
+        return  # the filter already checked, but stay defensive
+    sid, expires = pending
+    if time.monotonic() > expires:
+        await message.reply_text("Уточнення застаріло — спробуйте /orna ще раз.")
+        return
+    session = _ORNA_SESSIONS.get(sid)
+    if session is None:
+        await message.reply_text("Ця сесія застаріла — спробуйте /orna ще раз.")
+        return
+    session.messages.append({
+        "role": "user",
+        "content": f"Observation: the user answered the clarifying question in their own words: "
+                   f"{message.text.strip()[:500]!r}. Use this and continue.",
+    })
+    await _advance(sid, message)
+
+
+def build_ask_text_handler() -> MessageHandler:
+    """Registered BEFORE the assess/resources conversations - its filter makes
+    it a no-op for any chat that isn't waiting on a clarification."""
+    return MessageHandler(_pending_ask_text_filter & filters.TEXT & ~filters.COMMAND, handle_ask_text)
+
+
 async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -2263,8 +2339,26 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await query.edit_message_text(f"{query.message.text}\n\n→ {choice}", reply_markup=None)
         except TelegramError:
             pass  # e.g. keyboard already gone - harmless, the loop resume below still runs
+        if _OTHER_OPTION_RE.search(choice):
+            # "Інше" carries no information - resuming on it is what made the
+            # loop guess (see _PENDING_ASK_TEXT). Wait for the real answer.
+            await _await_ask_text(query, key)
+            return
         session.messages.append({"role": "user", "content": f'Observation: user chose "{choice}".'})
         await _advance(key, query.message)
+        return
+
+    if kind == "askfree":
+        session = _ORNA_SESSIONS.get(key)
+        if session is None:
+            await query.message.reply_text("Ця сесія застаріла — спробуйте /orna ще раз.")
+            return
+        session.ask_options = []  # consume, same double-tap guard as above
+        try:
+            await query.edit_message_text(f"{query.message.text}\n\n→ ✍️", reply_markup=None)
+        except TelegramError:
+            pass
+        await _await_ask_text(query, key)
         return
 
     state = _STATE.get(key)
