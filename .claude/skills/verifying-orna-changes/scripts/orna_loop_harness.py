@@ -100,7 +100,7 @@ class FakeMessage:
 async def run_once(query: str) -> None:
     replies: list = []
     messages = [
-        {"role": "system", "content": T._orna_system_prompt()},
+        {"role": "system", "content": T._orna_system_prompt(query)},
         {"role": "user", "content": query},
     ]
     sid = T._new_orna_session(messages, T.MAX_STEPS)

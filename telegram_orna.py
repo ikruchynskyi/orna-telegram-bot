@@ -1451,6 +1451,9 @@ _CLASS_GUIDE_RULE = (
     "to focus the excerpt on the relevant part of a long guide - and keep the game-mode/section word the request "
     "names (raid/dungeon/tower/early/endless/...) IN that query, since the same build name recurs across tabs "
     "tuned per mode and dropping it fetches the wrong build's gear - then base finish() on what it actually says.\n"
+    "LANGUAGE: the guides are written in English, but your finish() answer MUST be in the user's OWN language - an "
+    "English build question gets an ENGLISH answer, a Ukrainian one a Ukrainian answer. Neither the English guide "
+    "text you just read nor the Ukrainian example phrasing in this rule may flip your reply to Ukrainian.\n"
     "SECOND mandatory rule, once class_guide's excerpt already lists a build's own gear (Weapon:/Headpiece:/"
     "Armor:/Legwear:/Accessory:/... lines naming real items): finish() MUST be built from those exact names - do "
     "NOT ALSO run a generic stat-sorted query() (sort_by magic/ward/attack/...) \"just in case\" and let ITS "
@@ -1496,15 +1499,39 @@ _AGGREGATE_RULE = (
 )
 
 
-def _orna_system_prompt() -> str:
+_CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
+
+
+def _orna_system_prompt(user_text: str = "") -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = ('"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"calculate"|"assess"|'
                '"compare"|"build_optimize"|"towers"|"class_guide"|"knowledge_search"|"web_search"|"ask"|"finish"')
+    # Deterministic per-request language lock. Prompt-only "reply in the
+    # user's language" guidance kept losing, for build/class_guide answers, to
+    # the prompt's Ukrainian examples plus the long ENGLISH guide excerpt the
+    # model reads right before finishing (live bug: English build questions
+    # answered in Ukrainian ~half the time even after that guidance). Detecting
+    # the script the user actually wrote in (this guild writes English or
+    # Ukrainian) and stating the required language up front, per request, is
+    # far more reliable than making the model infer it.
+    lang_lock = ""
+    if user_text:
+        req_lang = "Ukrainian" if _CYRILLIC_RE.search(user_text) else "English"
+        lang_lock = (
+            f"CRITICAL LANGUAGE LOCK: the user's current request is written in {req_lang}. Every ask/finish "
+            f"reply you send for THIS request MUST be written in {req_lang} - never another language, no matter "
+            f"what language the guide/codex text you read is in or what language the examples below happen to use.\n\n"
+        )
     return (
+        lang_lock +
         'You are a ReAct agent answering /orna requests about the mobile RPG "Orna" for a Telegram bot used by '
         f'its guild - requests come in English or Ukrainian. Current date/time: {now} (server local time) - use '
-        'this for "today"/"next event"/other relative dates. Reply text (ask/finish action_input) is in the SAME '
-        "language the user wrote in; tool arguments (action_input for other tools, query conditions) are always "
+        'this for "today"/"next event"/other relative dates. LANGUAGE (important): reply text (ask/finish '
+        "action_input) MUST be in the SAME language the user wrote in - an English question gets an ENGLISH "
+        "answer, a Ukrainian question a Ukrainian one. Do NOT default to Ukrainian; the example reply texts "
+        "shown later in this prompt are illustrative only and never set your answer's language (this most often "
+        "bites build/class_guide answers, where an English guide excerpt plus a Ukrainian example has flipped "
+        "replies to Ukrainian). Tool arguments (action_input for other tools, query conditions) are always "
         "in ENGLISH regardless of the request's language, since the underlying data is English.\n\n"
         f"You have these tools - each turn, pick exactly ONE:\n{_TOOLS_TEXT}\n"
         f"{_CONDITION_RULES}\n\n"
@@ -1725,7 +1752,7 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     messages = [
-        {"role": "system", "content": _orna_system_prompt()},
+        {"role": "system", "content": _orna_system_prompt(text)},
         {"role": "user", "content": text},
     ]
     sid = _new_orna_session(messages, MAX_STEPS)
