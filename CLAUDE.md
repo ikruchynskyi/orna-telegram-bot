@@ -73,6 +73,12 @@ glue around three live, unmocked external services.
   `tower.ts` (pinned commit) and cross-checked against that original
   TypeScript's actual output under Node before deploying — see the `/orna`
   section. Pure time-based math, no external data source at all.
+- `orna_releases.py` — playorna.com/releases/, the official patch notes,
+  parsed from plain server-rendered HTML (`article.release-note`, no
+  `codex-bootstrap` JSON — same as `orna_calendar.py`) and cached to disk
+  (`.releases_cache/`, gitignored) with a 1-week TTL like
+  `orna_aussies.py`. See the `/orna` section for why a changelog earns its
+  own source alongside the codex.
 - `orna_knowledge.py` / `orna_knowledge.txt` / `orna_scrape_knowledge.py` —
   a curated community-knowledge reference (flattened text, fuzzy-searched)
   for what playorna's codex genuinely doesn't track at all — most notably
@@ -1065,6 +1071,46 @@ control flow:
   to a known Material Forecast material at all, it falls through to
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
+
+### `releases` - the only source that says what CHANGED
+
+The codex and the community sheets both describe what IS. Neither ever
+mentions what CHANGED, and `orna_knowledge.txt`'s sheets are
+hand-maintained, so they can lag a balance patch by weeks - an answer built
+from them can be confidently stale with nothing in the data hinting at it.
+playorna's own patch notes are the one source that does hint it (e.g.
+"Added 5% Ward Power bonus to each piece of the Judge Trifecta warrior
+gear"), so the loop can read them and qualify an answer it would otherwise
+state flatly. Added 2026-09-24 on explicit ask.
+
+- `orna_releases.py` mirrors `orna_aussies.py`'s cache exactly: disk cache
+  in a gitignored dir, 1-week TTL, atomic temp-then-rename write, an
+  unreadable cache treated as a miss (a file truncated by one of this
+  repo's frequent `launchctl` reloads would otherwise raise on every call
+  until the TTL expired). One addition: **an empty parse is never cached** -
+  that would pin a silent "no patch notes exist" for a week if playorna's
+  markup changed, so it raises instead.
+- The page carries ~15 notes with no pagination, about three months at the
+  observed cadence. That is the window where "did a patch change this?" is
+  a live question, so there is nothing to page through - but it also means
+  **finding nothing is not proof nothing changed**, which both the tool's
+  miss message and its prompt description say explicitly.
+- `search()` matches the whole query first, then falls back to any single
+  significant word, because a patch bullet names things exactly ("Judge
+  Trifecta Falx") while a question says "judge falx".
+- Same no-`reply_text` shape as `knowledge_search`/`web_search`: raw
+  changelog lines aren't something to show a user verbatim, the model reads
+  them and writes the caveat itself. `asyncio.to_thread` for the cache-miss
+  fetch, like every other data access in that file.
+- `/update_codex` refreshes the notes too - the reason to run it at all is
+  "a patch just landed", and refreshing one source but not the other is
+  exactly the stale mix it exists to prevent.
+- The prompt tells the model a note here OVERRIDES the fan-maintained
+  knowledge base, while the codex itself is official and already current -
+  so this mainly qualifies `knowledge_search`/`class_guide` answers rather
+  than codex stats. Verified live: "чи варто брати Judge Trifecta для
+  воїна? чи були зміни?" called `releases` and cited the real 1.334
+  +5% Ward Power change in its answer.
 
 ### `finish()` carries a "📚 Джерела" button - what the answer was actually built from
 

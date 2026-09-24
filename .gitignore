@@ -7,3 +7,4 @@ venv/
 reminders.json
 .aussies_cache/
 usage_stats.json
+.releases_cache/

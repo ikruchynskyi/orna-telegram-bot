@@ -71,6 +71,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_guides
 import orna_knowledge
+import orna_releases
 import orna_towers
 from orna_assess import (
     AssessInput, CodexEntry, QUALITY_CODE_BONUS_KEYS, get_assess_result, get_quality_bonus, get_quality_code,
@@ -119,7 +120,8 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "calculate", "assess",
-            "compare", "build_optimize", "towers", "class_guide", "knowledge_search", "web_search", "ask", "finish")
+            "compare", "build_optimize", "towers", "class_guide", "knowledge_search", "releases", "web_search",
+            "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -1435,6 +1437,34 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     return result[:3000]
 
 
+async def _run_releases_tool(message, query: str, sources: Optional[list] = None) -> str:
+    """playorna.com's own patch notes (orna_releases, disk-cached a week).
+
+    The codex and the community sheets both describe what IS and say nothing
+    about what CHANGED, and the sheets are hand-maintained so they can lag a
+    balance patch by weeks - an answer built from them can be confidently
+    stale with nothing in the data hinting at it. These notes are the one
+    source that does hint it. Same no-reply_text shape as knowledge_search:
+    raw changelog lines aren't something to show verbatim, the model reads
+    them and writes the caveat itself.
+
+    asyncio.to_thread for the same reason every other data access here uses
+    it - a cache miss does a blocking HTTP fetch, and that would stall the
+    whole bot for every chat, not just this request."""
+    try:
+        notes = await asyncio.to_thread(orna_releases.search, query, 6)
+    except Exception as e:
+        logger.warning("orna: releases lookup failed for %r", query, exc_info=True)
+        return f"couldn't read the patch notes: {e}"
+    if not notes:
+        return (f"no patch note mentions {query!r} - the notes on file cover only the last few months, "
+                "so this may simply predate them; don't treat that as proof nothing changed")
+    if sources is not None:
+        for note in notes[:3]:
+            _add_source(sources, f"{note['title']} ({note['date']})", note.get("url") or orna_releases.RELEASES_URL)
+    return await asyncio.to_thread(orna_releases.format_notes, notes)
+
+
 async def _run_web_search_tool(message, query: str, sources: Optional[list] = None) -> str:
     """Last-resort tool: Orna's structured data (codex + aussiescodex)
     covers stats/facts/drops/effects, but not strategy - a boss's real
@@ -1567,6 +1597,14 @@ _TOOLS_TEXT = (
     "web_search for anything it might plausibly cover, especially a \"how do I beat/kill X\" question (always try "
     "it at least once for those, specifically looking for elemental resistances). Results are matched rows with "
     "their column header attached - read them like a small table. If nothing matches, fall back to web_search.\n"
+    "- releases(action_input=<item/class/mechanic name, English - or empty for the latest notes>): playorna's "
+    "OWN patch notes (the last few months). The codex and the community knowledge base both describe what IS "
+    "and never mention what CHANGED, and the knowledge base is hand-maintained so it can lag a balance patch by "
+    "weeks. Use this whenever the answer depends on CURRENT balance - gear/stat recommendations, \"is X still "
+    "good\", a build question, or any number out of knowledge_search that the user will act on - and mention any "
+    "relevant change in finish(). A note here OVERRIDES the knowledge base, which is fan-maintained; the codex "
+    "itself is official and already current, so this mainly qualifies knowledge_search and class_guide answers. "
+    "Finding nothing is not proof nothing changed - the notes only go back a few months.\n"
     "- web_search(action_input=<English search query>): the open web (via Tavily) - LAST RESORT for what Orna's "
     "own data AND knowledge_search's community reference both genuinely don't cover: boss/monster STRATEGY "
     "(specific tactics, not just resistances - try knowledge_search first for those), community meta discussion, "
@@ -1866,6 +1904,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_open_entry_tool(message, action_input, sources)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
+        if action == "releases":
+            return await _run_releases_tool(message, action_input, sources)
         if action == "web_search":
             return await _run_web_search_tool(message, action_input, sources)
         if action == "calculate":
@@ -2213,11 +2253,24 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     # /update_codex refreshes BOTH data sources after a game patch.
     clear_codex_cache()
 
+    # Patch notes are on their own week-long TTL, and the reason to run this
+    # command at all is "a patch just landed" - refreshing one source and not
+    # the other is exactly the stale mix this command exists to avoid.
+    try:
+        rel = await asyncio.to_thread(orna_releases.refetch_now)
+    except Exception as e:
+        logger.warning("update_codex: releases refetch failed", exc_info=True)
+        rel = {"error": str(e)}
+
     lines = ["✅ Кодекс оновлено:"]
     for cat, count in stats["categories"].items():
         lines.append(f"  {cat}: {count}")
     lines.append(f"stats: {stats['stats_vocab']}, status: {stats['status_vocab']}")
     lines.append("playorna codex cache cleared")
+    if "error" in rel:
+        lines.append(f"патч-ноти: не вдалося оновити ({rel['error']})")
+    else:
+        lines.append(f"патч-ноти: {rel['notes']} (останній: {rel['latest']}, {rel['newest']})")
     await message.reply_text("\n".join(lines))
 
 
