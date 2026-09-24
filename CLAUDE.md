@@ -1641,6 +1641,38 @@ created later the same day, scraping `playorna.com/calendar/`'s live
 event list rather than generating Google Calendar links. Same filename,
 two unrelated histories - `git log --follow` on it will jump between them.
 
+**Telegram CLIPS an inline-button label that doesn't fit, with no
+ellipsis - so a too-narrow button doesn't look truncated, it looks like a
+DIFFERENT value.** Live report 2026-09-24 on the UTC-offset picker
+(`telegram_remind._tz_keyboard`): 27 buttons labelled `UTC-12`…`UTC+14`, 6
+to a row, rendered on a phone as `UTC-1`/`UTC-2` for everything from ±10
+upward, because each button was narrower than its own text. The user read
+it as the picker repeating itself and as "more than 24 buttons of
+nonsense"; there were no duplicates, just different offsets displaying
+identically. That is worse than a cosmetic bug here: `usage_stats.
+set_user_tz` persists the pick and every later reminder reuses it WITHOUT
+asking again, so one clipped mis-tap silently shifted every future reminder
+by hours. Fixed on both axes - the label is the bare offset (`+2`, `-11`,
+≤3 chars instead of 6) and `_TZ_PER_ROW = 4` instead of 6, so each button
+gets roughly double the width for half the text. Correctness beats
+compactness for this keyboard: an extra row costs a scroll, a clipped
+timezone is wrong forever. **When adding any inline keyboard, budget the
+label against the row width** - the existing `_bundle_label` 64-char cap
+guards Telegram's API limit, which is a different thing entirely and does
+nothing about on-screen clipping.
+
+**A silently-persisted choice needs a way to change it.** The same report
+exposed that a saved UTC offset was unreachable afterwards: nothing re-asks,
+`/remind` is gated to `GO_ALLOWED_USER_IDS`, and the guild "remind me"
+buttons that CONSUME the offset are open to everyone - so exactly the users
+who could set it wrong were the ones who couldn't fix it. The confirmation
+now carries a "🔄 Змінити часовий пояс" button
+(`handle_tz_edit_button`/`build_tz_edit_callback_handler`, registered in
+`telegram_bot.py`), which re-opens the picker with a no-op continuation
+since there is no pending action to resume the second time. It checks the
+tapping user matches the id in `callback_data`, so one member can't re-pick
+another's zone from a shared group message.
+
 **Button labels include the material name(s), not just the guild -
 `_bundle_label`.** Live report: asking about 2 materials produced 19
 buttons, but the label was just guild + day-count, so most guild names

@@ -87,9 +87,23 @@ def utc_offset_to_fire_at(target_date: Optional[date], hour: int, minute: int, u
     return datetime.now() + timedelta(seconds=max(delay, 1))
 
 
+# 4 per row, and the label is the bare offset ("+2", "-11") rather than
+# "UTC+2". Live report 2026-09-24: with 6-char labels packed 6 to a row,
+# Telegram shrinks each button below the text width on a phone and CLIPS the
+# label with no ellipsis - "UTC-10", "UTC-11" and "UTC-12" all render as
+# "UTC-1". The user read that as the picker repeating itself; it was actually
+# three different offsets displaying identically, and tapping any of them
+# silently saved a timezone hours away from the intended one (set_user_tz
+# persists it and every later reminder reuses it without asking again).
+# Both halves matter: the short label halves the width needed, and 4 per row
+# roughly doubles what each button gets. Correctness beats compactness here -
+# a clipped timezone is silently wrong forever, an extra row is just a row.
+_TZ_PER_ROW = 4
+
+
 def _tz_keyboard(pending_id: str) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(f"UTC{o:+d}", callback_data=f"remindtz|{pending_id}|{o}") for o in _TZ_OFFSETS]
-    rows = [buttons[i:i + 6] for i in range(0, len(buttons), 6)]
+    buttons = [InlineKeyboardButton(f"{o:+d}", callback_data=f"remindtz|{pending_id}|{o}") for o in _TZ_OFFSETS]
+    rows = [buttons[i:i + _TZ_PER_ROW] for i in range(0, len(buttons), _TZ_PER_ROW)]
     return InlineKeyboardMarkup(rows)
 
 
@@ -106,7 +120,8 @@ async def request_utc_offset(message, user_id: int, on_offset: Callable[[float],
     pending_id = uuid.uuid4().hex[:10]
     _PENDING_TZ[pending_id] = {"user_id": user_id, "on_offset": on_offset}
     await message.reply_text(
-        "Щоб встановити нагадування на конкретний час, оберіть свій часовий пояс (UTC):",
+        "Щоб встановити нагадування на конкретний час, оберіть свій зсув від UTC "
+        "(наприклад, Київ влітку — це +3):",
         reply_markup=_tz_keyboard(pending_id),
     )
 
@@ -128,14 +143,48 @@ async def handle_tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     usage_stats.set_user_tz(pending["user_id"], offset)
     try:
-        await query.edit_message_text(f"✅ Часовий пояс UTC{offset:+g} збережено.")
+        # State the saved value and leave a way to change it. Until 2026-09-24
+        # a mis-tap (see _tz_keyboard - clipped labels made that easy) was
+        # permanent: nothing else in the bot re-asks, and /remind is gated to
+        # the allowlist while the guild "remind me" buttons that consume this
+        # offset are open to everyone.
+        await query.edit_message_text(
+            f"✅ Часовий пояс UTC{offset:+g} збережено.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Змінити часовий пояс", callback_data=f"remindtzedit|{pending['user_id']}")
+            ]]),
+        )
     except TelegramError:
         pass  # e.g. "message not modified" on a double-tap race - harmless
     await pending["on_offset"](offset)
 
 
+async def handle_tz_edit_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Re-open the offset picker for someone who saved the wrong one. The
+    re-pick only updates the stored offset - there is no pending action to
+    resume, unlike the first ask."""
+    query = update.callback_query
+    await query.answer()
+    parts = (query.data or "").split("|")
+    if len(parts) != 2 or parts[0] != "remindtzedit":
+        return
+    user = update.effective_user
+    if not user or str(user.id) != parts[1]:
+        await query.answer("Це чужий вибір.", show_alert=True)
+        return
+
+    async def _noop(_offset: float) -> None:
+        return
+
+    await request_utc_offset(query.message, user.id, _noop)
+
+
 def build_tz_callback_handler() -> CallbackQueryHandler:
     return CallbackQueryHandler(handle_tz_button, pattern=r"^remindtz\|")
+
+
+def build_tz_edit_callback_handler() -> CallbackQueryHandler:
+    return CallbackQueryHandler(handle_tz_edit_button, pattern=r"^remindtzedit\|")
 
 
 def _load() -> dict:
