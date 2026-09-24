@@ -454,10 +454,38 @@ structurally can't recover from.
   product labelled as a percentage; it's ×21.76, i.e. +2076%).
   `_AGGREGATE_RULE` ends with a STACKING CONVENTION paragraph stating
   both rules and requiring finish() to give both forms. The deterministic
-  half: `_run_calculate_tool` detects a `(1 + …)` stacking expression and
-  appends `"[as a stacking bonus: xN total = +M% bonus]"`, so the
+  half: `_run_calculate_tool` appends `"[as a stacking bonus: xN total =
+  +M% bonus]"` to any PURE PRODUCT whose result is >1, so the
   `(product - 1) * 100` step is never done in the model's head — it
-  slipped exactly there (21.76× reported as "+1776%").
+  slipped exactly there, twice: 21.76× reported as "+1776%", and later
+  195.81× reported as "+95.8%". The first version only matched the
+  `(1 + b/100) * …` shape `_AGGREGATE_RULE` asks for and MISSED that
+  second slip, because the model had already converted each bonus to a
+  multiplier itself and wrote `21.757 * 1.25 * 2 * 2 * 1.2 * 1.2 * 1.25`
+  — a perfectly good stacking expression with no `(1 +` in it. A `+` or
+  `-` anywhere means it isn't a pure product, so ordinary arithmetic is
+  left alone. Measured after: three separate totals in one verification
+  set (+2075.7%, +800%, +2076%) all correct, where the run before it
+  produced "+95.8%".
+- **The model sometimes nests `action_input` INSIDE `args`** —
+  `{"action":"calculate","args":{"action_input":"1.575 * 1.65 * …"}}`,
+  seen live 2026-09-24. The expression was right there and usable, but
+  the tool received `""` and spent a whole step replying "calculate needs
+  a numeric expression". `_advance_inner` accepts either placement now.
+  Same class as `ollama_client._from_tool_calls`: the model's decision is
+  correct, it just arrived in the wrong field, so translate rather than
+  reject.
+- **`_AGGREGATE_RULE`'s counting rule** (six items named → six assess
+  observations; an item listed twice is assessed once and counted twice;
+  never state a bonus from your own knowledge; never change how many of
+  an item the user said they have) targets a live run that made ONE
+  assess call and then answered with "4 godforged helmets, 4 godforged
+  outfits" and invented per-item percentages. Prompt-only, so it is a
+  reduction and not a guarantee — same caveat `_CLASS_GUIDE_RULE` carries.
+  Standing measurement: 2 of 3 end-to-end runs answer correctly, against
+  1 of 3 before this round. The boost multipliers themselves are now
+  STABLE across runs (byte-identical `calculate` expressions), where
+  before the header fix they varied 9.0 vs 14.06 vs 15.0.
 - Codex/query dead ends get the same mechanical retries `search_codex`
   always had (trailing-number-strip, space-collapse) plus two added
   2026-09-23: collapsing consecutive duplicated letters, and dropping a
