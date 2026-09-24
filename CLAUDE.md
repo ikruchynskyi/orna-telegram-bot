@@ -1084,9 +1084,13 @@ explicit ask 2026-09-24. What gets cited, and why not everything:
   failed import degrades to "no link" rather than breaking the tool.
 - **`web_search`** cites Tavily's own `sources` list, which
   `telegram_go._tavily_search` already returns as `{title, url}`.
-- **`open_entry`** cites the codex page it READ. A `search_codex` result
-  list is deliberately NOT cited: it only surfaced names, and those results
-  are already tappable in the chat as their own buttons.
+- **`open_entry`** cites the codex page it READ, and **`search_codex`**
+  cites the pages it surfaced - but only the top `_MAX_CITED_PER_SEARCH`
+  (3) of them (`_cite_entries`), because a result LIST is weaker evidence
+  than a page actually read and one loose search can return 50 rows, which
+  would crowd out the sheet/web citations that actually answered the
+  question. Dedupe by URL means the usual search→open_entry pair cites the
+  opened page once, not twice.
 - `_SOURCES` is keyed by sid but kept OUT of `_ORNA_SESSIONS`, which is
   pruned after `SESSION_TTL_SECONDS` (15 min) while a posted answer stays in
   the chat forever - tapping the button an hour later should still work.

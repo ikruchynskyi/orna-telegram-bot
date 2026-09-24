@@ -198,6 +198,22 @@ _SOURCES_MAX = 200
 _MAX_SOURCE_BUTTONS = 8
 
 
+_MAX_CITED_PER_SEARCH = 3
+
+
+def _cite_entries(sources: Optional[list], entries: list) -> None:
+    """Cite the top few codex pages a search surfaced. Capped at
+    _MAX_CITED_PER_SEARCH because a result LIST is weaker evidence than a page
+    open_entry actually read, and one loose search can return 50 rows - all of
+    them would crowd out the sheet/web citations that answered the question."""
+    if sources is None:
+        return
+    for e in entries[:_MAX_CITED_PER_SEARCH]:
+        url = e.get("url") or ""
+        _add_source(sources, e.get("name") or url,
+                    f"https://playorna.com{url}" if url.startswith("/") else url)
+
+
 def _add_source(sources: list, label: str, url: str) -> None:
     """Record one citation, newest last, de-duplicated by URL."""
     if not url or not str(url).startswith(("http://", "https://")):
@@ -448,7 +464,7 @@ def _format_entry(detail: dict) -> str:
     return "\n".join(lines)
 
 
-async def _run_codex_search(message, query: str, lang: str = "en") -> str:
+async def _run_codex_search(message, query: str, lang: str = "en", sources: Optional[list] = None) -> str:
     if not query:
         return "search_codex needs a name in action_input"
     try:
@@ -549,6 +565,7 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> str:
                 parse_mode="HTML",
                 reply_markup=_result_list_keyboard(desc_entries, key),
             )
+            _cite_entries(sources, desc_entries)
             names = "; ".join(f"{e['name']} ({e['url']})" for e in desc_entries[:5])
             return f"{len(desc_entries)} matches by description for {query!r}: {names}"
 
@@ -569,6 +586,7 @@ async def _run_codex_search(message, query: str, lang: str = "en") -> str:
         parse_mode="HTML",
         reply_markup=_result_list_keyboard(results, key),
     )
+    _cite_entries(sources, results)
     names = "; ".join(f"{r.get('name', '?')} ({r.get('url', '')})" for r in results[:5])
     return f"{len(results)} results for {query!r}: {names}"
 
@@ -1836,7 +1854,7 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         if action == "need":
             return await _run_need_tool(message, action_input)
         if action == "search_codex":
-            return await _run_codex_search(message, action_input)
+            return await _run_codex_search(message, action_input, sources=sources)
         if action == "query":
             return await _run_query_tool(
                 message, args.get("conditions") or [], str(args.get("combinator") or "and"),
