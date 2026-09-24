@@ -1235,6 +1235,37 @@ the LLM for genuinely fuzzy natural-language parsing (`telegram_orna.py`'s
 ReAct loop is a good example of leaning on it appropriately once it was
 actually reliable).
 
+**`gpt-oss:20b` answers a "pick one named action" prompt with a NATIVE
+tool call about half the time, even though this repo never declares any
+tools - and that arrives as an EMPTY `content`, not an error.** Measured
+live 2026-09-24 against the real `/orna` system prompt: 11/20 local calls
+came back with `message.content == ""` and the real choice sitting in
+`message.tool_calls` (e.g. `{"name": "knowledge_search", "arguments":
+{"action_input": "Knight Sirus"}}`). This is gpt-oss's Harmony format
+asserting itself: the loop's prompt *is* a tool-choice prompt, so the model
+expresses it the way it was trained to, and Ollama then logs `harmony
+parser: no reverse mapping found for function name` (there is no mapping -
+no tools were sent) and, less often, returns a bare **500** instead. This
+was the real cause behind both the recurring `Ollama returned non-JSON
+content: ''` warnings and the user-visible "Ollama request failed: Server
+error '500'" replies. Two halves, both needed:
+- **The model's decision is correct in these replies, just in the wrong
+  field**, so `ollama_client._from_tool_calls` translates a tool call back
+  into the action dict rather than discarding it. Fixed in `chat_json`, the
+  one function every caller routes through, so `/go` and `telegram_nlp`
+  get it too. `arguments` IS the intended object; when the action name
+  lives in the call's `name` instead, leftover keys are that action's own
+  args and get nested under `"args"` (a `query`'s conditions/category/
+  sort_by arrive flat). Pinned by asserts in `ollama_client._demo()`
+  against the three real shapes - run `python3 ollama_client.py`.
+- **Prompt wording alone cannot close this** (measured: 9/20 → 14/20 with
+  an explicit "you have no callable functions" rule, 17/20 also
+  de-function-ifying the tool bullets - never 20/20), so the rule is in
+  `_orna_system_prompt` as a cheap reduction, not as the fix. After both:
+  **39/40** usable actions across two batches, vs 9/20 before. The residual
+  is Ollama's own 500, which carries no body to translate and is left to
+  the loop's existing retry-once (confirmed recovering it live).
+
 **OCR text needs defensive parsing, not clean regexes.** Real OCR output
 puts junk in front of every offerings row (a misread icon — a stray letter,
 symbol, or even a bare digit) and mangles number formatting inconsistently

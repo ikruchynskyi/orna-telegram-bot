@@ -1558,7 +1558,16 @@ def _orna_system_prompt(user_text: str = "") -> str:
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, unused for query/today>",'
         '"args":{"...only for action \\"query\\", see above..."},"options":["<opt1>","<opt2>"]}. "options" is only '
         "used with action \"ask\". Don't call finish before you have enough information, don't ask more than "
-        "once, and don't repeat a tool call you've already made with the same input."
+        "once, and don't repeat a tool call you've already made with the same input.\n\n"
+        # gpt-oss is a Harmony-format model: "pick one of these named tools"
+        # makes it emit a NATIVE tool call ~half the time, leaving content
+        # empty (Ollama then logs "no reverse mapping found for function name"
+        # and sometimes 500s). Saying this outright measurably cuts that -
+        # 9/20 -> 14/20 clean replies, live 2026-09-24 - but never to zero, so
+        # ollama_client._from_tool_calls translates the stragglers back.
+        "OUTPUT FORMAT - ABSOLUTE: you have NO callable functions and NO tool-calling channel. The names above "
+        "are just allowed string values for the \"action\" field. NEVER emit a function/tool call of any kind - "
+        "reply with the single JSON object described above as ordinary message content."
     )
 
 

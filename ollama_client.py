@@ -78,6 +78,48 @@ def _extract_json(content: str) -> dict:
     return obj
 
 
+def _from_tool_calls(message: dict) -> Optional[dict]:
+    """Recover the intended JSON object from a NATIVE tool call, for a model
+    that answered with one even though no tools were ever declared.
+
+    gpt-oss:20b is a Harmony-format model: asked to pick one of several named
+    actions (which is what /orna's loop prompt is), it emits a real tool call
+    roughly half the time instead of the plain JSON object asked for - content
+    comes back EMPTY and the choice lands in message.tool_calls. Measured live
+    2026-09-24 against the real /orna prompt: 11/20 calls. Ollama logs
+    "harmony parser: no reverse mapping found for function name" (there is no
+    mapping - we declare no tools) and, less often, 500s outright on it.
+
+    The model's decision is CORRECT in these replies, just delivered in the
+    wrong field - so translate rather than discard. Prompt wording alone can't
+    close this (measured: 9/20 -> 17/20 OK, never 20/20); this is the half of
+    the fix that's deterministic. A call Ollama turned into a 500 is
+    unrecoverable here and still falls to the caller's retry.
+
+    `arguments` IS the object the model meant to send. Two real shapes:
+    the whole object inside arguments ({"action":"open_entry",...}), or the
+    action in the call's NAME with only its own args inside
+    ({"name":"knowledge_search","arguments":{"action_input":"Knight Sirus"}}).
+    A leftover key that isn't part of the action schema is that action's own
+    argument (a `query`'s conditions/category/sort_by arrive flat), so it gets
+    nested under "args" where the loop reads it from."""
+    calls = message.get("tool_calls") or []
+    fn = (calls[0].get("function") or {}) if calls else {}
+    args = fn.get("arguments")
+    if not isinstance(args, dict):
+        return None
+    if "action" in args or not fn.get("name"):
+        return dict(args)
+    rest = dict(args)
+    obj = {"action": fn["name"]}
+    for key in ("thought", "action_input", "options", "args"):
+        if key in rest:
+            obj[key] = rest.pop(key)
+    if rest:
+        obj.setdefault("args", rest)
+    return obj
+
+
 async def chat_json(host: str, model: str, messages: list[dict], headers: Optional[dict] = None,
                      timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> dict:
     """POST /api/chat with think:True + format=json, return the parsed
@@ -93,9 +135,14 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
             if resp.status_code == 400 and "multimodal" in resp.text.lower():
                 raise UnsupportedMultimodal(resp.text[:300])
             resp.raise_for_status()
-            content = resp.json().get("message", {}).get("content", "")
+            msg = resp.json().get("message") or {}
+            content = msg.get("content") or ""
     except httpx.HTTPError as e:
         raise OllamaError(f"Ollama request failed: {e}") from e
+    if not content.strip():
+        recovered = _from_tool_calls(msg)
+        if recovered is not None:
+            return recovered
     return _extract_json(content)
 
 
@@ -164,3 +211,38 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
         if drop_images(messages):
             return await chat_json(local_host, local_model, messages, timeout=timeout)
         raise
+
+
+def _demo() -> None:
+    """Pins _from_tool_calls against the three tool-call shapes gpt-oss:20b
+    actually produced against the live /orna prompt (captured 2026-09-24)."""
+    # 1. action in the call's NAME, only that action's own arg inside.
+    got = _from_tool_calls({"tool_calls": [{"function": {
+        "name": "knowledge_search", "arguments": {"action_input": "Knight Sirus"}}}]})
+    assert got == {"action": "knowledge_search", "action_input": "Knight Sirus"}, got
+
+    # 2. the whole action object handed over as `arguments` (name is junk).
+    got = _from_tool_calls({"tool_calls": [{"function": {"name": "output", "arguments": {
+        "thought": "Open the raid entry", "action": "open_entry", "action_input": "/codex/raids/apollyon/"}}}]})
+    assert got["action"] == "open_entry" and got["action_input"] == "/codex/raids/apollyon/", got
+
+    # 3. a `query`'s own args arrive FLAT - they belong under "args", which is
+    #    where the loop reads conditions/category/sort_by from.
+    got = _from_tool_calls({"tool_calls": [{"function": {"name": "query", "arguments": {
+        "category": "items", "combinator": "and", "sort_by": "magic",
+        "conditions": [{"kind": "stat", "field": "magic", "cmp": ">", "value": 250}]}}}]})
+    assert got["action"] == "query", got
+    assert got["args"]["category"] == "items" and got["args"]["sort_by"] == "magic", got
+    assert got["args"]["conditions"][0]["field"] == "magic", got
+    assert "conditions" not in got, got
+
+    # 4. an ordinary reply must NOT be rescued - it goes to _extract_json.
+    assert _from_tool_calls({"content": '{"action":"finish"}'}) is None
+    assert _from_tool_calls({"tool_calls": []}) is None
+    assert _from_tool_calls({"tool_calls": [{"function": {"name": "x", "arguments": "not-a-dict"}}]}) is None
+
+    print("ollama_client: all checks passed")
+
+
+if __name__ == "__main__":
+    _demo()
