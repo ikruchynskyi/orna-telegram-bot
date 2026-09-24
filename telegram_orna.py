@@ -920,6 +920,53 @@ def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
     )
 
 
+def _strip_quality_words(item_name: str) -> str:
+    """`item_name` minus any leading/trailing quality words, or "" if that
+    changes nothing. The vocabulary is the same two tables _parse_quality_spec
+    already accepts, so there is no third list to keep in sync. Only strips at
+    the EDGES - a real codex name could contain one of these words in the
+    middle, and only the edges are where a "<quality> <item>" phrase puts it."""
+    words = item_name.split()
+    quality_words = set(_QUALITY_NAME_TO_PERCENT) | set(_FORGED_LEVELS)
+    while words and words[0].lower().rstrip("%") in quality_words:
+        words.pop(0)
+    while words and words[-1].lower().rstrip("%") in quality_words:
+        words.pop()
+    out = " ".join(words)
+    return out if out and out != item_name else ""
+
+
+def _name_candidates(item_name: str) -> list:
+    """Progressively looser forms of a free-text item name, for when the
+    name as given finds nothing. Two real failure shapes, both live
+    2026-09-24 on one six-item request:
+
+    * the QUALITY is repeated inside the name ("godforged lost helmet") -
+      natural for the model to pass, since that is how the user wrote it,
+      but quality is a separate argument and the codex name is "Lost
+      Helmet";
+    * a trailing word that is not part of the name at all - the user's own
+      qualifier ("arisen terror IN HAND", meaning which slot it is in), or
+      a word the codex spells possessively so the full phrase misses
+      ("court jester outfit" finds nothing, "court jester" finds "Court
+      Jester's Outfit").
+
+    Dropping trailing words covers both, and only ever runs after an exact
+    lookup already came back empty, so it can only turn a dead end into a
+    hit. Capped at 3 drops and never down to a bare single word, since a
+    one-word remainder of a longer name matches far too loosely."""
+    base = _strip_quality_words(item_name) or item_name
+    out = [base] if base != item_name else []
+    words = base.split()
+    for n in range(1, 4):
+        if len(words) - n < 2:
+            break
+        cand = " ".join(words[:-n])
+        if cand != item_name:
+            out.append(cand)
+    return out
+
+
 async def _resolve_aussies_entry(item_name: str):
     """Resolve a free-text item name to (CodexEntry, playorna source url)
     - the exact codex_search-for-the-name + aussiescodex-for-the-stats
@@ -933,6 +980,24 @@ async def _resolve_aussies_entry(item_name: str):
         logger.warning("orna: entry lookup failed for %r", item_name, exc_info=True)
         return None, f"lookup failed for {item_name!r}: {e}"
     results = data.get("results") or []
+    if not results:
+        # Live 2026-09-24: assess dead-ended on EVERY item of a six-item
+        # request because the model passed the user's own wording through as
+        # the name. The loop then fell back to search_codex/open_entry and
+        # eventually answered that the items "were not found" - a failure that
+        # read as the model ignoring its own tools and was really this.
+        # search_codex (the TOOL) has had its own retry ladder for a while;
+        # this resolver, which assess/compare/build_optimize all go through,
+        # had none. See _name_candidates.
+        for cand in _name_candidates(item_name):
+            try:
+                results = (await asyncio.to_thread(codex_search, cand, "en")).get("results") or []
+            except Exception:
+                logger.warning("orna: name retry failed for %r", cand)
+                continue
+            if results:
+                logger.info("orna: resolved %r via looser name %r", item_name, cand)
+                break
     if not results:
         return None, f"no codex entry found for {item_name!r} - try search_codex first to confirm the exact name"
     url = results[0].get("url", "")

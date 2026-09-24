@@ -475,6 +475,33 @@ structurally can't recover from.
   Same class as `ollama_client._from_tool_calls`: the model's decision is
   correct, it just arrived in the wrong field, so translate rather than
   reject.
+- **`_resolve_aussies_entry` had NO name-retry ladder, and that — not the
+  model — was the "it ignores its own tools" failure.** `search_codex` (the
+  tool) has had mechanical retries since 2026-09-23, but the resolver that
+  `assess`/`compare`/`build_optimize` all route through had none, so any
+  name it couldn't match exactly dead-ended. Live: for the request "godforged
+  lost helmet, godforged court jester outfit, godforged arisen terror in
+  hand, …", `assess` failed on EVERY item, the loop fell back to
+  `search_codex`/`open_entry`, and it answered that the items "were not
+  found". Two real shapes, both fixed by `_name_candidates`:
+  - the QUALITY repeated inside the name (`"godforged lost helmet"`) — the
+    natural thing for the model to pass, since it is how the user wrote it,
+    but quality is a separate argument and the codex name is `Lost Helmet`.
+    Stripped via the same `_QUALITY_NAME_TO_PERCENT`/`_FORGED_LEVELS`
+    tables `_parse_quality_spec` already uses, at the EDGES only.
+  - a trailing word that isn't part of the name: the user's own qualifier
+    (`arisen terror IN HAND`, i.e. which slot), or a word the codex spells
+    possessively so the full phrase misses — `codex_search("court jester
+    outfit")` returns 0 while `"court jester"` returns `Court Jester's
+    Outfit`. Dropping trailing words covers both; capped at 3 drops and
+    never down to one word, and it only runs after an exact lookup already
+    came back empty, so it can only turn a dead end into a hit.
+  Verified: all six names from the failing request, spelled exactly as the
+  user typed them, now resolve. **The lesson is the one this file keeps
+  relearning** — "the model is being flaky" was wrong twice in one session
+  (this, and the boost multipliers that turned out to be the header bug
+  above). Check what the tool actually returned for the exact arguments the
+  model sent before concluding the model is at fault.
 - **`_AGGREGATE_RULE`'s counting rule** (six items named → six assess
   observations; an item listed twice is assessed once and counted twice;
   never state a bonus from your own knowledge; never change how many of
