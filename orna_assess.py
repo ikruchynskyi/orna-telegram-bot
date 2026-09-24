@@ -301,7 +301,12 @@ def get_quality_code(quality: int, level: int) -> int:
         return level - 4
     if quality > 170:
         return 6
-    if in_range(quality, 140, 170):
+    # 140-170 inclusive is Legendary; Ornate's floor is 171 (see
+    # _QUALITY_NAME_TO_PERCENT). in_range is [lo, hi), so the upper bound
+    # must be 171, not 170 - otherwise exactly 170 fell through every branch
+    # to the final `return 0` (Broken), mislabeling the item AND scaling its
+    # bonus stats at -90% instead of ~+20%.
+    if in_range(quality, 140, 171):
         return 5
     if in_range(quality, 120, 140):
         return 4
@@ -554,3 +559,27 @@ def get_full_result(inp: AssessInput) -> FullResult:
                 result.stats[slots_key] = base_slots
 
     return result
+
+
+def _demo() -> None:
+    """`python3 orna_assess.py` - pins get_quality_code's tier boundaries,
+    the densest math in this module and the site of a fixed off-by-one at
+    exactly 170. in_range is [lo, hi): 140-170 is Legendary (code 5) and
+    Ornate's floor is 171 (code 6), so the Legendary upper bound must be 171.
+    An edit that drops it back to an exclusive 170 re-opens the gap where 170
+    fell through to Broken(0); this check fails loudly if that happens."""
+    assert get_quality_code(100, 1) == 2
+    assert get_quality_code(139, 1) == 4
+    assert get_quality_code(140, 1) == 5
+    assert get_quality_code(169, 1) == 5
+    assert get_quality_code(170, 1) == 5   # regression guard: was 0 (Broken) before the fix
+    assert get_quality_code(171, 1) == 6
+    assert get_quality_code(200, 1) == 6
+    # level > 10 ignores quality (masterforged/demonforged/godforged = 11/12/13)
+    assert get_quality_code(100, 11) == 7
+    assert get_quality_code(100, 13) == 9
+    print("orna_assess._demo: get_quality_code boundary checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

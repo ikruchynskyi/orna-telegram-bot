@@ -435,6 +435,14 @@ def _harvest_meta(soup: BeautifulSoup) -> _PageMeta:
         "rarity":   r"Rarity\s*:\s*([^\n]+)",
     }
     for attr, pat in en_patterns.items():
+        # Don't clobber a value already parsed from the structured
+        # dl.entry-facts markup - this loose colon-text regex is only a
+        # fallback for when that markup is absent (mirrors the guarded
+        # Ukrainian branch below). Without the guard, stray "Label: value"
+        # text elsewhere on a partially-migrated page could overwrite a
+        # correctly-parsed fact.
+        if getattr(meta, attr, None):
+            continue
         m = re.search(pat, page_text, re.IGNORECASE)
         if m:
             setattr(meta, attr, m.group(1).strip())

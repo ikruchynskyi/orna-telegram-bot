@@ -87,12 +87,23 @@ def _cache_path(name: str) -> Path:
 def _fetch_json(url: str, cache_name: str) -> dict:
     path = _cache_path(cache_name)
     if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL_SECONDS:
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            # A cache file truncated by a crash/kill mid-write (this repo
+            # reloads via launchctl often) would otherwise raise an uncaught
+            # JSONDecodeError on every call until the week-long TTL expires -
+            # treat an unreadable cache as a miss and re-fetch instead.
+            logger.warning("aussies: cache %s unreadable, refetching", cache_name)
     resp = httpx.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     CACHE_DIR.mkdir(exist_ok=True)
-    path.write_text(json.dumps(data))
+    # Atomic write (temp then rename) so a crash mid-write can't leave a
+    # half-written, unparseable cache file behind for the read path above.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(path)
     return data
 
 
@@ -590,12 +601,20 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             # "all_classes", not "nothing" - defensive, not currently
             # load-bearing.
             raw_text = str(raw or "all_classes").strip().lower()
-            matched = target_text in raw_text or raw_text == "all_classes"
-        elif isinstance(raw, bool) or target_text in ("true", "yes", "1", "false", "no", "0"):
+            # bool(target_text) guard matches the other branches: an empty
+            # value must fail closed, not match every record via "" in raw_text.
+            matched = bool(target_text) and (target_text in raw_text or raw_text == "all_classes")
+        elif isinstance(raw, bool) or (raw is None and target_text in ("true", "yes", "1", "false", "no", "0")):
             # boolean-flag fields (exotic/new/hidden/...) are presence-only
             # in the source data - the key exists and is True on a match,
             # and is simply ABSENT (never explicitly False) otherwise - so
-            # "false"/"no" must treat a missing field as a match too.
+            # "false"/"no" must treat a missing field as a match too. The
+            # `raw is None` guard is load-bearing: without it, ANY attr "="
+            # query whose value is 0/1 (e.g. {tier "=" 1}) fell in here and
+            # `raw is True`/`raw is False` (identity, not ==) is always False
+            # for a concrete int like 1, so real tier=0/tier=1 records never
+            # matched (and "!=" matched them all). A concrete value goes to
+            # the scalar branch below; only an absent field is a flag "false".
             if target_text in ("true", "yes", "1"):
                 matched = raw is True
             elif target_text in ("false", "no", "0"):
@@ -614,7 +633,9 @@ def _eval_condition(record: dict, cond: dict) -> bool:
                 norm_items = [str(x).strip().lower().replace(" ", "_") for x in raw]
                 matched = bool(target_text) and any(target_text.replace(" ", "_") in item for item in norm_items)
         else:
-            raw_text = str(raw or "").strip().lower()
+            # `str(raw or "")` would turn a legitimate falsy value (0, 0.0)
+            # into "" and never match {field "=" 0}; guard on None instead.
+            raw_text = ("" if raw is None else str(raw)).strip().lower()
             matched = bool(target_text) and (raw_text == target_text or target_text in raw_text)
         return (not matched) if negate else matched
 
@@ -639,7 +660,9 @@ def query_records(conditions: list, combinator: str = "and", category: Optional[
     (e.g. the 2nd-highest)."""
     if not conditions and not sort_by:
         return []
-    combine = any if combinator == "or" else all
+    # Normalize model-supplied literals - a stray "OR"/"ASC" casing must not
+    # silently flip to the opposite default (and/desc) with no error.
+    combine = any if str(combinator).strip().lower() == "or" else all
     codex = _codex()["main"]
     categories = [category] if category and category in codex else list(codex.keys())
 
@@ -663,7 +686,7 @@ def query_records(conditions: list, combinator: str = "and", category: Optional[
             )))
 
     if sort_by:
-        matched.sort(key=lambda pair: pair[0], reverse=(sort_dir != "asc"))
+        matched.sort(key=lambda pair: pair[0], reverse=(str(sort_dir).strip().lower() != "asc"))
     results = [m for _, m in matched]
     return results[offset:offset + limit]
 

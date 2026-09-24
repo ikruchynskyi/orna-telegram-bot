@@ -89,17 +89,28 @@ def _fuzzy_correct(query: str) -> Optional[str]:
     against the corpus's real vocabulary and substitute the close match.
     Returns None if nothing changed (caller then knows not to re-search)."""
     vocab = _vocab()
-    lower_vocab = {v.lower() for v in vocab}
+    # Match case-INSENSITIVELY, as the docstring's cited sibling
+    # (_resolve_stat_field) does: difflib.SequenceMatcher is case-sensitive,
+    # so a lowercase query word ("sirius") vs a capitalized corpus word
+    # ("Sirus") scores 0.727 (below the 0.75 cutoff) and silently fails to
+    # correct - the exact transliteration case this function exists for.
+    # Lowercase both for scoring (0.909, passes), then substitute the real
+    # original-case corpus spelling.
+    lower_to_orig: dict = {}
+    for v in vocab:
+        lower_to_orig.setdefault(v.lower(), v)
+    lower_vocab = list(lower_to_orig)
     words = query.split()
     corrected = []
     changed = False
     for w in words:
-        if w.lower() in lower_vocab:
+        wl = w.lower()
+        if wl in lower_to_orig:
             corrected.append(w)
             continue
-        close = difflib.get_close_matches(w, vocab, n=1, cutoff=0.75)
+        close = difflib.get_close_matches(wl, lower_vocab, n=1, cutoff=0.75)
         if close:
-            corrected.append(close[0])
+            corrected.append(lower_to_orig[close[0]])
             changed = True
         else:
             corrected.append(w)
