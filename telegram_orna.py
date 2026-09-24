@@ -220,12 +220,16 @@ async def _next_text(resource_query: str) -> Optional[str]:
     for res in values:
         if not res or text not in res[0].lower():
             continue
-        found = True
         guild_dates = [(GUILD_NAMES[i], d) for i, d in enumerate(res[1:]) if i < len(GUILD_NAMES) and d]
         try:
             guild_dates.sort(key=lambda x: datetime.datetime.strptime(x[1], "%B %d"))
         except ValueError:
             continue
+        # Only mark found once we actually have a table to show - setting it
+        # on the name match alone meant an all-unparseable-dates row returned
+        # a header-only, non-None string, so callers treated that as a
+        # successful answer instead of falling through to codex search.
+        found = True
         lines.append(f"<b>{html.escape(res[0])}:</b>")
         lines.append(pre_table([[g, d] for g, d in guild_dates]))
 
@@ -848,7 +852,14 @@ def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
     is_accessory = place == "accessory"
     is_weapon_like = place in ("weapon", "off-hand")
     is_celestial_weapon = rarity == "celestial" and is_weapon_like
-    is_equippable = bool(place) and not is_adornment
+    # Only real equippable gear slots are upgradable. "material" (and
+    # "augment_(...)") are valid `place` values that are NOT gear - the old
+    # `bool(place) and not is_adornment` let a crafting material (place=
+    # "material", e.g. elstone) through as is_upgradable=True, so
+    # get_assess_result returned levels=13 and assess/compare posted a
+    # nonsense "upgrades to lv 13" table with an all-zero adornment row
+    # instead of hitting _run_assess_tool's "not assessable" (levels==0) guard.
+    is_equippable = place in ("head", "torso", "legs", "weapon", "off-hand", "accessory") and not is_adornment
     is_upgradable = is_equippable and not is_accessory
     has_scaling_slots = is_upgradable and "adornment_slots" in stats
     boss_scaling = -1 if is_celestial_weapon else (1 if is_upgradable else 0)
@@ -980,6 +991,12 @@ async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str
     (OrnaCodex's own compare default: effectively "fully forged") since a
     comparison is normally about a build's ceiling, not one specific
     quality - pass quality_spec to compare at a specific one instead."""
+    # A model sometimes emits a bare string instead of a JSON array; without
+    # this, `for n in "Ring"` iterates characters ('R','i',...) and compares
+    # nonsense. Wrap a lone string into a one-item list (which then trips the
+    # "need at least 2" guard cleanly).
+    if isinstance(item_names, str):
+        item_names = [item_names]
     names = [str(n).strip() for n in (item_names or []) if str(n).strip()][:6]
     if len(names) < 2:
         return "compare needs at least 2 item names in args"
@@ -1070,6 +1087,10 @@ async def _run_build_optimize_tool(message, slots: list, stat: str, useable_by: 
         return (f"build_optimize is for stacking bonus stats only - one of {sorted(QUALITY_CODE_BONUS_KEYS)}, "
                 f"got {stat!r}. For a raw combat stat, use query with sort_by instead.")
 
+    # Wrap a lone string ("head") the way compare() does, so a non-array
+    # arg isn't iterated character-by-character into an all-empty result.
+    if isinstance(slots, str):
+        slots = [slots]
     slot_list = [str(s).strip().lower() for s in (slots or []) if str(s).strip()] or \
         ["head", "weapon", "off-hand", "torso", "legs", "accessory", "accessory"]
 
@@ -1728,10 +1749,19 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not (0 <= idx < len(session.ask_options)):
             return
         choice = session.ask_options[idx]
+        # Consume the pending ask right here (no await between the bounds
+        # check above and this clear, so it's atomic on the event loop): a
+        # duplicate callback delivery - Telegram redelivery, or a fast
+        # double-tap racing the keyboard-removal edit below - then fails the
+        # bounds check and no-ops. Without this, resuming the SAME shared,
+        # unlocked OrnaSession twice (concurrent_updates makes the overlap
+        # real) double-appends messages, double-spends steps, and posts
+        # duplicate replies for the rest of the request.
+        session.ask_options = []
         try:
             await query.edit_message_text(f"{query.message.text}\n\n→ {choice}", reply_markup=None)
         except TelegramError:
-            pass  # e.g. double-tapped - harmless, the loop resume below still runs
+            pass  # e.g. keyboard already gone - harmless, the loop resume below still runs
         session.messages.append({"role": "user", "content": f'Observation: user chose "{choice}".'})
         await _advance(key, query.message)
         return
