@@ -15,9 +15,12 @@ telegram_go.py's web search.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from pathlib import Path
 from typing import NamedTuple, Optional
+
+logger = logging.getLogger(__name__)
 
 DATA_PATH = Path(__file__).with_name("orna_knowledge.txt")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
@@ -203,6 +206,33 @@ def _search_words(needle: str, section: str, limit: int) -> str:
     for sec, lines in seen.values():
         out.append(_block(sec, lines))
     return "\n\n".join(out)
+
+
+_SECTION_URLS: Optional[dict] = None
+
+
+def source_url(section_title: str) -> Optional[str]:
+    """The Google Sheet + tab a section was scraped from, for citing it back
+    to the user - or None if the title isn't one we generated.
+
+    Built from orna_scrape_knowledge._TABLES, which is where the ids already
+    live, rather than a second copy here that could drift. That module is a
+    one-off script but importing it is side-effect free (its work is behind
+    `if __name__ == "__main__"`). The key is the section title exactly as the
+    generated file writes it - "<title> (<source note>)" - so this matches
+    Section.title without any extra parsing."""
+    global _SECTION_URLS
+    if _SECTION_URLS is None:
+        try:
+            from orna_scrape_knowledge import _TABLES
+            _SECTION_URLS = {
+                f"{title} ({source})": f"https://docs.google.com/spreadsheets/d/{doc}/edit#gid={gid}"
+                for title, doc, gid, source in _TABLES
+            }
+        except Exception:  # the scraper is optional at runtime - degrade to "no link"
+            logger.warning("orna_knowledge: could not load source URLs", exc_info=True)
+            _SECTION_URLS = {}
+    return _SECTION_URLS.get(section_title)
 
 
 def search(query: str, section: str = "", limit: int = 20) -> str:

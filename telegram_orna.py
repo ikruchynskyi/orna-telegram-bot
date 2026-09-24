@@ -189,6 +189,23 @@ MAX_SESSIONS = 50
 # need since it only ever has one kind of session.
 _STATE: dict[str, dict] = {}
 _STATE_MAX = 200
+# sid -> [(label, url)] for the finish() "Джерела" button. Kept OUT of
+# _ORNA_SESSIONS because that is pruned on SESSION_TTL_SECONDS (15 min) while
+# a posted answer stays in the chat forever - tapping the button an hour later
+# should still work. Same short-id-in-callback_data pattern as _STATE.
+_SOURCES: dict[str, list] = {}
+_SOURCES_MAX = 200
+_MAX_SOURCE_BUTTONS = 8
+
+
+def _add_source(sources: list, label: str, url: str) -> None:
+    """Record one citation, newest last, de-duplicated by URL."""
+    if not url or not str(url).startswith(("http://", "https://")):
+        return
+    if any(u == url for _l, u in sources):
+        return
+    if len(sources) < 24:  # a long research chain shouldn't grow unbounded
+        sources.append((label.strip()[:60] or url, url))
 
 
 def _remember(state: dict) -> str:
@@ -809,12 +826,17 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     return detail
 
 
-async def _run_open_entry_tool(message, url: str) -> str:
+async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None) -> str:
     if not url:
         return "open_entry needs a url in action_input (from a previous observation)"
     detail = await _send_entry(message, {"url": url}, "en")
     if not detail:
         return f"couldn't open {url}"
+    # Cite the pages actually READ. A search_codex result list isn't cited -
+    # it only surfaced names, and those results are already tappable in chat.
+    if sources is not None:
+        _add_source(sources, detail.get("name") or url,
+                    f"https://playorna.com{url}" if url.startswith("/") else url)
     facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or [])[:8])
     digest = f"{detail.get('name')}: {facts}"
     effects = detail.get("effects") or []
@@ -1354,7 +1376,7 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
-async def _run_knowledge_tool(message, query: str) -> str:
+async def _run_knowledge_tool(message, query: str, sources: Optional[list] = None) -> str:
     """Curated community reference (orna_knowledge.txt, see
     orna_scrape_knowledge.py) for exactly the gap web_search exists for -
     most notably per-monster/boss elemental damage resistances/immunities,
@@ -1381,10 +1403,21 @@ async def _run_knowledge_tool(message, query: str) -> str:
     result = await asyncio.to_thread(orna_knowledge.search, query)
     if not result:
         return f"no knowledge-base matches for {query!r} - try web_search instead"
+    # Cite the sheet+tab each matched section came from. search() prefixes
+    # every block with "[<section title>]", and that title is the key
+    # orna_knowledge.source_url resolves, so the citation is per-TAB rather
+    # than one vague "the knowledge base" link.
+    if sources is not None:
+        for line in result.split("\n"):
+            if line.startswith("[") and line.endswith("]"):
+                title = line[1:-1]
+                url = await asyncio.to_thread(orna_knowledge.source_url, title)
+                if url:
+                    _add_source(sources, title, url)
     return result[:3000]
 
 
-async def _run_web_search_tool(message, query: str) -> str:
+async def _run_web_search_tool(message, query: str, sources: Optional[list] = None) -> str:
     """Last-resort tool: Orna's structured data (codex + aussiescodex)
     covers stats/facts/drops/effects, but not strategy - a boss's real
     immunities in practice, community-discovered counters, meta builds,
@@ -1400,6 +1433,9 @@ async def _run_web_search_tool(message, query: str) -> str:
     if not TAVILY_API_KEY:
         return "web_search unavailable: no search API configured"
     data = await _tavily_search(query)
+    if sources is not None:
+        for item in (data.get("sources") or [])[:5]:
+            _add_source(sources, item.get("title") or item.get("url", ""), item.get("url", ""))
     return data["text"][:2000]
 
 
@@ -1763,6 +1799,9 @@ class OrnaSession:
     # the duplicate Telegram card and tells the model outright that it is
     # going in a circle.
     seen_calls: dict = field(default_factory=dict)
+    # (label, url) for everything the answer was actually built from, in the
+    # order it was consulted - surfaced as a "Джерела" button on finish().
+    sources: list = field(default_factory=list)
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -1780,13 +1819,15 @@ def _new_orna_session(messages: list, steps_left: int) -> str:
     return sid
 
 
-async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
+async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None) -> str:
     """Dispatch one tool call. Wrapped in a broad except so a bug in any
     single tool ends that step with an observation the model can react to,
     instead of killing the whole loop (defense in depth alongside
     telegram_bot.py's global error handler - the loop itself should never
     need that safety net to produce a reply)."""
     usage_stats.record_tool_call(action)
+    if sources is None:
+        sources = []
     try:
         if action == "today":
             return await _run_today_tool(message)
@@ -1804,11 +1845,11 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
         if action == "events":
             return await _run_events_tool(message, action_input)
         if action == "open_entry":
-            return await _run_open_entry_tool(message, action_input)
+            return await _run_open_entry_tool(message, action_input, sources)
         if action == "knowledge_search":
-            return await _run_knowledge_tool(message, action_input)
+            return await _run_knowledge_tool(message, action_input, sources)
         if action == "web_search":
-            return await _run_web_search_tool(message, action_input)
+            return await _run_web_search_tool(message, action_input, sources)
         if action == "calculate":
             return await _run_calculate_tool(message, action_input)
         if action == "assess":
@@ -1966,7 +2007,15 @@ async def _advance_inner(sid: str, message) -> None:
             # long-form guide excerpts - full pipe tables) that a plain
             # reply_text was showing that syntax completely literally.
             # Same fix /go already has for its own model-authored replies.
-            await _reply_markdown(message, action_input or "Не вдалося сформувати відповідь.")
+            markup = None
+            if session.sources:
+                if len(_SOURCES) >= _SOURCES_MAX:
+                    _SOURCES.pop(next(iter(_SOURCES)), None)
+                _SOURCES[sid] = list(session.sources)
+                markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")
+                ]])
+            await _reply_markdown(message, action_input or "Не вдалося сформувати відповідь.", reply_markup=markup)
             return
 
         if action == "ask":
@@ -1994,7 +2043,7 @@ async def _advance_inner(sid: str, message) -> None:
                            f"{session.seen_calls[sig]} - it was NOT run again. Stop repeating it: use that "
                            f"result, try a DIFFERENT tool or input, or finish with what you have.")
         else:
-            observation = await _run_tool(message, action, action_input, args)
+            observation = await _run_tool(message, action, action_input, args, session.sources)
             session.seen_calls[sig] = observation
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
@@ -2037,6 +2086,20 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if len(parts) < 4 or parts[0] != "orna":
         return
     kind, key, arg = parts[1], parts[2], parts[3]
+
+    if kind == "src":
+        entries = _SOURCES.get(key)
+        if not entries:
+            await query.message.reply_text("Джерела для цієї відповіді більше недоступні.")
+            return
+        # url= buttons rather than a text list: tappable, and Telegram renders
+        # the destination itself so there's nothing to escape or truncate wrong.
+        rows = [[InlineKeyboardButton(f"{i}. {label}"[:64], url=url)]
+                for i, (label, url) in enumerate(entries[:_MAX_SOURCE_BUTTONS], 1)]
+        more = len(entries) - len(rows)
+        text = "📚 <b>Джерела цієї відповіді</b>" + (f"\n(+{more} не показано)" if more > 0 else "")
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        return
 
     if kind == "ask":
         session = _ORNA_SESSIONS.get(key)

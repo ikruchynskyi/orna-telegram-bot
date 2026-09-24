@@ -1066,6 +1066,31 @@ control flow:
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
 
+### `finish()` carries a "📚 Джерела" button - what the answer was actually built from
+
+Every tool that reads something with a URL appends `(label, url)` to
+`OrnaSession.sources` (`_add_source`, deduped by URL, capped), and `finish()`
+attaches one button when that list is non-empty; tapping it posts the
+citations as `url=` buttons. Modelled on `/go`'s own source links, per
+explicit ask 2026-09-24. What gets cited, and why not everything:
+- **`knowledge_search`** cites the Google Sheet **and tab** each matched
+  section came from, not one vague "the knowledge base" link.
+  `orna_knowledge.source_url` builds that map from
+  `orna_scrape_knowledge._TABLES` (where the ids already live, so there is no
+  second copy to drift); the key is the section title exactly as the
+  generated file writes it, `"<title> (<source note>)"`, which is what
+  `search()` already prefixes each block with. Importing that scraper is
+  side-effect free - its work is behind `if __name__ == "__main__"` - and a
+  failed import degrades to "no link" rather than breaking the tool.
+- **`web_search`** cites Tavily's own `sources` list, which
+  `telegram_go._tavily_search` already returns as `{title, url}`.
+- **`open_entry`** cites the codex page it READ. A `search_codex` result
+  list is deliberately NOT cited: it only surfaced names, and those results
+  are already tappable in the chat as their own buttons.
+- `_SOURCES` is keyed by sid but kept OUT of `_ORNA_SESSIONS`, which is
+  pruned after `SESSION_TTL_SECONDS` (15 min) while a posted answer stays in
+  the chat forever - tapping the button an hour later should still work.
+
 ### `knowledge_search` and `web_search` - the codex genuinely doesn't know everything
 
 Both tools exist for the same gap: playorna's codex + aussiescodex's
