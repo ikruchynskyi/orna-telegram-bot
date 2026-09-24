@@ -58,7 +58,8 @@ from orna_codex import fetch_material_meta
 from orna_proofs import GUILD_PROOFS, base_exchange_rate, proofs_needed
 from orna_sheets import GUILD_NAMES, fetch_sheet_data
 from telegram_nlp import OllamaError, extract_quantities, extract_resources
-from telegram_remind import schedule_reminder
+from telegram_remind import request_utc_offset, schedule_reminder, utc_offset_to_fire_at
+import usage_stats
 
 logger = logging.getLogger(__name__)
 
@@ -396,13 +397,14 @@ async def build_report(
     return blocks, reminder_bundles
 
 
-def _bundle_fire_at(occurrence: datetime.date) -> datetime.datetime:
-    """Fire just after midnight, server-local time, on the occurrence date.
-    Neither the exact daily shop-reset time nor the user's own timezone is
-    known (same ambiguity the old Google Calendar all-day-event design
-    accepted) - this is the closest deterministic approximation of "the day
-    it becomes available" without either piece of information."""
-    return datetime.datetime.combine(occurrence, datetime.time(0, 5))
+def _bundle_fire_at(occurrence: datetime.date, utc_offset: float) -> datetime.datetime:
+    """Fire just after midnight ON THE OCCURRENCE DATE, in the USER's own
+    local time - computed via telegram_remind.utc_offset_to_fire_at from
+    their saved UTC offset (see handle_reminder_button), not the server's.
+    The exact daily shop-reset time still isn't known, so 00:05 stays the
+    closest deterministic approximation of "the day it becomes available"
+    - only WHOSE midnight changed, from server-local to user-local."""
+    return utc_offset_to_fire_at(occurrence, 0, 5, utc_offset)
 
 
 def _bundle_text(bundle: ReminderBundle) -> str:
@@ -426,6 +428,44 @@ def _bundle_label(bundle: ReminderBundle) -> str:
     return label if len(label) <= 64 else label[:63] + "…"
 
 
+async def _finish_bundle_schedule(app, chat_id: int, message_id: int, key: str, idx: int, utc_offset: float,
+                                   notify: bool = False) -> None:
+    """Actually schedule bundle `idx`'s reminder and remove its button -
+    split out from handle_reminder_button so the deferred path (user
+    didn't have a saved UTC offset yet, see request_utc_offset below) can
+    call this same completion logic once the offset comes back on a
+    LATER callback, not the one that started the ask. `notify`: the
+    deferred path has no live callback_query left to toast through by the
+    time this runs, so it sends a small confirmation message instead -
+    the immediate path's own toast (see handle_reminder_button) already
+    covers that case without one."""
+    state = _REMINDER_STATE.get(key)
+    if state is None or idx in state["scheduled"]:
+        return
+    bundles: List[ReminderBundle] = state["bundles"]
+    bundle = bundles[idx]
+    schedule_reminder(app, chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence, utc_offset))
+    state["scheduled"].add(idx)
+
+    # Remove the tapped button rather than leaving it there - there's no
+    # separate confirmation message on the immediate path, so the button
+    # disappearing (a change that stays visible in the chat) IS the
+    # confirmation.
+    remaining_rows = [
+        [InlineKeyboardButton(_bundle_label(b), callback_data=f"needrem|{key}|{i}")]
+        for i, b in enumerate(bundles) if i not in state["scheduled"]
+    ]
+    try:
+        await app.bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id,
+            reply_markup=InlineKeyboardMarkup(remaining_rows) if remaining_rows else None,
+        )
+    except TelegramError:
+        pass  # e.g. "message not modified" on a double-tap race - harmless
+    if notify:
+        await app.bot.send_message(chat_id, "✅ Нагадування встановлено!")
+
+
 async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -438,34 +478,33 @@ async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("Ця сесія застаріла — сформуйте звіт ще раз.", show_alert=True)
         return
     idx = int(idx_str) if idx_str.isdigit() else -1
-    bundles: List[ReminderBundle] = state["bundles"]
-    if not (0 <= idx < len(bundles)):
+    if not (0 <= idx < len(state["bundles"])):
         return
     if idx in state["scheduled"]:
         await query.answer("Вже встановлено.", show_alert=True)
         return
 
-    bundle = bundles[idx]
-    schedule_reminder(
-        context.application, query.message.chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence),
-    )
-    state["scheduled"].add(idx)
-    await query.answer("✅ Нагадування встановлено!")
+    app = context.application
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+    tg_user = update.effective_user
+    user_id = tg_user.id if tg_user else chat_id
 
-    # Remove the tapped button rather than leaving it there - there's no
-    # separate confirmation message, so the button disappearing (a change
-    # that stays visible in the chat, unlike the toast above which is gone
-    # the moment it's dismissed) IS the confirmation.
-    remaining_rows = [
-        [InlineKeyboardButton(_bundle_label(b), callback_data=f"needrem|{key}|{i}")]
-        for i, b in enumerate(bundles) if i not in state["scheduled"]
-    ]
-    try:
-        await query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup(remaining_rows) if remaining_rows else None
-        )
-    except TelegramError:
-        pass  # e.g. "message not modified" on a double-tap race - harmless
+    # The fire time is a specific clock time (00:05 on the occurrence
+    # date) - genuinely timezone-dependent, same as /remind's own HH:MM
+    # form (see telegram_remind.py's module docstring). Ask once, then
+    # usage_stats remembers it for every later reminder this user sets,
+    # here or via /remind.
+    offset = usage_stats.get_user_tz(user_id)
+    if offset is None:
+        async def _on_offset(offset: float) -> None:
+            await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset, notify=True)
+
+        await request_utc_offset(query.message, user_id, _on_offset)
+        return
+
+    await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset)
+    await query.answer("✅ Нагадування встановлено!")
 
 
 def build_reminder_callback_handler() -> CallbackQueryHandler:

@@ -35,6 +35,7 @@ _orna_tools: Counter = Counter()  # keyed by /orna ReAct loop action name
 _user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Counter[command]
 _user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
 _user_log: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{command,text,ts}, ...], newest last
+_user_tz: Dict[str, float] = {}  # user_id str -> UTC offset in hours, from telegram_remind.request_utc_offset
 _since: str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -55,6 +56,7 @@ def _load() -> None:
     _user_names.update(data.get("user_names", {}))
     for uid, log in data.get("user_log", {}).items():
         _user_log[uid] = log
+    _user_tz.update(data.get("user_tz", {}))
     _since = data.get("since", _since)
 
 
@@ -73,6 +75,7 @@ def _save() -> None:
             "user_commands": {uid: dict(c) for uid, c in _user_commands.items()},
             "user_names": _user_names,
             "user_log": _user_log,
+            "user_tz": _user_tz,
         }))
         tmp.replace(_STORE_PATH)
     except OSError:
@@ -148,6 +151,22 @@ def record_tool_call(action: str) -> None:
     how often it runs out of steps) instead of manually digging through
     logs after every live report."""
     _orna_tools[action] += 1
+    _save()
+
+
+def get_user_tz(user_id) -> Optional[float]:
+    """UTC offset in hours (e.g. -5.0, 11.0) the user previously chose via
+    telegram_remind.request_utc_offset, when a reminder needed to resolve
+    an ABSOLUTE clock time ("/remind 18:30 ...", a guild "remind me"
+    button) to an actual moment - None if never asked/answered. A
+    DURATION-based reminder ("/remind 2h ...") never calls this at all,
+    since a relative delay needs no timezone."""
+    v = _user_tz.get(str(user_id))
+    return float(v) if v is not None else None
+
+
+def set_user_tz(user_id, utc_offset: float) -> None:
+    _user_tz[str(user_id)] = float(utc_offset)
     _save()
 
 
