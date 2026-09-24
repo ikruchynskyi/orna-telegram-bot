@@ -1218,13 +1218,30 @@ async def _run_calculate_tool(message, expression: str) -> str:
     if not expression:
         return "calculate needs a numeric expression in action_input"
     out = _calculate(expression)
-    # A stacking expression - the "(1 + b1/100) * (1 + b2/100) * ..." form
-    # _AGGREGATE_RULE tells the model to write - produces a MULTIPLIER, and
-    # the answer the user wants is the percentage (product - 1) * 100. Doing
-    # that one last step in its head is exactly the arithmetic this tool
-    # exists to take away, and it slipped live (21.76x reported as "+1776%",
-    # not +2076%), so hand it over already converted.
-    if "(1 +" in expression or "(1+" in expression:
+    # A pure PRODUCT is a stacking multiplier, and the answer the user wants
+    # is the percentage (product - 1) * 100. Doing that one last step in its
+    # head is exactly the arithmetic this tool exists to take away, and it
+    # has slipped live twice: "x21.76" reported as "+1776%" (not +2076%),
+    # and "x195.81" reported as "+95.8%" (not +19481%).
+    #
+    # Triggering on any product rather than only on the "(1 + b/100) * ..."
+    # shape _AGGREGATE_RULE asks for: that was the first version, and it
+    # MISSED the second slip, because the model had already converted each
+    # bonus to a multiplier itself and wrote "21.757 * 1.25 * 2 * 2 * 1.2 *
+    # 1.2 * 1.25" - a perfectly good stacking expression with no "(1 +" in
+    # it. Requiring value > 1 keeps the note off ordinary shrinking or
+    # non-bonus math; a "+" or "-" anywhere means it isn't a pure product.
+    # ponytail: a plain "2 * 3" still gets the note. It is clearly labelled
+    # and the model can ignore it; tightening this needs to know the caller's
+    # intent, which the expression alone doesn't carry.
+    if "*" in expression and "+" not in expression and "-" not in expression:
+        try:
+            value = float(out.rsplit("=", 1)[-1].strip())
+        except ValueError:
+            return out
+        if value > 1:
+            return f"{out}  [as a stacking bonus: x{value:g} total = +{(value - 1) * 100:g}% bonus]"
+    elif "(1 +" in expression or "(1+" in expression:
         try:
             value = float(out.rsplit("=", 1)[-1].strip())
         except ValueError:
@@ -1579,6 +1596,12 @@ _AGGREGATE_RULE = (
     "Anything else named that is not a codex item (Shrine of Luck, Temple of Wealth, Lucky Silver Coin, ...) is "
     "a knowledge_search lookup - those community tables give a MULTIPLIER (e.g. \"2\" = x2 = +100%), already in "
     "the same stacking form.\n"
+    "DO NOT finish a named-item total until you have an assess OBSERVATION for EVERY item the user listed. Count "
+    "them: if they named six items you need six assess observations (an item listed twice - the same weapon in "
+    "hand and off-hand - is assessed once and counted twice in the calculate expression). Never state an item's "
+    "bonus from your own knowledge of the game, never invent a per-item number, and never change how many of an "
+    "item the user said they have. Live failure: after ONE assess call the answer claimed \"4 godforged helmets, "
+    "4 godforged outfits\" with made-up per-item percentages, none of which was in the request or the data.\n"
     "STACKING CONVENTION - applies to EVERY case above, and both halves get got wrong live: (a) these bonuses "
     "stack MULTIPLICATIVELY, never additively - four +57.5% items are not \"+230%\"; (b) the product you get out "
     "of calculate() is a MULTIPLIER, not a percentage - the bonus percentage is (product - 1) * 100, so a product "
@@ -1844,8 +1867,14 @@ async def _advance_inner(sid: str, message) -> None:
             return
 
         action = step.get("action")
-        action_input = str(step.get("action_input") or "").strip()
         args = step.get("args") if isinstance(step.get("args"), dict) else {}
+        # The model sometimes nests action_input INSIDE args instead of
+        # alongside it (live 2026-09-24: calculate arrived as
+        # {"action":"calculate","args":{"action_input":"1.575 * 1.65 * ..."}}).
+        # The expression was right there and perfectly usable, but the tool
+        # got "" and spent a step answering "calculate needs a numeric
+        # expression". Accept either placement.
+        action_input = str(step.get("action_input") or args.get("action_input") or "").strip()
 
         if action == "finish" or not action:
             usage_stats.record_tool_call("finish")
