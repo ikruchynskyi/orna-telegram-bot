@@ -1101,6 +1101,49 @@ topics. Verified 3/3 across different phrasings (English and Ukrainian)
 after the fix, where the first attempt had already shown it doesn't
 happen reliably on its own.
 
+**`class_guide`'s excerpt is TAB-AWARE, and the model must keep the
+game-mode word - a same-named build in a different tab was a live bug.**
+Live report: `/orna show codex items for raid heretic using omniflask
+build` returned the Early-T10 "Omniflask Raiding" build's gear instead of
+the Raids-tab "Omniflask Weakness" the user meant. Two compounding causes,
+both fixed: (1) the excerpt picker - extracted out of
+`_run_class_guide_tool` into the stdlib-only, unit-tested
+`orna_guides.guide_excerpt` - scored `=== Build ===` headers by plain
+substring and returned only the single top scorer with its `--- Tab ---`
+header stripped, so the query word "raid" matched "Raid**ing**" and beat
+the Raids-tab build. It's now hierarchy-aware: a query word naming a
+`--- Tab ---` ("raid" -> the "Raids" tab) RESTRICTS the search to that
+tab, so it can't collide with a same-named build in another tab, and ties
+(a bare "omniflask") return every top match each prefixed with its tab
+header for the model to pick from. (2) the model kept reducing
+"raid ... omniflask" down to just "omniflask", dropping the disambiguating
+word - the `class_guide` tool description now tells it to keep the
+game-mode/section word (raid/dungeon/tower/early/...) IN its query.
+Verified 5/5 end-to-end (real cloud model) after both, 0/3 before.
+
+**Build/`class_guide` answers must be in the USER's language - they were
+always coming back Ukrainian, even for an English question.** Live report,
+reproduced 3/3: an English "give me build advice for the heretic omniflask
+raid build" answered in Ukrainian. Cause is model-layer: the general
+"reply in the same language the user wrote in" rule was outweighed, for
+this path specifically, by `_CLASS_GUIDE_RULE`'s leading Ukrainian example
+(`"дай пораду по білду для класу thief"`), the prompt's other Ukrainian
+`finish` examples, and the long ENGLISH guide excerpt the model reads
+right before finishing. Softening the prompt (a stronger top-level LANGUAGE
+rule noting the examples are illustrative, plus a LANGUAGE line in
+`_CLASS_GUIDE_RULE`) HELPED but was NOT reliable - re-tested, the exact
+heretic-omniflask-raid question still came back Ukrainian about half the
+time, because counter-instructing against examples the model is also
+imitating is a weak lever. The robust fix is DETERMINISTIC: `_orna_system_
+prompt(user_text)` now detects the script the user actually wrote in
+(`_CYRILLIC_RE` -> "Ukrainian", else "English" - this guild writes only
+those two) and prepends a per-request "CRITICAL LANGUAGE LOCK: ... MUST be
+in <lang>" line, so the required language is stated as fact rather than
+inferred from examples. `handle_orna` passes the request text in (the loop
+harness does too); the prompt-guidance changes stay as reinforcement.
+Verified: English build questions answer in English, Ukrainian ones stay
+Ukrainian.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers
@@ -1201,6 +1244,17 @@ messages as fit under ~3500 chars, splitting on block boundaries so an
 `<a>`/`<b>` tag never gets cut mid-message, with a line-level fallback for a
 single oversized block.
 
+**Reports and codex entries render as aligned `<pre>` monospace tables via
+the one shared `telegram_resources.pre_table`.** Live report: `/orna
+balorite 100` (the `need` tool -> `build_report`) and the codex entry view
+(a button tap -> `_format_entry`) printed space-padded rows WITHOUT a
+`<pre>` wrapper, so Telegram's proportional font collapsed the padding and
+the columns read as ragged text - unlike `/res_today`, whose `<pre>` tables
+line up. `pre_table` (the single definition of that aligned-table style, so
+they can't drift apart) pads each column to its widest RAW cell then
+HTML-escapes (so `<`/`>`/`&` stay safe inside `<pre>`); `build_report`,
+`_format_entry`, `_today_text`, and `_next_text` all go through it.
+
 **Resource reports offer "🔔 remind me" buttons instead of Google Calendar
 links - deliberately in one separate follow-up message, not per-row.**
 `build_report` returns `(blocks, bundles)`: the text blocks as before, plus
@@ -1260,6 +1314,36 @@ on the same day, e.g. both landing at "Towers" the same day become one
 button naming both) into the button text, truncated to 64 chars as a
 safety cap for an unusually long combination.
 
+**A full-codebase review (2026-09-24) fixed a cluster of "fuzzy-edge" bugs -
+the recurring PATTERNS are catalogued in the skill (see below), since this
+bot is glue over fuzzy inputs (LLM tool args, OCR, transliterated names,
+live caches) and the "obvious" code was wrong at the fuzzy edge.** Each was
+reproduced deterministically before the fix: `orna_assess.get_quality_code`
+returned Broken for a quality of exactly 170 (`in_range` is `[lo, hi)`; 170
+is the top of Legendary) - and 223 lines of genuinely-dead code were then
+removed from that module (`get_full_result`/`make_input`/`CodexEntry.
+from_dict`, plus `get_assess_result`'s unreachable observed-stat branch and
+its helpers). `orna_aussies._eval_condition`'s attr kind mishandled
+`{tier "=" 0/1}` (a bool-flag branch hijacked value 0/1, and
+`str(raw or "")` collapsed a real 0) and matched every record on an empty
+`useable_by`. `orna_knowledge`/`telegram_offerings` fuzzy matches were
+case-sensitive. `orna_codex`'s English regex fallback could clobber
+correctly-parsed facts, and its `lru_cache` (no TTL, dead `clear_cache`) is
+now cleared by `/update_codex` so codex stats don't stay stale after a game
+patch until restart. `telegram_orna` treated a `place:"material"` record as
+upgradable gear (assess/compare posted a nonsense upgrade table), iterated
+a bare-string `items`/`slots` arg character-by-character, returned a
+header-only false "success" from `_next_text`, and had no idempotency guard
+on the ask-callback (a double-tap double-spent the shared session).
+`telegram_go._calculate` ran unbounded `pow` on the event loop (capped),
+`_markdown_to_html` garbled `*`-bullets and intraword underscores and
+double-wrapped bold headings, and `ollama_client.chat_json_with_fallback`
+skipped the local fallback when a post-image-drop cloud retry failed.
+`telegram_resources._next_occurrence` silently dropped a "February 29"
+forecast date (year-1900 non-leap parse). See
+`.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
+the ten patterns these cluster into.
+
 ## Verifying changes
 
 There's no test suite. The working pattern used throughout development:
@@ -1312,3 +1396,22 @@ an empty observation) without needing a live chat to test against. Same
 `orna-telegram-bot/telegrambot_error.log` reload-and-check step afterward,
 watching for the `orna:`-prefixed step logs mirroring `/go`'s own
 `go:`-prefixed ones.
+
+**This whole no-mocks method is packaged as the `verifying-orna-changes`
+skill** (`.claude/skills/verifying-orna-changes/`), so it doesn't have to be
+re-derived each time. It carries: an ordered procedure (establish
+ground-truth from the source sheet/codex -> deterministic pure-function
+repro -> real-model end-to-end repro -> multi-run verification, because the
+model is non-deterministic so one green run proves nothing); a ready-to-run
+`scripts/orna_loop_harness.py` that drives the real `/orna` loop for a given
+request via a `FakeMessage` and prints the ACTION trace + every reply
+(`Q="balor sword" N=5 python3
+.claude/skills/verifying-orna-changes/scripts/orna_loop_harness.py`,
+`FORCE_LOCAL=1` for local-only, secrets read only from the environment);
+`references/common-pitfalls.md`, the ten recurring bug shapes the
+full-codebase review above clustered into (case-insensitive matching,
+falsy-value collapse, unvalidated LLM args, boundary math, event-loop
+blocking, lossy-query retrieval, cache staleness, double-delivered
+callbacks, regex ordering, fixing the shared function not the symptom); and
+`evals/trigger-evals.json` for re-tuning the skill's own triggering. Reach
+for it - and its harness - when writing or debugging any bot change.
