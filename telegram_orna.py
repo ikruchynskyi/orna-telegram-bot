@@ -740,11 +740,11 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     buttons = _section_buttons(sections, key)
 
     # playorna urls are always "/codex/<category>/<id>/" - reuse that to
-    # link an "Assess" button to aussiescodex.com's calculator for the
+    # link an "Aussie Codex" button to aussiescodex.com's calculator for the
     # same record, when it has a page (only 4 of 9 categories do).
     parts = [p for p in url.split("/") if p]
     if len(parts) >= 3 and parts[0] == "codex" and has_aussies_page(parts[1]):
-        buttons.append(InlineKeyboardButton("📊 Assess", url=build_aussies_url(parts[1], parts[2])))
+        buttons.append(InlineKeyboardButton("📊 Aussie Codex", url=build_aussies_url(parts[1], parts[2])))
 
     rows = _pack_buttons(buttons)
 
