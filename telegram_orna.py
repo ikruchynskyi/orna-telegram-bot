@@ -74,7 +74,7 @@ import orna_towers
 from orna_assess import (
     AssessInput, CodexEntry, QUALITY_CODE_BONUS_KEYS, get_assess_result, get_quality_bonus, get_quality_code,
 )
-from orna_codex import codex_search, fetch_codex_json
+from orna_codex import clear_cache as clear_codex_cache, codex_search, fetch_codex_json
 from telegram_assess import _format_response
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
 from telegram_go import (
@@ -1827,10 +1827,18 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
         await message.reply_text(f"Не вдалося оновити: {e}")
         return
 
+    # playorna's codex is cached in-process via lru_cache with no TTL, so
+    # without this it kept serving pre-patch stats/tiers (assess, proof
+    # pricing) until a full restart - clear_cache() had no caller at all.
+    # This maintenance command is the natural place to drop it too, so one
+    # /update_codex refreshes BOTH data sources after a game patch.
+    clear_codex_cache()
+
     lines = ["✅ Кодекс оновлено:"]
     for cat, count in stats["categories"].items():
         lines.append(f"  {cat}: {count}")
     lines.append(f"stats: {stats['stats_vocab']}, status: {stats['status_vocab']}")
+    lines.append("playorna codex cache cleared")
     await message.reply_text("\n".join(lines))
 
 
