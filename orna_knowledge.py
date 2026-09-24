@@ -41,6 +41,27 @@ def _looks_like_header(line: str) -> bool:
     parts = line.split(" | ")
     if len(parts) < 3:
         return False
+    # The FIRST segment may not be a sentence. Live bug 2026-09-24: the
+    # "Gear XP/Orn/Gold Boosts" section's real header is "Item | Tier | Type
+    # | Exp | Orns | Gold | Luck | ...", but the line above it is "All values
+    # are multiplicators and stack with each other | 0.1 | 1 | 1 | 1.1 |
+    # ...", whose 9-word first segment is dragged under the average by the
+    # ten bare numbers after it. That prose line won, so every answer built
+    # on this table had UNLABELLED columns and the model guessed which one
+    # was Orns - live, two runs of one request read the same rows as 1.2 and
+    # as 2 for Temple of Wealth (Orns is 1.2; the 2 it grabbed isn't in that
+    # row at all) and as 1.2 and 1.1 for Vulcan's Brew (1.2), landing on
+    # totals of x195.81 and x299.16 for the same question.
+    # Testing the first segment specifically, rather than every segment or a
+    # character cap: a header's first cell is the row-label column's NAME
+    # ("Item", "Type", "Members", "Tier & Rarity") and is never a sentence,
+    # while a prose line-in puts its sentence exactly there. Both stricter
+    # rules also rejected the Proofs section's genuine header, which carries
+    # a stray spreadsheet note ("Price Formulae, for those interested:") in
+    # its LAST cell and whose emoji labels ("👺 Anguish") are long in len()
+    # terms while still being ordinary two-word labels.
+    if len(parts[0].split()) > 4:
+        return False
     return sum(len(p) for p in parts) / len(parts) <= 15
 
 
@@ -117,6 +138,15 @@ def _fuzzy_correct(query: str) -> Optional[str]:
     return " ".join(corrected) if changed else None
 
 
+def _block(sec, shown: list) -> str:
+    """One section's result block: title, its column header (once), rows."""
+    block = [f"[{sec.title}]"]
+    if sec.header and sec.header not in shown:
+        block.append(sec.header)
+    block.extend(shown)
+    return "\n".join(block)
+
+
 def _search_once(needle: str, section: str, limit: int) -> str:
     out = []
     matched_total = 0
@@ -127,14 +157,51 @@ def _search_once(needle: str, section: str, limit: int) -> str:
         if not hits:
             continue
         shown = hits[:max(1, limit - matched_total)]
-        block = [f"[{sec.title}]"]
-        if sec.header and sec.header not in shown:
-            block.append(sec.header)
-        block.extend(shown)
-        out.append("\n".join(block))
+        out.append(_block(sec, shown))
         matched_total += len(shown)
         if matched_total >= limit:
             break
+    return "\n\n".join(out)
+
+
+def _search_words(needle: str, section: str, limit: int) -> str:
+    """Rank lines by how many DISTINCT query words they contain, for a query
+    that names SEVERAL things at once.
+
+    _search_once needs the whole query as one substring, so a combined query
+    can only match a line containing every subject - i.e. nothing. Live bug
+    2026-09-24: knowledge_search("Shrine of Luck Lucky Silver Coin Temple of
+    Wealth Volcan's Brew") returned empty, the loop was told "not in the
+    knowledge base", and it invented the multipliers instead (two runs of one
+    request answered x195.81 and x305.80 for the same question). An earlier
+    fix split the query on ","/"and"/"та", which worked until the model wrote
+    the same list space-separated with no delimiter at all - hence scoring
+    words, which needs no delimiter and covers both.
+
+    Words shorter than 3 chars are dropped so "of"/"a" can't match every row.
+    A line needs >= 2 distinct query words to count, which is what keeps a
+    single shared word from dragging in the whole corpus."""
+    words = {w for w in _WORD_RE.findall(needle.lower()) if len(w) >= 3}
+    if len(words) < 2:
+        return ""
+    scored = []
+    for order, sec in enumerate(_load()):
+        if section and section.strip().lower() not in sec.title.lower():
+            continue
+        for line in sec.lines:
+            low = line.lower()
+            score = sum(1 for w in words if w in low)
+            if score >= 2:
+                scored.append((score, order, sec, line))
+    if not scored:
+        return ""
+    scored.sort(key=lambda t: -t[0])
+    keep = scored[:limit]
+    out, seen = [], {}
+    for _, order, sec, line in sorted(keep, key=lambda t: t[1]):
+        seen.setdefault(id(sec), (sec, []))[1].append(line)
+    for sec, lines in seen.values():
+        out.append(_block(sec, lines))
     return "\n\n".join(out)
 
 
@@ -158,4 +225,52 @@ def search(query: str, section: str = "", limit: int = 20) -> str:
     corrected = _fuzzy_correct(query)
     if corrected:
         result = _search_once(corrected.lower(), section, limit)
-    return result
+        if result:
+            return result
+    # Last resort: score by shared words, for a query naming several things
+    # at once (no single line can contain all of them). See _search_words.
+    return _search_words(corrected or query, section, limit)
+
+
+def _demo() -> None:
+    """Pins _looks_like_header against the two lines that actually fight
+    over the "Gear XP/Orn/Gold Boosts" section (see that function), plus
+    the Proofs header a stricter rule kept rejecting. Run:
+    `python3 orna_knowledge.py`."""
+    real = "Item | Tier | Type | Exp | Orns | Gold | Luck | Spawn | View | BASE | Broken"
+    prose = "All values are multiplicators and stack with each other | 0.1 | 1 | 1 | 1.1 | 1.15"
+    assert _looks_like_header(real), "real column header must be recognised"
+    assert not _looks_like_header(prose), "prose line-in must NOT win the header slot"
+    assert not _looks_like_header("Some prose without any pipes at all")
+
+    # The Proofs section's real header is the case a stricter rule kept
+    # rejecting (emoji labels, plus a stray sheet note in its LAST cell) -
+    # assert against the live line rather than an abbreviated copy, whose
+    # different segment count changes the average-length test.
+    proofs = next(s for s in _load() if s.title.startswith("Proofs"))
+    assert proofs.header.startswith("Tier & Rarity | Material |"), proofs.header[:80]
+
+    # Every section must resolve to a header whose first cell is a label.
+    for sec in _load():
+        if sec.header:
+            assert len(sec.header.split(" | ")[0].split()) <= 4, (sec.title, sec.header[:60])
+
+    # The live regression: Orns is a NAMED column now, not the 5th unlabelled one.
+    hit = search("Temple of Wealth", limit=3)
+    assert "| Orns |" in hit, hit
+    assert "Temple of Wealth | - | Kingdom Research | - | 1.2" in hit, hit
+
+    # A multi-subject query must find every subject, with NO delimiter to
+    # split on, and across a spelling the corpus doesn't use ("Volcan's" ->
+    # "Vulcan's"). This returned "" before _search_words existed.
+    multi = search("Shrine of Luck Lucky Silver Coin Temple of Wealth Volcan's Brew", limit=8)
+    for row in ("Lucky Silver Coin | 4", "Vulcan's Brew | 6", "Shrine of Luck | -", "Temple of Wealth | -"):
+        assert row in multi, (row, multi[:300])
+    assert "| Orns |" in multi, multi[:300]
+    # ...and a single-subject query must still take the exact-substring path.
+    assert "Knight Sirus" in search("Knight Sirus", limit=3)
+    print("orna_knowledge: all checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

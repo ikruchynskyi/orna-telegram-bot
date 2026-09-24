@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -41,6 +42,26 @@ OLLAMA_CLOUD_HOST = "https://ollama.com"
 # read=120s: the local models this falls back to are slow on a long
 # context, and cutting one off mid-generation wastes the whole call.
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
+
+
+# Circuit breaker for the cloud leg. When every call tries cloud first (which
+# is what telegram_orna's loop does now), a cloud outage costs a FULL cloud
+# timeout on every single step before the local fallback even starts - a
+# 16-step /orna request pays 16 x 45s of pure waiting and blows its whole
+# wall-clock budget without doing any work. Live outage 2026-09-24: Ollama
+# Cloud started returning ReadTimeout (an httpx error whose str() is empty,
+# which is why the log line reads "Ollama request failed: " with nothing after
+# it) and the bot went silent from the user's side. One failure now parks the
+# cloud leg for CLOUD_COOLDOWN_SECONDS so the rest of that request - and other
+# requests in the same window - go straight to local at full speed; the next
+# call after the cooldown probes cloud again, and any success clears it.
+CLOUD_COOLDOWN_SECONDS = 300
+_cloud_down_until = 0.0
+
+
+def cloud_is_parked() -> bool:
+    """Whether the cloud leg is currently skipped (see CLOUD_COOLDOWN_SECONDS)."""
+    return time.monotonic() < _cloud_down_until
 
 
 class OllamaError(RuntimeError):
@@ -208,16 +229,24 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
     # gives up and hands over quickly, and local long, since the local model is
     # genuinely slower and is the last resort - cutting it off produces nothing
     # at all. Defaults to one deadline for both, which is what /go passes.
+    global _cloud_down_until
     local_timeout = local_timeout or timeout
     cloud_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if cloud_is_parked():
+        # Cloud failed recently - don't pay its timeout again yet.
+        return await _local_leg(local_host, local_model, messages, local_timeout, tools)
     try:
-        return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
+        result = await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
+        _cloud_down_until = 0.0
+        return result
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", cloud_model)
         if not drop_images(messages):
             raise
         try:
-            return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
+            result = await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
+            _cloud_down_until = 0.0
+            return result
         except OllamaError as e:
             # The post-image-drop retry can still fail for an ordinary
             # transient reason (rate limit, network). Fall through to the
@@ -225,11 +254,19 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
             # this retry was a bare await inside the multimodal handler, so
             # its OllamaError bypassed local entirely.
             logger.warning("ollama_client: cloud retry after image-drop failed (%s), falling back to local", e)
+            _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
     except OllamaError as e:
-        logger.warning("ollama_client: Ollama Cloud unavailable (%s), falling back to local Ollama", e)
+        _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
+        logger.warning("ollama_client: Ollama Cloud unavailable (%s), skipping it for %ds", e, CLOUD_COOLDOWN_SECONDS)
 
-    # Local fallback - reached from a cloud OllamaError (first call OR the
-    # post-image-drop retry). Same drop-image-and-retry-once shape.
+    return await _local_leg(local_host, local_model, messages, local_timeout, tools)
+
+
+async def _local_leg(local_host: str, local_model: str, messages: list[dict],
+                     local_timeout: httpx.Timeout, tools: Optional[list]) -> dict:
+    """The local half of chat_json_with_fallback, with its own
+    drop-image-and-retry-once. Separate so the parked-cloud path can reach
+    it without going through the cloud attempt first."""
     try:
         return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
     except UnsupportedMultimodal:

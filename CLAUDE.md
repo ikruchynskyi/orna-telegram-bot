@@ -309,6 +309,24 @@ structurally can't recover from.
   wall-clock - and once `/orna` started ending on `LOOP_TIMEOUT_SECONDS`
   rather than on the step budget (see the assess notes below), wall-clock
   became the scarce resource, not cloud quota.
+- **Cloud-first needs a circuit breaker, and this was learned the hard
+  way within an hour of shipping it** (`ollama_client.CLOUD_COOLDOWN_
+  SECONDS`, `cloud_is_parked()`). When every step tries cloud first, a
+  cloud OUTAGE costs a full `STEP_MODEL_TIMEOUT` on every single step
+  before the local fallback even starts — a 16-step request pays 16×45s of
+  pure waiting and blows its whole wall-clock budget having done no work.
+  Live 2026-09-24, reported as "the bot doesn't respond": Ollama Cloud
+  started returning `ReadTimeout`, whose `str()` is EMPTY — which is why
+  the log line reads `Ollama Cloud unavailable (Ollama request failed: )`
+  with nothing after the colon. That empty parenthetical is the signature
+  of a cloud timeout, not of a mysterious error with no message. One
+  failure now parks the cloud leg for 300s so the rest of that request and
+  any concurrent one go straight to local at full speed; the first call
+  after the cooldown probes cloud again and any success clears the park.
+  Lives in `ollama_client` rather than `telegram_orna` so `/go` gets it
+  too — it has the same cloud-first shape. Diagnose a suspected outage
+  with a direct `POST https://ollama.com/api/chat` and watch the wall
+  clock: a real outage returns nothing for the full timeout.
 - `LOOP_TIMEOUT_SECONDS = 300` — a hard wall-clock ceiling on the whole
   request (`asyncio.wait_for` around the loop), regardless of step count.
   This is the actual guarantee the loop always replies within a bounded
@@ -381,19 +399,52 @@ structurally can't recover from.
   lookup — it's `assess` once per named item, then `calculate`. Verified
   live 3/3 that the loop calls `assess` per item after this, where before
   it used `search_codex`/`open_entry` base values 0/1.
-- **`knowledge_search` substring-matches the corpus, so one query naming
-  several subjects matches NOTHING — `_run_knowledge_tool` splits on a
-  miss.** Live report: `knowledge_search("Shrine of Luck, Lucky Silver
+- **`orna_knowledge.search` was prefixing the WRONG line as the column
+  header, so every number read out of the boosts table was a guess.**
+  `_looks_like_header` takes the first `" | "`-split line whose segments
+  average ≤15 chars. In the "Gear XP/Orn/Gold Boosts" section that matched
+  `All values are multiplicators and stack with each other | 0.1 | 1 | 1 |
+  1.1 | …` — a prose sentence whose 9-word first cell is dragged under the
+  average by the ten bare numbers after it — one line ABOVE the genuine
+  header `Item | Tier | Type | Exp | Orns | Gold | Luck | …`. The model
+  therefore saw `Temple of Wealth | - | Kingdom Research | - | 1.2 | 1.2 |
+  …` with no column names and had to guess which cell was Orns. Live, two
+  runs of the same request read those rows differently (1.2 vs 2 for Temple
+  of Wealth, 1.2 vs 1.1 for Vulcan's Brew) and answered ×195.81 and ×299.16
+  for the same question; ×195.81 is correct. The fix rejects a candidate
+  whose FIRST cell is a sentence (>4 words): a header's first cell is the
+  row-label column's name (`Item`, `Type`, `Members`, `Tier & Rarity`) and
+  is never prose, while a prose line-in puts its sentence exactly there.
+  Two stricter rules were tried and reverted — "no cell may exceed 25
+  chars" and "no cell may exceed 4 words" both also rejected the Proofs
+  section's genuine header, which carries emoji labels (`👺 Anguish`, long
+  in `len()` terms) and a stray sheet note (`Price Formulae, for those
+  interested:`) in its LAST cell. Checked against all 16 sections before
+  and after: only the intended one changed. `python3 orna_knowledge.py`
+  now pins this.
+- **The corpus spells it `Vulcan's Brew`, the players write "Volcan's
+  Brew"** — `search`'s fuzzy-correction pass does bridge that, but a
+  direct `grep` for "Volcan" finds nothing, so don't conclude from a grep
+  alone that something is absent from this corpus.
+- **`orna_knowledge.search` needs the WHOLE query as one substring, so a
+  query naming several subjects matches NOTHING — `_search_words` is the
+  fallback.** Live report: `knowledge_search("Shrine of Luck, Lucky Silver
   Coin, Temple of Wealth, Volcan's Brew orn")` returned empty and the
   answer said none of them were in the data, while each name on its own
-  returns its exact row (`Shrine of Luck | - | World Shrine | - | 2 |
-  ...`). On an empty result the tool now splits the query on
-  `,`/`;`/`/`/`and`/`та` (`_split_subjects` — deliberately NOT a bare
-  Ukrainian "і", one letter hits inside ordinary names), searches each
-  subject, and returns the found blocks plus an explicit list of which
-  subjects genuinely have no match. Fixed in the tool rather than the
-  prompt because the model batching related lookups into one query is
-  reasonable behavior, not a mistake to instruct away.
+  returns its exact row. First fix split the query on
+  `,`/`;`/`/`/`and`/`та` in `telegram_orna`; that held until the model
+  wrote **the same list space-separated with no delimiter at all**, which
+  no splitter can help with — live again, and that run invented the
+  multipliers and answered ×305.80. Replaced (splitter deleted) by scoring
+  in `orna_knowledge` itself: rank lines by how many DISTINCT query words
+  they contain, ≥2 to count, words under 3 chars dropped so "of"/"a" can't
+  match every row. It needs no delimiter, so it covers the comma form, the
+  "and" form and the bare-space form with one mechanism, it runs after the
+  existing fuzzy-correction pass (so "Volcan's" still reaches "Vulcan's"),
+  and it fixes every caller rather than one tool. Verified: the exact
+  space-separated query now returns all four subjects with the column
+  header attached; single-subject queries still take the exact-substring
+  path unchanged. Pinned in `python3 orna_knowledge.py`.
 - **Bonus stacking is multiplicative and the product is a MULTIPLIER, not
   a percentage — both halves were got wrong live, in the same session.**
   `build_optimize` has always been the canonical implementation

@@ -1263,21 +1263,6 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
-# "," / ";" / "/" / "and" / "та" between subjects. Deliberately NOT a bare
-# Ukrainian "і" - one letter is far too easy to hit inside an ordinary name.
-_SUBJECT_SPLIT_RE = re.compile(r"\s*(?:,|;|/|\band\b|\bта\b)\s*", re.I)
-
-
-def _split_subjects(query: str) -> list:
-    """Split a query naming SEVERAL things into the individual things, or
-    [] if it only names one. See _run_knowledge_tool for why: the corpus
-    is substring-searched, so a combined query can only match a line that
-    contains every subject at once - i.e. nothing."""
-    parts = [p.strip(" .\u2019'\"") for p in _SUBJECT_SPLIT_RE.split(query)]
-    parts = [p for p in parts if len(p) > 2]
-    return parts if len(parts) > 1 else []
-
-
 async def _run_knowledge_tool(message, query: str) -> str:
     """Curated community reference (orna_knowledge.txt, see
     orna_scrape_knowledge.py) for exactly the gap web_search exists for -
@@ -1298,20 +1283,11 @@ async def _run_knowledge_tool(message, query: str) -> str:
     # and a fuzzy-correction miss runs difflib over a ~3500-word
     # vocabulary; individually fast, but any blocking call on the event
     # loop stalls every other chat's request too, not just this one.
+    # A query naming several things at once is handled inside
+    # orna_knowledge.search now (its word-scoring fallback) rather than by
+    # splitting on punctuation here - the model writes those lists with
+    # commas, with "and", or with nothing at all between them.
     result = await asyncio.to_thread(orna_knowledge.search, query)
-    if not result and (parts := _split_subjects(query)):
-        # The corpus is searched as a SUBSTRING, so a query naming several
-        # things at once can only match a line containing all of them - i.e.
-        # nothing. Live report 2026-09-24: knowledge_search("Shrine of Luck,
-        # Lucky Silver Coin, Temple of Wealth, Volcan's Brew orn") returned
-        # empty and the answer said none of them were in the data, while each
-        # name searched on its own returns its exact row. Splitting here fixes
-        # it for every caller instead of hoping the model asks one at a time.
-        found = [(part, r) for part in parts if (r := await asyncio.to_thread(orna_knowledge.search, part))]
-        if found:
-            missing = [p for p in parts if p not in {f[0] for f in found}]
-            note = f" No knowledge-base match for: {', '.join(missing)}." if missing else ""
-            return ("\n\n".join(f"[{part}]\n{r}" for part, r in found)[:3000] + note)
     if not result:
         return f"no knowledge-base matches for {query!r} - try web_search instead"
     return result[:3000]
