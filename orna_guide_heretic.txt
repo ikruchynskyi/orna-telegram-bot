@@ -64,261 +64,742 @@ The Greatbow is a fun addition to the arsenal and works great with Trevelyan Cha
 Early Tier 10 Builds
 As a fresh Heretic, it's time to use your tools effectively! These builds are very abstract - focus on the Priorities to pick gear that you have that works well!
 TRUE | New Build? | FALSE | New Build? | FALSE | New Build? | FALSE | New Build? | FALSE | New Build?
-Build Name | Omniflask Raiding | Dual/Tri Element Raids
-Priorities | Ward, then defensive stats, then flask charge. | Elemental Damage Exploit, Elemental Damage (Only Faction elements), high magic
-Notes | Focuses on surviving long enough to dish out large damage with Omniflask. Charges with the triple element spells. | Until you unlock Ultima, this is a surprisingly effective raiding build
-Recommended Lvl | 230
-Video Link
-Class | Heretic | Heretic | Heretic | Heretic | Heretic | Heretic
-Spec | Maji | Oracle | Oracle | Oracle | Oracle | Oracle
-Weapon | Arisen Kaladanda | Beguiled Staff X
-Best Magic Staff | Beguiled Staff Y
-Weapon Adornments | 2% Ward Jewels or Blackened Eyes | Heretic's Jewel, Blackened Eyes of Kerberos
-Offhand | Arisen Witch's Scroll | Beguiled Staff X
-Best Ward Shield | Beguiled Staff Y
-Headpiece | Baldr Hood | Arisen Aaru Hood
-Best Ward/Defensive Helm | Fey Menja Hood
-Armor | Fey Yeti Coat | Heretic Robe
-Best Ward/Defensive Chest | Aarisen Aaru Robe
-Legwear | Baldr Boots | Fallen Sky Shoes
-Best Ward/Defensive Boots
-Armor Adornments | 2% Ward Jewels | Azure Pinions, Moondust
-Accessory 1 | Arisen Arch-Gadget | Arisen Ring
-Status Immunities | Nagganeen's Belt
-Accessory 2 | Briny Pendant | Arisen Ring
-Status Immunities | Nagganeen's Belt
-Amity | 20% Weakness Exploit | Faction Ele + 20%
-+% Element Dmg | Other Faction + 20%
-Amity 2 | Faction Ele +20%
-Other Faction + 20%
-Pet | Lotan, Coiled One | Ymir Ampthitere
-Anubis | Quetzalcoatl
-Spells | Omniflask | Faction Omnimancy Skills
-Golem's Fortitude | Alignment Sigil Flask
-Barrier II | Buffs
-Jinn's Talent
-Wyvern Speed
-Ward of Ortanite
-Divine Bastion (II)
-Great Meditation (II)
-Deific Channel
-Infernus Mire & friends
-Notes | Using these pets will create weaknesses for the enemy, which will greatly increase flask boost rate when using the omnimancy skills. Make sure your ward is kept up well! | With the right amities and 2 beguiled staves, Heretic's bonus elemental exploit damage can provide surprising raid damage even using the t9 Omnimancy spells.
-This build can still work at 225, but will charge slower. Use the dual-element omnimancy from Omnimancer in their place. | When you unlock the tri-elementals, the damage and amity varieties increase further.
-Aligned Sigilflask stacks very well with Lotan's blights, and weakness exploit effects apply to both | This raid build loses to Ultima when you unlock Ultima but outdamages the Omniflask by a large margin.
-At level 230 you learn Ward Flask Infusion, which consumes all your ward to charge up to 2 flasks
+=== Omniflask Raiding ===
+Build Name: Omniflask Raiding
+Priorities: Ward, then defensive stats, then flask charge.
+Notes: Focuses on surviving long enough to dish out large damage with Omniflask. Charges with the triple element spells.
+Recommended Lvl: 230
+Class: Heretic
+Spec: Maji
+Weapon: Arisen Kaladanda
+Weapon: Best Magic Staff
+Weapon Adornments: 2% Ward Jewels or Blackened Eyes
+Offhand: Arisen Witch's Scroll
+Offhand: Best Ward Shield
+Headpiece: Baldr Hood
+Headpiece: Best Ward/Defensive Helm
+Armor: Fey Yeti Coat
+Armor: Best Ward/Defensive Chest
+Legwear: Baldr Boots
+Legwear: Best Ward/Defensive Boots
+Armor Adornments: 2% Ward Jewels
+Accessory 1: Arisen Arch-Gadget
+Accessory 1: Status Immunities
+Accessory 2: Briny Pendant
+Accessory 2: Status Immunities
+Amity: 20% Weakness Exploit
+Amity: +% Element Dmg
+Pet: Lotan, Coiled One
+Pet: Anubis
+Spells: Omniflask
+Spells: Golem's Fortitude
+Spells: Barrier II
+Spells: Jinn's Talent
+Spells: Wyvern Speed
+Spells: Ward of Ortanite
+Spells: Divine Bastion (II)
+Spells: Great Meditation (II)
+Spells: Deific Channel
+Spells: Infernus Mire & friends
+Notes: Using these pets will create weaknesses for the enemy, which will greatly increase flask boost rate when using the omnimancy skills. Make sure your ward is kept up well!
+Notes: This build can still work at 225, but will charge slower. Use the dual-element omnimancy from Omnimancer in their place.
+Notes: Aligned Sigilflask stacks very well with Lotan's blights, and weakness exploit effects apply to both
+Notes: At level 230 you learn Ward Flask Infusion, which consumes all your ward to charge up to 2 flasks
+
+=== Dual/Tri Element Raids ===
+Build Name: Dual/Tri Element Raids
+Priorities: Elemental Damage Exploit, Elemental Damage (Only Faction elements), high magic
+Notes: Until you unlock Ultima, this is a surprisingly effective raiding build
+Class: Heretic, Heretic, Heretic, Heretic, Heretic
+Spec: Oracle, Oracle, Oracle, Oracle, Oracle
+Weapon: Beguiled Staff X
+Weapon: Beguiled Staff Y
+Weapon Adornments: Heretic's Jewel, Blackened Eyes of Kerberos
+Offhand: Beguiled Staff X
+Offhand: Beguiled Staff Y
+Headpiece: Arisen Aaru Hood
+Headpiece: Fey Menja Hood
+Armor: Heretic Robe
+Armor: Aarisen Aaru Robe
+Legwear: Fallen Sky Shoes
+Armor Adornments: Azure Pinions, Moondust
+Accessory 1: Arisen Ring
+Accessory 1: Nagganeen's Belt
+Accessory 2: Arisen Ring
+Accessory 2: Nagganeen's Belt
+Amity: Faction Ele + 20%
+Amity: Other Faction + 20%
+Amity 2: Faction Ele +20%
+Amity 2: Other Faction + 20%
+Pet: Ymir Ampthitere
+Pet: Quetzalcoatl
+Spells: Faction Omnimancy Skills
+Spells: Alignment Sigil Flask
+Spells: Buffs
+Notes: With the right amities and 2 beguiled staves, Heretic's bonus elemental exploit damage can provide surprising raid damage even using the t9 Omnimancy spells.
+Notes: When you unlock the tri-elementals, the damage and amity varieties increase further.
+Notes: This raid build loses to Ultima when you unlock Ultima but outdamages the Omniflask by a large margin.
 
 --- View Distance ---
 View Distance
 Looking to see further? Look no further! ...wait a minute.
 TRUE | New Build? | TRUE | New Build? | FALSE | New Build? | FALSE | New Build? | FALSE | New Build?
-Build Name | Event-Less VD | Best VD (base & Ara) | Best VD (Corvus)
-Priorities | ...View Distance. | ...View Distance. | ...View Distance.
-Notes | All of these items are available year-round and do not need any events. Feel free to use these until you can sub them out! | As before, swap things out as you need them.
-Recommended AL
-Video Link
-Class | Heretic | Heretic | Heretic Corvus | Heretic | Heretic | Heretic
-Spec | Seeker | Seeker | Seeker | Oracle | Oracle | Oracle
-Weapon | Firepike | Surtr's Sword | Arisen / Fey Helmhest
-Candle-staff | Arisen / Fey Surtr's | Helhest
-Weapon Adornments | Symbols of War (2% VD per) | Symbols of War (2% VD per) | Symbols of War (2% VD per)
-Offhand | Firepike | Surtr's Sword | Arisen / Fey Helhest
-Candle-staff | Arisen / Fey Surtr's | Helhest
-Headpiece | Medea's Hairpin | Argos | Argos
-Fallen Sky Hood | Fallen Sky Hood
-Armor | - | - | -
-Legwear | - | - | -
-Armor Adornments | - | - | -
-Accessory 1 | Unfelled Concord | Unfelled Concord | Unfelled Concord
-Lantern, Midnight Eye, etc. | Lantern, Midnight Eye, etc. | Lantern, Midnight Eye, etc.
-Accessory 2 | Unfelled Concord | Unfelled Concord | Unfelled Concord
-Lantern, Midnight Eye, etc. | Lantern, Midnight Eye, etc. | Lantern, Midnight Eye, etc.
-Amity | 5% View Distance | 5% View Distance | 5% View Distance
-Bestial Bond 1 | Bestial Bond 1 | Bestial Bond 1
-Amity 2
-Pet | Crimson Gazer | Crimson Gazer | Crimson Gazer
-Any pet with a VD BB1 | Any pet with a VD BB1 | Any pet with a VD BB1
-Notes | Priority for amities should be a Bestial Bond 1 amity, unless you have a 5% view distance one. You only need a VD pet if you have the BB1 amity. | Any Surtr Sword will do for the best view distance. The reason we pick this is because of adornment slots, and they all have the same amount at Godforge. | Only Arisen and Fey Helhests have a higher amount of adornment slots than the Surtr Swords, so those are preferred.
-Feel free to remove anything from this build to better suit your quality of play! | You only need the pet if you have an amity. Preferably, your amity has both VD AND BB1. | You only need the pet if you have an amity. Preferably, your amity has both VD AND BB1.
-Prioritize a 5% VD amity over a BB1 one, because the former works 100% of the time! | Prioritize a 5% VD amity over a BB1 one, because the former works 100% of the time!
+=== Event-Less VD ===
+Build Name: Event-Less VD
+Priorities: ...View Distance.
+Notes: All of these items are available year-round and do not need any events. Feel free to use these until you can sub them out!
+Class: Heretic
+Spec: Seeker
+Weapon: Firepike
+Weapon: Candle-staff
+Weapon Adornments: Symbols of War (2% VD per)
+Offhand: Firepike
+Offhand: Candle-staff
+Headpiece: Medea's Hairpin
+Armor: -
+Legwear: -
+Armor Adornments: -
+Accessory 1: Unfelled Concord
+Accessory 1: Lantern, Midnight Eye, etc.
+Accessory 2: Unfelled Concord
+Accessory 2: Lantern, Midnight Eye, etc.
+Amity: 5% View Distance
+Amity: Bestial Bond 1
+Pet: Crimson Gazer
+Pet: Any pet with a VD BB1
+Notes: Priority for amities should be a Bestial Bond 1 amity, unless you have a 5% view distance one. You only need a VD pet if you have the BB1 amity.
+Notes: Feel free to remove anything from this build to better suit your quality of play!
+
+=== Best VD (base & Ara) ===
+Build Name: Best VD (base & Ara)
+Priorities: ...View Distance.
+Notes: As before, swap things out as you need them.
+Class: Heretic
+Spec: Seeker
+Weapon: Surtr's Sword
+Weapon: Arisen / Fey Surtr's
+Weapon Adornments: Symbols of War (2% VD per)
+Offhand: Surtr's Sword
+Offhand: Arisen / Fey Surtr's
+Headpiece: Argos
+Headpiece: Fallen Sky Hood
+Armor: -
+Legwear: -
+Armor Adornments: -
+Accessory 1: Unfelled Concord
+Accessory 1: Lantern, Midnight Eye, etc.
+Accessory 2: Unfelled Concord
+Accessory 2: Lantern, Midnight Eye, etc.
+Amity: 5% View Distance
+Amity: Bestial Bond 1
+Pet: Crimson Gazer
+Pet: Any pet with a VD BB1
+Notes: Any Surtr Sword will do for the best view distance. The reason we pick this is because of adornment slots, and they all have the same amount at Godforge.
+Notes: You only need the pet if you have an amity. Preferably, your amity has both VD AND BB1.
+Notes: Prioritize a 5% VD amity over a BB1 one, because the former works 100% of the time!
+
+=== Best VD (Corvus) ===
+Build Name: Best VD (Corvus)
+Priorities: ...View Distance.
+Class: Heretic Corvus, Heretic, Heretic, Heretic
+Spec: Seeker, Oracle, Oracle, Oracle
+Weapon: Arisen / Fey Helmhest
+Weapon: Helhest
+Weapon Adornments: Symbols of War (2% VD per)
+Offhand: Arisen / Fey Helhest
+Offhand: Helhest
+Headpiece: Argos
+Headpiece: Fallen Sky Hood
+Armor: -
+Legwear: -
+Armor Adornments: -
+Accessory 1: Unfelled Concord
+Accessory 1: Lantern, Midnight Eye, etc.
+Accessory 2: Unfelled Concord
+Accessory 2: Lantern, Midnight Eye, etc.
+Amity: 5% View Distance
+Amity: Bestial Bond 1
+Pet: Crimson Gazer
+Pet: Any pet with a VD BB1
+Notes: Only Arisen and Fey Helhests have a higher amount of adornment slots than the Surtr Swords, so those are preferred.
+Notes: You only need the pet if you have an amity. Preferably, your amity has both VD AND BB1.
+Notes: Prioritize a 5% VD amity over a BB1 one, because the former works 100% of the time!
 
 --- Dungeon ---
 Dungeons
 Heretics were the original star of horde battling when Mage's Dance was the king of horde clearing. Now, many options make that less the case, but horde is still very approachable.
 TRUE | New Build? | TRUE | New Build? | TRUE | New Build? | FALSE | New Build? | FALSE | New Build?
-Build Name | Brilliant Horde Boss | Ultima Endless | Crit Poise Endless | Endless Depth Bloodray
-Priorities | 95% crit chance, Mag, Foresight | 25% Crit, Farming Gear, Accuracy, Magic, Dex | 25% Crit, Farming Gear, Accuracy, Magic, Dex | 5% - 55% Crit, Flask Power, Magic, 100% Flask Charge on Defeat
-Notes | Aims to be light to set up for horde damage. Easy to fast clear with little to no buff turns. | An endless setup to begin with | An endless setup to begin with | Cast Bloodray every turn, never die, reach the depths
-Recommended AL | 25
-Video Link
-Class | Heretic Ara | Heretic Corvus | Heretic Corvus | Heretic Corvus | Heretic | Heretic
-Spec | Disciple of Finesse | Sequencer | Oracle | Oracle | Oracle | Oracle
-Weapon | Yelmogus Greatstaff | Celestial Staff | Arisen Terror | Ruairc Archistaff
-Arisen Trev Archistaff | - | Questing Staff | Cursed Rhongomiant
-Weapon Adornments | Ferocious Bull's Eyes, Solarite Mortar, 1 Ashen Ruby | Orichalcum Mortars, Ashen Ruby | Orichalcum Mortars | 1 Ashen Ruby, Ferocious Bullseyes
-Offhand | - | - | Arisen Terror | Arisen Terror | Ruairc Archistaff
-- | Questing Staff | Questing Staff | Arisen Terror
-Headpiece | Eastern Mask | Lost Helmet | Lost Helmet | Yelmogus Headrobe
-Fey Menja's Hood | Mightiest Mimic Head | Mightiest Mimic Head | Lost Helm
-Armor | Arisen Aaru Robe | Court Jester's Garb | Court Jester's Garb | Darkrift/Yelmogus Robe
-Heretic's Robe | Court Jester Chest
-Legwear | Fallen Sky Shoes | Arisen Riftrogue Boots | Arisen Riftrogue Boots | Yelmogus Skirt
-Windtamer Shoes | Beguiled Shoes Y | Yelmogus Skirt | -
-Armor Adornments | Lyncus Bristles, Ashen Pinions, etc. | Lyncus Bristles, Jewels of Creation, Turul Feathers, Mountain Acorns | Lyncus Bristles, Jewels of Creation, Turul Feathers, Mountain Acorns | Lyncus Bristles, Eye of Ptah
-Accessory 1 | Arisen Trev Charm | Band of the Gods | Band of the Gods | Band of the Gods
-Unfelled Concord | Band of Mnemosyne
-Accessory 2 | Arisen Trev Charm | Band of the Gods | Band of the Gods | Band of the Gods
-Presents! | Band of Mnemosyne
-Amity | 40% Crit Damage | 25% Accessory | 25% Accessory | 25% Accessory
-5% Max HP Regen | 50% Positive Duration | 50% Positive Duration | 40% Crit Damage
-Amity 2 | 25% Accessory | 20% Flask Power
-50% Positive Duration | 100% Flask Charge
-Pet | The Mightiest Mimic | Varies | Varies | Gilded Kheper
-Mighty Mimic
-Spells | Brilliant Lights II (off-hand) | Ultima | Viperseal III, Factionseal III | Bloodray Flask
-Gait of Snotra | Ultima | Ultima | Bloodray Flask
-Wyrm's Song | Bloodray Flask | Bloodray Flask | Bloodray Flask
-Wyvern Speed | Manaseep Flask | Manaseep Flask | Buffs, Bloodflask Infusion
-Viperseal III | Viperseal III | Faction Shadowstrike (Nyx H.)
-Notes | Very simple to use. If you don't need buff turns, only cast Brilliant Lights II! Otherwise, get the buffs you need at the start, and off you go! | Buff up using other classes to include Divine Bastion, Dragon Alignment, Zerk 1-3, Call of Brynhild II, Aegir Stance, etc (DO NOT USE SNOTRA) | Buff up using other classes to include Divine Bastion, Dragon Alignment, Zerk 1-3, Call of Brynhild II, Aegir Stance, etc (DO NOT USE SNOTRA) | Get the usual endless buffs including all 3 Zerks, Brynhild 2, Dragon Alignment (for immunity to Dragon). Snotra  and other offensive buffs are fine due to Reraise
-Your main goal with armor adorns is to hit 95% gear crit, so that you can always crit with BL2. | You can swap pets or use consumeables to get t.Mag 3, t.Crit 2 and Deific Channel | You can swap pets or use consumeables to get t.Mag 3, t.Crit 2 and Deific Channel | Crit Poise maintains Reraise. Swapping pets for T.mag +/+++, DC  might be needed in very deep floors.
-Arisen Aaru Robe is necessary for TMM to give you constant Great Meditation. If you have an alternative, take that into consideration. | Use Viperseal III/Factionseal III to blast through enemies, saving Bloodray Flask for high floor berserk enemies | Enemy Second Chance can cost you a flask, Eye of Ptah will recover flask charge over time. Morri scroll will function similarly to a second staff
-Viperseal III can be an extra add in case you come across a particularly tanky enemy. This is a very M2-heavy skill, so high defense enemies may wall this out a lot. | If you swap to Spellweaver, use Bloodflask Infusion, then swap back to Heretic Corvus and clear the floor, then on the next floor you will have 4 Bloodflasks and 1 Manaflask available | You can use farm head/chest pieces and amities, this will decrease your damage; this is totally fine until very deep into endless. You can use a 100% flask charge amity as a replacement for a Ruairc Staff
-Feel free to sub out items like the Trevelyan Charms for Unfelled Concords if you'd like to get max luck. | Anguish 1 Gear with Accuracy Boosts on the armor greatly helps keeping Crit Poise running | Anguish 1 Gear with Accuracy Boosts on the armor greatly helps keeping Crit Poise running | T8 Rhongomiant gives 100% charge on defeat; this can be paired with Arisen Terror for maximum orn gains
-Beastfelled Shoes can be used if you need ward turn upkeep. Be warned that TMM will not always cast Great Meditation if you have follower act rate bonuses/maluses | For those curious about Orichalcum Mortars and 50% Duration amities, they greatly decrease the problems a miss or block does by keeping the buffs up when you don't land a critical hit | For those curious about Orichalcum Mortars and 50% Duration amities, they greatly decrease the problems a miss or block does by keeping the buffs up when you don't land a critical hit | For a mix of maximum depth and orn gains, Cursed Rhongomiant can be paired with high quality Bands of Mnemosyne
-Yelmogus Skirt is a powerful booster to Bloodray's M1, potentially critical for killing tough berserks
-Potentially useful pets: Gilded Kheper, A. Bloodwarg, A. Phoenix, Mac Penguin, Archimedes, Gullinkambi, Stew. Pegasus | Potentially useful pets: Gilded Kheper, A. Bloodwarg, A. Phoenix, Mac Penguin, Archimedes, Gullinkambi, Stew. Pegasus
+=== Brilliant Horde Boss ===
+Build Name: Brilliant Horde Boss
+Priorities: 95% crit chance, Mag, Foresight
+Notes: Aims to be light to set up for horde damage. Easy to fast clear with little to no buff turns.
+Recommended AL: 25
+Class: Heretic Ara
+Spec: Disciple of Finesse
+Weapon: Yelmogus Greatstaff
+Weapon: Arisen Trev Archistaff
+Weapon Adornments: Ferocious Bull's Eyes, Solarite Mortar, 1 Ashen Ruby
+Offhand: -, -
+Offhand: -
+Headpiece: Eastern Mask
+Headpiece: Fey Menja's Hood
+Armor: Arisen Aaru Robe
+Armor: Heretic's Robe
+Legwear: Fallen Sky Shoes
+Legwear: Windtamer Shoes
+Armor Adornments: Lyncus Bristles, Ashen Pinions, etc.
+Accessory 1: Arisen Trev Charm
+Accessory 1: Unfelled Concord
+Accessory 2: Arisen Trev Charm
+Accessory 2: Presents!
+Amity: 40% Crit Damage
+Amity: 5% Max HP Regen
+Pet: The Mightiest Mimic
+Pet: Mighty Mimic
+Spells: Brilliant Lights II (off-hand)
+Spells: Gait of Snotra
+Spells: Wyrm's Song
+Spells: Wyvern Speed
+Spells: Viperseal III
+Notes: Very simple to use. If you don't need buff turns, only cast Brilliant Lights II! Otherwise, get the buffs you need at the start, and off you go!
+Notes: Your main goal with armor adorns is to hit 95% gear crit, so that you can always crit with BL2.
+Notes: Arisen Aaru Robe is necessary for TMM to give you constant Great Meditation. If you have an alternative, take that into consideration.
+Notes: Viperseal III can be an extra add in case you come across a particularly tanky enemy. This is a very M2-heavy skill, so high defense enemies may wall this out a lot.
+Notes: Feel free to sub out items like the Trevelyan Charms for Unfelled Concords if you'd like to get max luck.
+Notes: Beastfelled Shoes can be used if you need ward turn upkeep. Be warned that TMM will not always cast Great Meditation if you have follower act rate bonuses/maluses
+
+=== Ultima Endless ===
+Build Name: Ultima Endless
+Priorities: 25% Crit, Farming Gear, Accuracy, Magic, Dex
+Notes: An endless setup to begin with
+Class: Heretic Corvus
+Spec: Sequencer
+Weapon: Celestial Staff
+Weapon: -
+Weapon Adornments: Orichalcum Mortars, Ashen Ruby
+Offhand: Arisen Terror
+Offhand: Questing Staff
+Headpiece: Lost Helmet
+Headpiece: Mightiest Mimic Head
+Armor: Court Jester's Garb
+Legwear: Arisen Riftrogue Boots
+Legwear: Beguiled Shoes Y
+Armor Adornments: Lyncus Bristles, Jewels of Creation, Turul Feathers, Mountain Acorns
+Accessory 1: Band of the Gods
+Accessory 2: Band of the Gods
+Amity: 25% Accessory
+Amity: 50% Positive Duration
+Pet: Varies
+Spells: Ultima
+Spells: Ultima
+Spells: Bloodray Flask
+Spells: Manaseep Flask
+Spells: Viperseal III
+Notes: Buff up using other classes to include Divine Bastion, Dragon Alignment, Zerk 1-3, Call of Brynhild II, Aegir Stance, etc (DO NOT USE SNOTRA)
+Notes: You can swap pets or use consumeables to get t.Mag 3, t.Crit 2 and Deific Channel
+Notes: Anguish 1 Gear with Accuracy Boosts on the armor greatly helps keeping Crit Poise running
+Notes: For those curious about Orichalcum Mortars and 50% Duration amities, they greatly decrease the problems a miss or block does by keeping the buffs up when you don't land a critical hit
+Notes: Potentially useful pets: Gilded Kheper, A. Bloodwarg, A. Phoenix, Mac Penguin, Archimedes, Gullinkambi, Stew. Pegasus
+
+=== Crit Poise Endless ===
+Build Name: Crit Poise Endless
+Priorities: 25% Crit, Farming Gear, Accuracy, Magic, Dex
+Notes: An endless setup to begin with
+Class: Heretic Corvus
+Spec: Oracle
+Weapon: Arisen Terror
+Weapon: Questing Staff
+Weapon Adornments: Orichalcum Mortars
+Offhand: Arisen Terror
+Offhand: Questing Staff
+Headpiece: Lost Helmet
+Headpiece: Mightiest Mimic Head
+Armor: Court Jester's Garb
+Legwear: Arisen Riftrogue Boots
+Legwear: Yelmogus Skirt
+Armor Adornments: Lyncus Bristles, Jewels of Creation, Turul Feathers, Mountain Acorns
+Accessory 1: Band of the Gods
+Accessory 2: Band of the Gods
+Amity: 25% Accessory
+Amity: 50% Positive Duration
+Amity 2: 25% Accessory
+Amity 2: 50% Positive Duration
+Pet: Varies
+Spells: Viperseal III, Factionseal III
+Spells: Ultima
+Spells: Bloodray Flask
+Spells: Manaseep Flask
+Spells: Faction Shadowstrike (Nyx H.)
+Notes: Buff up using other classes to include Divine Bastion, Dragon Alignment, Zerk 1-3, Call of Brynhild II, Aegir Stance, etc (DO NOT USE SNOTRA)
+Notes: You can swap pets or use consumeables to get t.Mag 3, t.Crit 2 and Deific Channel
+Notes: Use Viperseal III/Factionseal III to blast through enemies, saving Bloodray Flask for high floor berserk enemies
+Notes: If you swap to Spellweaver, use Bloodflask Infusion, then swap back to Heretic Corvus and clear the floor, then on the next floor you will have 4 Bloodflasks and 1 Manaflask available
+Notes: Anguish 1 Gear with Accuracy Boosts on the armor greatly helps keeping Crit Poise running
+Notes: For those curious about Orichalcum Mortars and 50% Duration amities, they greatly decrease the problems a miss or block does by keeping the buffs up when you don't land a critical hit
+Notes: Yelmogus Skirt is a powerful booster to Bloodray's M1, potentially critical for killing tough berserks
+Notes: Potentially useful pets: Gilded Kheper, A. Bloodwarg, A. Phoenix, Mac Penguin, Archimedes, Gullinkambi, Stew. Pegasus
+
+=== Endless Depth Bloodray ===
+Build Name: Endless Depth Bloodray
+Priorities: 5% - 55% Crit, Flask Power, Magic, 100% Flask Charge on Defeat
+Notes: Cast Bloodray every turn, never die, reach the depths
+Class: Heretic Corvus, Heretic, Heretic
+Spec: Oracle, Oracle, Oracle
+Weapon: Ruairc Archistaff
+Weapon: Cursed Rhongomiant
+Weapon Adornments: 1 Ashen Ruby, Ferocious Bullseyes
+Offhand: Ruairc Archistaff
+Offhand: Arisen Terror
+Headpiece: Yelmogus Headrobe
+Headpiece: Lost Helm
+Armor: Darkrift/Yelmogus Robe
+Armor: Court Jester Chest
+Legwear: Yelmogus Skirt
+Legwear: -
+Armor Adornments: Lyncus Bristles, Eye of Ptah
+Accessory 1: Band of the Gods
+Accessory 1: Band of Mnemosyne
+Accessory 2: Band of the Gods
+Accessory 2: Band of Mnemosyne
+Amity: 25% Accessory
+Amity: 40% Crit Damage
+Amity 2: 20% Flask Power
+Amity 2: 100% Flask Charge
+Pet: Gilded Kheper
+Spells: Bloodray Flask
+Spells: Bloodray Flask
+Spells: Bloodray Flask
+Spells: Buffs, Bloodflask Infusion
+Notes: Get the usual endless buffs including all 3 Zerks, Brynhild 2, Dragon Alignment (for immunity to Dragon). Snotra  and other offensive buffs are fine due to Reraise
+Notes: Crit Poise maintains Reraise. Swapping pets for T.mag +/+++, DC  might be needed in very deep floors.
+Notes: Enemy Second Chance can cost you a flask, Eye of Ptah will recover flask charge over time. Morri scroll will function similarly to a second staff
+Notes: You can use farm head/chest pieces and amities, this will decrease your damage; this is totally fine until very deep into endless. You can use a 100% flask charge amity as a replacement for a Ruairc Staff
+Notes: T8 Rhongomiant gives 100% charge on defeat; this can be paired with Arisen Terror for maximum orn gains
+Notes: For a mix of maximum depth and orn gains, Cursed Rhongomiant can be paired with high quality Bands of Mnemosyne
 
 --- Towers ---
 Towers
 In Towers of Olympia, your initial goal is to survive, but slowly it turns to thriving - once Ara gets into your hands, speed is the key for fast clears.
 TRUE | New Build? | TRUE | New Build? | FALSE | New Build? | FALSE | New Build? | FALSE | New Build?
-Build Name | Ara Sigilspam | Brilliant Towers | Sigils and Shards
-Priorities | 95% crit chance, then crit damage. | 95% crit chance, then two-handed & crit damage. | 95% crit chance, Mag
-Notes | Focuses on Ara Vesta IV as a vassal for damage, charging for Sigilflask + Vestaga blasts to wipe the challenging floors. | Spam Brilliant Lights II and win. Are you jokester? | Use Sigil Stormflask + Ara Vestaga every turn while shardmaxxing
-Recommended AL | 20 | 50
-Video Link
-Class | Heretic Ara | Heretic Corvus | Heretic Ara | Heretic | Heretic | Heretic
-Spec | Disciple of Finesse | Oracle | Disciple of Finesse | Oracle | Oracle | Oracle
-Weapon | Celestial Staff | Yelmogus Greatstaff | Celestial Staff
-Arisen Trev Archistaff | High Mag Staff
-Weapon Adornments | Hands of Prometheus (Ferocious Eyes on Offhand) | Ferocious Bull's Eyes, Solarite Mortar, 1 Ashen Ruby | Hands of Mnemosyne, Ferocious Bullseyes
-Offhand | Arisen Kaladanda | - | - | Ruairc Archistaff
-Arisen Imagination | - | -
-Headpiece | Arisen Rift Cowl | Arisen Rift Cowl | Arisen Rift Cowl
-Fey Menja's Hood | Arisen Aaru Hood | Fey Menja's Hood
-Armor | Heretic's Robe | Heretic's Robe | Mnemosyne's Himation
-Fey Menja's Battlerobe | Heretic's Robe
-Legwear | Fallen Sky Shoes | Fallen Sky Shoes | Mnemosyne's Crepida
-Arisen Aaru Skirt | Arisen Riftrogue Boots | Fallen Sky Shoes
-Armor Adornments | Lyncus Bristles, Ashen Pinions, etc. | Lyncus Bristles, Ashen Pinions, Azure Pinions, etc. | Lyncus Bristles, Ashen Pinions, Azure Pinions, etc.
-Accessory 1 | WIP | Arisen Trev Charm | Band of Mnemosyne
-Trevelyan's Charm
-Accessory 2 | WIP | Arisen Trev Charm | Band of Mnemosyne
-Trevelyan's Charm
-Amity | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage
-Starting Ward Turns | Starting Ward Turns | Starting Ward Turns
-Amity 2 | 40% Crit Damage
-20% Parapet
-Pet | Oceanus Replica | Oceanus Replica
-Arisen Stonewarg
-Spells | Ara Vesta IV | Brilliant Lights II (off-hand) | Sigil Stormflask+Ara Vestaga
-Ara Vestaga | Ara Vesta III | Factionseal 3
-(Sigil Stormflask) | Bloodloss Flask
-Ward Flask Infusion
-Manaflask Infusion
-Notes | Use Ara Vesta IV to clear most floors - the kills from them will proc the DoF passive, often letting you go again. | ...yeah this is pretty much just "Brilliant Lights II to win". Ara Vesta III exists as a cleanup option with more power, if need be. | Ruairc staff gives you loads of flask charge, all you need to succeed is make sure your Vestaga is hitting hard enough to kill everything.
-At the start of the tower, when battles are easy, use Manaflask Infusion to turn all Bloodflasks into Manaflasks. This will let you charge more "big blasts". | Ara Vesta III can be subbed out for Ara Vesta IV if you prefer having more chaining in your cleanup, but most leftovers tend to be one or two, which AV3 accomplishes well. | If you need more penetration, some shard sources can be sacrificed to gain Mag.
-When encountering easier floors, like ones with single enemies (e.g. Fallen T9 Gods), use Ward Flask Infusion to trade your ward for flask charge. | This build can work in Anguish. It needs higher ascension to warrant this, as the pierce for this skill is nonexistent.
-When encountering difficult floors, it's time to blast! Use Sigil Stormflask, and immediately follow it up with Ara Vestaga to clear the floor easily. | The choice of Corvus is primarily for Crit Poise. The synergy with this and tower buffs in general is very high.
-Due to the higher pierce of Ara Vesta IV, it can be used in some anguish, but do be careful - Vestaga does not have this luxury. | Starting ward turns effectively double your hp in case of misses/leftovers targeting you. Disciple of Finesse spec can also greatly increase survivability
+=== Ara Sigilspam ===
+Build Name: Ara Sigilspam
+Priorities: 95% crit chance, then crit damage.
+Notes: Focuses on Ara Vesta IV as a vassal for damage, charging for Sigilflask + Vestaga blasts to wipe the challenging floors.
+Recommended AL: 20
+Class: Heretic Ara
+Spec: Disciple of Finesse
+Weapon: Celestial Staff
+Weapon Adornments: Hands of Prometheus (Ferocious Eyes on Offhand)
+Offhand: Arisen Kaladanda
+Offhand: Arisen Imagination
+Headpiece: Arisen Rift Cowl
+Headpiece: Fey Menja's Hood
+Armor: Heretic's Robe
+Legwear: Fallen Sky Shoes
+Legwear: Arisen Aaru Skirt
+Armor Adornments: Lyncus Bristles, Ashen Pinions, etc.
+Accessory 1: WIP
+Accessory 2: WIP
+Amity: 40% Crit Damage
+Amity: Starting Ward Turns
+Pet: Oceanus Replica
+Spells: Ara Vesta IV
+Spells: Ara Vestaga
+Spells: (Sigil Stormflask)
+Spells: Ward Flask Infusion
+Spells: Manaflask Infusion
+Notes: Use Ara Vesta IV to clear most floors - the kills from them will proc the DoF passive, often letting you go again.
+Notes: At the start of the tower, when battles are easy, use Manaflask Infusion to turn all Bloodflasks into Manaflasks. This will let you charge more "big blasts".
+Notes: When encountering easier floors, like ones with single enemies (e.g. Fallen T9 Gods), use Ward Flask Infusion to trade your ward for flask charge.
+Notes: When encountering difficult floors, it's time to blast! Use Sigil Stormflask, and immediately follow it up with Ara Vestaga to clear the floor easily.
+Notes: Due to the higher pierce of Ara Vesta IV, it can be used in some anguish, but do be careful - Vestaga does not have this luxury.
+
+=== Brilliant Towers ===
+Build Name: Brilliant Towers
+Priorities: 95% crit chance, then two-handed & crit damage.
+Notes: Spam Brilliant Lights II and win. Are you jokester?
+Recommended AL: 50
+Class: Heretic Corvus
+Spec: Oracle
+Weapon: Yelmogus Greatstaff
+Weapon: Arisen Trev Archistaff
+Weapon Adornments: Ferocious Bull's Eyes, Solarite Mortar, 1 Ashen Ruby
+Offhand: -, -
+Offhand: -
+Headpiece: Arisen Rift Cowl
+Headpiece: Arisen Aaru Hood
+Armor: Heretic's Robe
+Armor: Fey Menja's Battlerobe
+Legwear: Fallen Sky Shoes
+Legwear: Arisen Riftrogue Boots
+Armor Adornments: Lyncus Bristles, Ashen Pinions, Azure Pinions, etc.
+Accessory 1: Arisen Trev Charm
+Accessory 1: Trevelyan's Charm
+Accessory 2: Arisen Trev Charm
+Accessory 2: Trevelyan's Charm
+Amity: 40% Crit Damage
+Amity: Starting Ward Turns
+Amity 2: 40% Crit Damage
+Amity 2: 20% Parapet
+Pet: Oceanus Replica
+Pet: Arisen Stonewarg
+Spells: Brilliant Lights II (off-hand)
+Spells: Ara Vesta III
+Spells: Bloodloss Flask
+Notes: ...yeah this is pretty much just "Brilliant Lights II to win". Ara Vesta III exists as a cleanup option with more power, if need be.
+Notes: Ara Vesta III can be subbed out for Ara Vesta IV if you prefer having more chaining in your cleanup, but most leftovers tend to be one or two, which AV3 accomplishes well.
+Notes: This build can work in Anguish. It needs higher ascension to warrant this, as the pierce for this skill is nonexistent.
+Notes: The choice of Corvus is primarily for Crit Poise. The synergy with this and tower buffs in general is very high.
+Notes: Starting ward turns effectively double your hp in case of misses/leftovers targeting you. Disciple of Finesse spec can also greatly increase survivability
+
+=== Sigils and Shards ===
+Build Name: Sigils and Shards
+Priorities: 95% crit chance, Mag
+Notes: Use Sigil Stormflask + Ara Vestaga every turn while shardmaxxing
+Class: Heretic Ara, Heretic, Heretic, Heretic
+Spec: Disciple of Finesse, Oracle, Oracle, Oracle
+Weapon: Celestial Staff
+Weapon: High Mag Staff
+Weapon Adornments: Hands of Mnemosyne, Ferocious Bullseyes
+Offhand: Ruairc Archistaff
+Offhand: -
+Headpiece: Arisen Rift Cowl
+Headpiece: Fey Menja's Hood
+Armor: Mnemosyne's Himation
+Armor: Heretic's Robe
+Legwear: Mnemosyne's Crepida
+Legwear: Fallen Sky Shoes
+Armor Adornments: Lyncus Bristles, Ashen Pinions, Azure Pinions, etc.
+Accessory 1: Band of Mnemosyne
+Accessory 2: Band of Mnemosyne
+Amity: 40% Crit Damage
+Amity: Starting Ward Turns
+Spells: Sigil Stormflask+Ara Vestaga
+Spells: Factionseal 3
+Notes: Ruairc staff gives you loads of flask charge, all you need to succeed is make sure your Vestaga is hitting hard enough to kill everything.
+Notes: If you need more penetration, some shard sources can be sacrificed to gain Mag.
 
 --- Raids ---
 Raids
 Raiding is often a Heretic's bread and butter. A variety of builds may be accessible at different levels and gear availability.
 TRUE | New Build? | TRUE | New Build? | TRUE | New Build? | TRUE | New Build? | TRUE | New Build?
-Build Name | Classic Ultima
-(no celestial) | Sequencer Ultima | Sigilstorm Sniper | Chakram and Buffs | Bloodray Flask Spam | Omniflask Weakness
-Priorities | 55% crit chance on gear, then elemental damage & crit damage | 75% crit on gear, elemental and crit damage | 75%-95% crit on gear, crit damage, magic power | 55-75% Crit on Gear, 7% Accuracy | 55-75% Crit on gear, Flask Power, Crit damage, Pet Act | Elemental Weakness Bonus, Flask Power, Elemental Damage, Pet Act
-Notes | Your basic Ultima build to get set up with simple damage as soon as you hit 245. | Speed and efficiency to do as much damage as fast as possible | Risky and sometimes slow but oh so satisfying | Use temp buffs and Mana feather to tank up and survive anything | Ward Flask Infusion gives you 5 bloodflasks, Bloodray's M1 gets buffed sky high by Flask Power | Aligned Sigilflask stacks with elemental blights; elemental weakness bonuses apply to both. Highest damage nuke for Hera
-Recommended AL
-Video Link
-Class | Heretic | Heretic Corvus | Heretic Ara | Heretic Corvus | Heretic Corvus | Heretic
-Spec | Oracle | Sequencer | Oracle | Oracle | Oracle | Oracle
-Weapon | Arisen Kaladanda | Celestial Staff | Celestial Archistaff | Celestial Staff | Celestial Staff | Scholar's Chargeblade
-Arisen Imagination | N/A | Celestial Staff | Celestial Archistaff | Yelmogus Greatstaff | Celestial Staff
-Weapon Adornments | Souls of Achlys | Lungs of Oceanus, Soul of Achlys | Hands of Prometheus | Hands of Prometheus, Greater Bull's Eyes, Eye of Kerberos | Oceanus Flukes, Black Kerb Eyes, Fero Eyes,  1 Ashen Ruby | Mnemosyne Arms, Blackened Kerb Eyes, Achlys Souls
-Offhand | Arisen Kaladanda | Arisen Kaladanda | Arisen Morrigan's Scroll | Arisen Kaladanda | Zagreus Bident | Scholar's Chargeblade
-Arisen Imagination | Arisen Imagination | Arisen Kaladanda | Arisen Morrigan's Scroll | Cursed Dagonet's Epee | Zagreus Bident
-Headpiece | Arisen Rift Cowl | Cursed King's Hood | Fey Menja's Hood | Arisen Rift Cowl | Yelmogus Headrobe | Yelmogus Headrobe
-Old Nothren Crown | Horned Corinthian Helmet | Arisen Aaru Hood | Horned Corinthian Helm | Cursed King's Crown | Cursed King's Crown
-Armor | Bulwark | Arisen Aaru Robe | Arisen Aaru Robe | Arisen Aaru Robe | Arisen Aaru Robe | Yelmogus Robes
-Arisen Aaru Robe | Bulwark | Heretic's Robe | Arisen Aaru Robe | Yelmogus/Darkrift Robe | Cursed King's Robe
-Legwear | Fallen Sky Shoes | Footpads of Dynasty | Fallen Sky Shoes | Arisen Riftrogue Boots | Yelmogus Skirt | Yelmogus Skirt
-Beastfelled Shoes | Arisen Pumpkinless Leggings | Arisen Aaru Skirt | Cursed King's Shoes | Cursed King's Boots
-Armor Adornments | Lyncus Bristles, Ashen Pinions, etc. | Lyncus Bristles | Lyncus Bristles, Ashen Pinions | Lyncus Bristles, Sekmet Eyes,  Ashen Pinions, Centaurus Eyes | Lyncus Bristles/Sekmet Eye, Centaurus Eye, Ptah Eye | Jewels of Creation, Eye of Ptah, Souls of Rhada
-Accessory 1 | Carl's Ring [mimic] | Arisen Ring | Arisen Trevelyan's Charm | Ymir Vitra Charm | Ymir Vritra Charm | Naggeneen's Belt
-Arisen Ring | Arisen Trev Charm | Band of Mnemosyne | -
-Accessory 2 | Carl's Ring [mimic] | Arisen Ring | Arisen Trevelyan's Charm | Carl's ring (T10) | Arisen Trevelyan's Charm | Naggeneen's Belt
-Arisen Ring | Arisen Trev Charm | Carl's Ring (T10) | Fey Serpent Pearl
-Amity | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage | 20% Weakness Exploit
-30% Element Damage | 20-30% Element Damage | 100% Flask Charge | Flask Power | 30% Elemental Damage
-Amity 2 | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage | 40% Crit Damage | 20% Weakness Exploit
-30% Element Damage | 100% Flask Charge | Positive Buff Duration | 20% Flask Power
-Pet | The Mightiest Mimurk | Apollyon Disciple | Mightiest Mimic | Arisen Stonewarg | Bone Mammoth | Gorynych, Son of Mountains
-Lotan, the Coiled One | Mightiest Mimic | Fey Chimera | Macaroni Penguin | Macaroni Penguin | Lotan, Coiled One
-Spells | Main attacking skill | Turn 1: Snotra or Mimic Misch. | Buff, buff, buff | Standard buffs - WoO - DB | Ward Flask Infusion, Bloodray | W. Flask Infusion, Omniflask
-Extra skills | Turn 2: Gods of Aaru (or DC) | Bloodloss Flask, Sigilstorm Flask | Bloodloss Flask | Bloodflask Infusion, buffs | DC + Repetition Flask
-Turn 3: Ultima | Ara Vesta III or Vestaga | DC/GM and Chakram away | Divine Bastion 2 for safety | Aligned Sigilflask
-Notes | Can be done on any of the Heretic classes but Corvus keeping up DC perpetually with crit poise makes it the premiere speed runner. However, base Heretic can add their Alignment Sigil Flask at the cost of DC uptime, and Ara has the most magic. | You can use this as a speedy way to quickly hit raids for 1-4m damage with only a handful of buffs or to absolutely obliterate any raid before you. An AL 20 Heretic can one-shot Arisen Morrigan with the proper gear and lining up *every* buff available if only barely so. | Any pet that provides temporary buffs or wards, and any item that provides temporary buffs can help this build go further. Most useful in tougher raids where speed builds die before they finish buffing - also very effective against Tower Titans | Charge gained by Ward Flask Infusion is multiplied by Flask Power bonuses - you will easily gain 5 full flasks at once in this build. Ideally your pet will cast DB on the same turn; DB2/DC can be cast taking advantage of  Mana Feather and Efficacious. | Charge gained by Ward Flask Infusion is multiplied by Flask Power bonuses - you will easily gain 5 full flasks at once in this build. Ideally your pet will cast DB on the same turn.
-If you're struggling to stay alive with Snotra active, you can swap Snotra for Wyvern Speed or use Ward of Ortanite first before buffing | It is usually faster to grab a handful of buffs before alternating Sigilstorm and AV3s to finish off raids with higher health. | Celestial Archistaff can be used for an extra Prom hand and a significant amount of ward. Accessories can become Arisen Trev Charms | Another trick with Ward Flask Infusion is that Repetition Flask ignores it. This allows for a sequence of DB2 -> WFI -> Rep Flask (recasting DB2). | This build easily reaches dmg cap with a handful of buffs, an elemental blight/ weakness and aligned sigilflask
-Footpads can be swapped out for Dynasty Hood if you have it, in which case you could use Fallen Sky Shoes for high magic legs. | Ara Vestaga has low penetration making Ara Vesta III the preferred ability for many raids | Get to 7% Accuracy or more to ensure Chakram hits as often as possible. Get a bunch of pet act if using pets with low buff chance. | Flukes of Oceanus plus Bident offers the highest multipliers (1.07^5 * 1.07^5 * 1.442). Other options will have more ward/adornment slots. | Elemental weakness multipliers are applied to sigils in addition to true weaknesses/blights. Every instance of weakness exploit ends up doubled!
-Apollyon faction Disciples are a recent upgrade to this build. They give you access to another 50% boost in Alignment, so you can buff more or just enjoy having no self-debuffs from Mischief | A piece of Dynasty gear (head/feet) could be used to shave a turn off Deific Channel, making it easier to line up with your sigils. The pieces also have a high amount of adornment slots | Crimson Eye of Centaurus gives +Accuracy and a chance to gain T.Crit++, which is +50% crit chance. A handful of these adornments could replace many crit adornments. | Dioscuri Mead can be used to gain 50% crit rate, and is maintained through Critical Poise. Positive Buff Duration effects help keep things up on non-crit turns. | If you cast Deific Channel as your last buff, you will be able to store it in Repetition Flask while casting other flasks and Ward Flask Infusion to recharge
-Equipping a scroll and two amities with 100% flask charge on each gives you 800% flask charge, which is enough to cast Sigilstorm+AV3 every turn | Mammoth keeps you alive with DB while you self-cast DC; Mac Penguin/Phoenix casts DC while you self-cast DB. | Around 20% pet act is needed for Gorynych to act every turn, but it will not always cast DB when needed
+=== Classic Ultima (no celestial) ===
+Build Name: Classic Ultima
+(no celestial)
+Priorities: 55% crit chance on gear, then elemental damage & crit damage
+Notes: Your basic Ultima build to get set up with simple damage as soon as you hit 245.
+Class: Heretic
+Spec: Oracle
+Weapon: Arisen Kaladanda
+Weapon: Arisen Imagination
+Weapon Adornments: Souls of Achlys
+Offhand: Arisen Kaladanda
+Offhand: Arisen Imagination
+Headpiece: Arisen Rift Cowl
+Headpiece: Old Nothren Crown
+Armor: Bulwark
+Armor: Arisen Aaru Robe
+Legwear: Fallen Sky Shoes
+Armor Adornments: Lyncus Bristles, Ashen Pinions, etc.
+Accessory 1: Carl's Ring [mimic]
+Accessory 2: Carl's Ring [mimic]
+Amity: 40% Crit Damage
+Amity: 30% Element Damage
+Amity 2: 40% Crit Damage
+Amity 2: 30% Element Damage
+Pet: The Mightiest Mimurk
+Pet: Lotan, the Coiled One
+Spells: Main attacking skill
+Spells: Extra skills
+
+=== Sequencer Ultima ===
+Build Name: Sequencer Ultima
+Priorities: 75% crit on gear, elemental and crit damage
+Notes: Speed and efficiency to do as much damage as fast as possible
+Class: Heretic Corvus
+Spec: Sequencer
+Weapon: Celestial Staff
+Weapon: N/A
+Weapon Adornments: Lungs of Oceanus, Soul of Achlys
+Offhand: Arisen Kaladanda
+Offhand: Arisen Imagination
+Headpiece: Cursed King's Hood
+Headpiece: Horned Corinthian Helmet
+Armor: Arisen Aaru Robe
+Armor: Bulwark
+Legwear: Footpads of Dynasty
+Legwear: Beastfelled Shoes
+Armor Adornments: Lyncus Bristles
+Accessory 1: Arisen Ring
+Accessory 2: Arisen Ring
+Amity: 40% Crit Damage
+Amity: 20-30% Element Damage
+Pet: Apollyon Disciple
+Pet: Mightiest Mimic
+Spells: Turn 1: Snotra or Mimic Misch.
+Spells: Turn 2: Gods of Aaru (or DC)
+Spells: Turn 3: Ultima
+Notes: Can be done on any of the Heretic classes but Corvus keeping up DC perpetually with crit poise makes it the premiere speed runner. However, base Heretic can add their Alignment Sigil Flask at the cost of DC uptime, and Ara has the most magic.
+Notes: If you're struggling to stay alive with Snotra active, you can swap Snotra for Wyvern Speed or use Ward of Ortanite first before buffing
+Notes: Footpads can be swapped out for Dynasty Hood if you have it, in which case you could use Fallen Sky Shoes for high magic legs.
+Notes: Apollyon faction Disciples are a recent upgrade to this build. They give you access to another 50% boost in Alignment, so you can buff more or just enjoy having no self-debuffs from Mischief
+
+=== Sigilstorm Sniper ===
+Build Name: Sigilstorm Sniper
+Priorities: 75%-95% crit on gear, crit damage, magic power
+Notes: Risky and sometimes slow but oh so satisfying
+Class: Heretic Ara
+Spec: Oracle
+Weapon: Celestial Archistaff
+Weapon: Celestial Staff
+Weapon Adornments: Hands of Prometheus
+Offhand: Arisen Morrigan's Scroll
+Offhand: Arisen Kaladanda
+Headpiece: Fey Menja's Hood
+Headpiece: Arisen Aaru Hood
+Armor: Arisen Aaru Robe
+Armor: Heretic's Robe
+Legwear: Fallen Sky Shoes
+Legwear: Arisen Pumpkinless Leggings
+Armor Adornments: Lyncus Bristles, Ashen Pinions
+Accessory 1: Arisen Trevelyan's Charm
+Accessory 1: Arisen Ring
+Accessory 2: Arisen Trevelyan's Charm
+Accessory 2: Arisen Ring
+Amity: 40% Crit Damage
+Amity: 100% Flask Charge
+Amity 2: 40% Crit Damage
+Amity 2: 100% Flask Charge
+Pet: Mightiest Mimic
+Pet: Fey Chimera
+Spells: Buff, buff, buff
+Spells: Bloodloss Flask, Sigilstorm Flask
+Spells: Ara Vesta III or Vestaga
+Notes: You can use this as a speedy way to quickly hit raids for 1-4m damage with only a handful of buffs or to absolutely obliterate any raid before you. An AL 20 Heretic can one-shot Arisen Morrigan with the proper gear and lining up *every* buff available if only barely so.
+Notes: It is usually faster to grab a handful of buffs before alternating Sigilstorm and AV3s to finish off raids with higher health.
+Notes: Ara Vestaga has low penetration making Ara Vesta III the preferred ability for many raids
+Notes: A piece of Dynasty gear (head/feet) could be used to shave a turn off Deific Channel, making it easier to line up with your sigils. The pieces also have a high amount of adornment slots
+Notes: Equipping a scroll and two amities with 100% flask charge on each gives you 800% flask charge, which is enough to cast Sigilstorm+AV3 every turn
+
+=== Chakram and Buffs ===
+Build Name: Chakram and Buffs
+Priorities: 55-75% Crit on Gear, 7% Accuracy
+Notes: Use temp buffs and Mana feather to tank up and survive anything
+Class: Heretic Corvus
+Spec: Oracle
+Weapon: Celestial Staff
+Weapon: Celestial Archistaff
+Weapon Adornments: Hands of Prometheus, Greater Bull's Eyes, Eye of Kerberos
+Offhand: Arisen Kaladanda
+Offhand: Arisen Morrigan's Scroll
+Headpiece: Arisen Rift Cowl
+Headpiece: Horned Corinthian Helm
+Armor: Arisen Aaru Robe
+Armor: Arisen Aaru Robe
+Legwear: Arisen Riftrogue Boots
+Legwear: Arisen Aaru Skirt
+Armor Adornments: Lyncus Bristles, Sekmet Eyes,  Ashen Pinions, Centaurus Eyes
+Accessory 1: Ymir Vitra Charm
+Accessory 1: Arisen Trev Charm
+Accessory 2: Carl's ring (T10)
+Accessory 2: Arisen Trev Charm
+Amity: 40% Crit Damage
+Amity 2: 40% Crit Damage
+Pet: Arisen Stonewarg
+Pet: Macaroni Penguin
+Spells: Standard buffs - WoO - DB
+Spells: Bloodloss Flask
+Spells: DC/GM and Chakram away
+Notes: Any pet that provides temporary buffs or wards, and any item that provides temporary buffs can help this build go further. Most useful in tougher raids where speed builds die before they finish buffing - also very effective against Tower Titans
+Notes: Celestial Archistaff can be used for an extra Prom hand and a significant amount of ward. Accessories can become Arisen Trev Charms
+Notes: Get to 7% Accuracy or more to ensure Chakram hits as often as possible. Get a bunch of pet act if using pets with low buff chance.
+Notes: Crimson Eye of Centaurus gives +Accuracy and a chance to gain T.Crit++, which is +50% crit chance. A handful of these adornments could replace many crit adornments.
+
+=== Bloodray Flask Spam ===
+Build Name: Bloodray Flask Spam
+Priorities: 55-75% Crit on gear, Flask Power, Crit damage, Pet Act
+Notes: Ward Flask Infusion gives you 5 bloodflasks, Bloodray's M1 gets buffed sky high by Flask Power
+Class: Heretic Corvus
+Spec: Oracle
+Weapon: Celestial Staff
+Weapon: Yelmogus Greatstaff
+Weapon Adornments: Oceanus Flukes, Black Kerb Eyes, Fero Eyes,  1 Ashen Ruby
+Offhand: Zagreus Bident
+Offhand: Cursed Dagonet's Epee
+Headpiece: Yelmogus Headrobe
+Headpiece: Cursed King's Crown
+Armor: Arisen Aaru Robe
+Armor: Yelmogus/Darkrift Robe
+Legwear: Yelmogus Skirt
+Legwear: Cursed King's Shoes
+Armor Adornments: Lyncus Bristles/Sekmet Eye, Centaurus Eye, Ptah Eye
+Accessory 1: Ymir Vritra Charm
+Accessory 1: Band of Mnemosyne
+Accessory 2: Arisen Trevelyan's Charm
+Accessory 2: Carl's Ring (T10)
+Amity: 40% Crit Damage
+Amity: Flask Power
+Amity 2: 40% Crit Damage
+Amity 2: Positive Buff Duration
+Pet: Bone Mammoth
+Pet: Macaroni Penguin
+Spells: Ward Flask Infusion, Bloodray
+Spells: Bloodflask Infusion, buffs
+Spells: Divine Bastion 2 for safety
+Notes: Charge gained by Ward Flask Infusion is multiplied by Flask Power bonuses - you will easily gain 5 full flasks at once in this build. Ideally your pet will cast DB on the same turn; DB2/DC can be cast taking advantage of  Mana Feather and Efficacious.
+Notes: Another trick with Ward Flask Infusion is that Repetition Flask ignores it. This allows for a sequence of DB2 -> WFI -> Rep Flask (recasting DB2).
+Notes: Flukes of Oceanus plus Bident offers the highest multipliers (1.07^5 * 1.07^5 * 1.442). Other options will have more ward/adornment slots.
+Notes: Dioscuri Mead can be used to gain 50% crit rate, and is maintained through Critical Poise. Positive Buff Duration effects help keep things up on non-crit turns.
+Notes: Mammoth keeps you alive with DB while you self-cast DC; Mac Penguin/Phoenix casts DC while you self-cast DB.
+
+=== Omniflask Weakness ===
+Build Name: Omniflask Weakness
+Priorities: Elemental Weakness Bonus, Flask Power, Elemental Damage, Pet Act
+Notes: Aligned Sigilflask stacks with elemental blights; elemental weakness bonuses apply to both. Highest damage nuke for Hera
+Class: Heretic
+Spec: Oracle
+Weapon: Scholar's Chargeblade
+Weapon: Celestial Staff
+Weapon Adornments: Mnemosyne Arms, Blackened Kerb Eyes, Achlys Souls
+Offhand: Scholar's Chargeblade
+Offhand: Zagreus Bident
+Headpiece: Yelmogus Headrobe
+Headpiece: Cursed King's Crown
+Armor: Yelmogus Robes
+Armor: Cursed King's Robe
+Legwear: Yelmogus Skirt
+Legwear: Cursed King's Boots
+Armor Adornments: Jewels of Creation, Eye of Ptah, Souls of Rhada
+Accessory 1: Naggeneen's Belt
+Accessory 1: -
+Accessory 2: Naggeneen's Belt
+Accessory 2: Fey Serpent Pearl
+Amity: 20% Weakness Exploit
+Amity: 30% Elemental Damage
+Amity 2: 20% Weakness Exploit
+Amity 2: 20% Flask Power
+Pet: Gorynych, Son of Mountains
+Pet: Lotan, Coiled One
+Spells: W. Flask Infusion, Omniflask
+Spells: DC + Repetition Flask
+Spells: Aligned Sigilflask
+Notes: Charge gained by Ward Flask Infusion is multiplied by Flask Power bonuses - you will easily gain 5 full flasks at once in this build. Ideally your pet will cast DB on the same turn.
+Notes: This build easily reaches dmg cap with a handful of buffs, an elemental blight/ weakness and aligned sigilflask
+Notes: Elemental weakness multipliers are applied to sigils in addition to true weaknesses/blights. Every instance of weakness exploit ends up doubled!
+Notes: If you cast Deific Channel as your last buff, you will be able to store it in Repetition Flask while casting other flasks and Ward Flask Infusion to recharge
+Notes: Around 20% pet act is needed for Gorynych to act every turn, but it will not always cast DB when needed
 
 --- BoF Guild ---
 Blades of Finesse
 In Blades of Finesse Heretic has many strengths, but limited access to status immunities and other defensive strategies.
 TRUE | New Build? | TRUE | New Build? | FALSE | New Build? | FALSE | New Build? | FALSE | New Build?
-Build Name | Ara Sigilstorm | Element Sigils | Manaray Flask Skip
-Priorities | 90% Crit, Foresight, Magic | Elemental Damage, Assassin %, Magic Power | Flask Power, Foresight, Magic, Follower Act
-Notes | Break the house rules like every class does | Similar to Ara's Sigilstorm but more fair | Break the house rules AND ignore blocking and missing
-Recommended AL
-Video Link
-Class | Heretic Ara | Heretic | Heretic | Heretic | Heretic | Heretic
-Spec | Oracle | Assassin | Oracle | Oracle | Oracle | Oracle
-Weapon | Celestial Staff | Beguiled Staff X | Celestial Staff
-Celestial Archistaff | Zagreus Bident
-Weapon Adornments | Hands of Prometheus, 1 Heart of Themis | Blackened Eyes of Kerberos | Mnemosyne Arms, 1 Ashen Ruby, Blackened Kerb Eyes
-Offhand | Arisen Morrigan's Scroll | Arisen Morrigan's Scroll | Zagreus Bident
-Amadan's Staff | Macha's Scroll | Nightbreak
-Headpiece | Beguiled Hood Y | Arisen Aaru Hood | Yelmogus Headrobe
-Arisen Aaru Hood | Arisen Wintara Crown | Arisen Aaru Hood
-Armor | Heretic's Robe | Heretic’s Robe | Darkrift Robe
-Beguiled Robe Y | Beguiled Robe Y | Yelmogus Robe
-Legwear | Beguiled Shoes Y | Windtamer Shoes | Yelmogus Skirt
-Fallen Sky Shoes | Fallen Sky Shoes | Fallen Sky Shoes
-Armor Adornments | Lyncus Bristles, Ashen Pinions, etc. | Lyncus Bristles, Ashen Pinions, Azure Pinions, etc. | Eyes of Ptah, Eye of Osiris, Jewel of Creation, etc.
-Accessory 1 | Arisen Ring | Nagganeen's Belt | Ymir Vitra Charm
-Lyncus Ring | Freyja's Charm | Ring of Annwn
-Accessory 2 | Fey Eye | Nagganeen's Belt | Ankou Ring
-Arisen Ring | Freyja's Charm | Scarab Amulet
-Amity | 40% Crit Damage | Element Exploit +% | 20% Parapet
-Starting Ward Turns | Element Damage +% | 5% HP Regen
-Amity 2 | 40% Crit | 40% Crit Damage | 20% Flask Power
-7% Pet Block | 7% Pet Block
-Pet | Oceanus Replica | Ymir Ampthitere | Gilded Kheper
-Mighty Mimic | Anubis | Oceanus Replica
-Spells | Omnimancy Spell | Tri-Elementals | Ward Flask Infusion
-Bloodloss Flask | Bloodloss Flask
-Sigilstorm Flask | Sigil Stormflask
-Ara Vesta III | Aligned Sigilflask
-Manaray Flask
-Notes | Use omnimancy spell of your choice (or Ward Flask Infusion) to charge one mana and bloodflask | Check your opponent for immunities - Tri-Elemental away turn 1 | Ara has higher base mag, but base Heretic can use Bloodloss flask twice for more damage.
-On your second turn, activate Bloodloss Flask, Sigilstorm Flask and then use Ara Vesta III to delete your opponent | On your second turn, activate Bloodloss Flask, Sigilstorm Flask, and then fire with your tri-elemental again | Use Ward Flask Infusion to charge all 5 flasks at once. On turn 2, use two bloodloss flasks and then Manaray to delete your opponent
-This build gets around the two turns rule similar to Realmshifter's Avidity, Gilgamesh's Collateral Damage, Beowulf's Pets, and Summons | Ideally Ymir has done her job and added an elemental blight to the mix but they don't always stick | This build gets around the two turns rule similar to Realmshifter's Avidity, Gilgamesh's Collateral Damage, Beowulf's Pets, and Summons. You will need to take an extra turn per additional enemy.
-Amadan's Staff is the single highest foresight item in the game, may be worth including in your build as needed. | This build is much easier to deal with than Sigilstorm due to lower damage but if opponents aren't running status immunities, it is an effective way to force them all to do so | Manaray flask cannot be blocked by pets and cannot miss.  You can ignore blind in your immunities, but may want to replace a staff with Nightbreak for sleep Immunity.
-Kheper gives you Reraise, a buffing or protective pet can be used instead
+=== Ara Sigilstorm ===
+Build Name: Ara Sigilstorm
+Priorities: 90% Crit, Foresight, Magic
+Notes: Break the house rules like every class does
+Class: Heretic Ara
+Spec: Oracle
+Weapon: Celestial Staff
+Weapon Adornments: Hands of Prometheus, 1 Heart of Themis
+Offhand: Arisen Morrigan's Scroll
+Offhand: Amadan's Staff
+Headpiece: Beguiled Hood Y
+Headpiece: Arisen Aaru Hood
+Armor: Heretic's Robe
+Armor: Beguiled Robe Y
+Legwear: Beguiled Shoes Y
+Legwear: Fallen Sky Shoes
+Armor Adornments: Lyncus Bristles, Ashen Pinions, etc.
+Accessory 1: Arisen Ring
+Accessory 1: Lyncus Ring
+Accessory 2: Fey Eye
+Accessory 2: Arisen Ring
+Amity: 40% Crit Damage
+Amity: Starting Ward Turns
+Amity 2: 40% Crit
+Amity 2: 7% Pet Block
+Pet: Oceanus Replica
+Pet: Mighty Mimic
+Spells: Omnimancy Spell
+Spells: Bloodloss Flask
+Spells: Sigilstorm Flask
+Spells: Ara Vesta III
+Notes: Use omnimancy spell of your choice (or Ward Flask Infusion) to charge one mana and bloodflask
+Notes: On your second turn, activate Bloodloss Flask, Sigilstorm Flask and then use Ara Vesta III to delete your opponent
+Notes: This build gets around the two turns rule similar to Realmshifter's Avidity, Gilgamesh's Collateral Damage, Beowulf's Pets, and Summons
+Notes: Amadan's Staff is the single highest foresight item in the game, may be worth including in your build as needed.
+
+=== Element Sigils ===
+Build Name: Element Sigils
+Priorities: Elemental Damage, Assassin %, Magic Power
+Notes: Similar to Ara's Sigilstorm but more fair
+Class: Heretic
+Spec: Assassin
+Weapon: Beguiled Staff X
+Weapon: Celestial Archistaff
+Weapon Adornments: Blackened Eyes of Kerberos
+Offhand: Arisen Morrigan's Scroll
+Offhand: Macha's Scroll
+Headpiece: Arisen Aaru Hood
+Headpiece: Arisen Wintara Crown
+Armor: Heretic’s Robe
+Armor: Beguiled Robe Y
+Legwear: Windtamer Shoes
+Legwear: Fallen Sky Shoes
+Armor Adornments: Lyncus Bristles, Ashen Pinions, Azure Pinions, etc.
+Accessory 1: Nagganeen's Belt
+Accessory 1: Freyja's Charm
+Accessory 2: Nagganeen's Belt
+Accessory 2: Freyja's Charm
+Amity: Element Exploit +%
+Amity: Element Damage +%
+Amity 2: 40% Crit Damage
+Pet: Ymir Ampthitere
+Pet: Anubis
+Spells: Tri-Elementals
+Notes: Check your opponent for immunities - Tri-Elemental away turn 1
+Notes: On your second turn, activate Bloodloss Flask, Sigilstorm Flask, and then fire with your tri-elemental again
+Notes: Ideally Ymir has done her job and added an elemental blight to the mix but they don't always stick
+Notes: This build is much easier to deal with than Sigilstorm due to lower damage but if opponents aren't running status immunities, it is an effective way to force them all to do so
+
+=== Manaray Flask Skip ===
+Build Name: Manaray Flask Skip
+Priorities: Flask Power, Foresight, Magic, Follower Act
+Notes: Break the house rules AND ignore blocking and missing
+Class: Heretic, Heretic, Heretic, Heretic
+Spec: Oracle, Oracle, Oracle, Oracle
+Weapon: Celestial Staff
+Weapon: Zagreus Bident
+Weapon Adornments: Mnemosyne Arms, 1 Ashen Ruby, Blackened Kerb Eyes
+Offhand: Zagreus Bident
+Offhand: Nightbreak
+Headpiece: Yelmogus Headrobe
+Headpiece: Arisen Aaru Hood
+Armor: Darkrift Robe
+Armor: Yelmogus Robe
+Legwear: Yelmogus Skirt
+Legwear: Fallen Sky Shoes
+Armor Adornments: Eyes of Ptah, Eye of Osiris, Jewel of Creation, etc.
+Accessory 1: Ymir Vitra Charm
+Accessory 1: Ring of Annwn
+Accessory 2: Ankou Ring
+Accessory 2: Scarab Amulet
+Amity: 20% Parapet
+Amity: 5% HP Regen
+Amity 2: 20% Flask Power
+Amity 2: 7% Pet Block
+Pet: Gilded Kheper
+Pet: Oceanus Replica
+Spells: Ward Flask Infusion
+Spells: Bloodloss Flask
+Spells: Sigil Stormflask
+Spells: Aligned Sigilflask
+Spells: Manaray Flask
+Notes: Ara has higher base mag, but base Heretic can use Bloodloss flask twice for more damage.
+Notes: Use Ward Flask Infusion to charge all 5 flasks at once. On turn 2, use two bloodloss flasks and then Manaray to delete your opponent
+Notes: This build gets around the two turns rule similar to Realmshifter's Avidity, Gilgamesh's Collateral Damage, Beowulf's Pets, and Summons. You will need to take an extra turn per additional enemy.
+Notes: Manaray flask cannot be blocked by pets and cannot miss.  You can ignore blind in your immunities, but may want to replace a staff with Nightbreak for sleep Immunity.
+Notes: Kheper gives you Reraise, a buffing or protective pet can be used instead
 
 --- Flask Calculators ---
 FLASK CHARGE (FC) | Effects of FC on various charge sources

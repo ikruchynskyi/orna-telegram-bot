@@ -860,278 +860,1240 @@ If enemy is weak to certain element - increase act chance of abilities that have
 Base Beowulf Builds
 Some of these builds use 0 exotic items. Meant for those who have not been around for any events as a T10 yet.
 All the credit for this build page template and format goes to Konq <3
-Build Name | Basic View Distance | Boss Horde Dungeons
-(No Exotic Items) | Raiding as Beo 
-(No Exotic Items) | Struggling in T10 Towers (No Exotic Items) | Boss Horde Orn Farming
-(No Exotic Items) | Temp | Temp | Template
-(do not use - only copy)
-Priorities | To see really far... | Surviving/Successfully Clearing Boss Horde Dungeons | Be as tanky as possible while throwing in a few attacks when you can for the Def- while your pet does the dmg | Towers will be a struggle until you can manage to get a few levels or some event gear. | Try to earn as much orn's/exp you possibly can while still clearing the dungeon. | ... | ... | ...
-Notes | Does this one need notes? | As you begin to feel more comfortable try some luck gear! (Remeber, in Orna this is no direct downside from dying) | ... | ... | If you feel you do not require the extra damage from tamer, using oracle with a second "+25% Accessory" amity is a big increase. | ... | ... | ...
-Recommended AL | 0 | 0 | 0 | 0 | 10 - 20? | 0 | 0 | 0
-Anguish 2.0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0
-Video Link | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a
-Class | Beowulf | Beowulf | Beowulf | Beowulf | Beowulf | Beowulf | Beowulf | Beowulf
-Spec | seeker | Tamer | Tamer | Cataphract | Tamer
-Weapon | Firepike | Axe of Gilgamesh | Axe of Gilgamesh | Axe of Gilgamesh | Questing Axe
-fey helhest | any high ward weapon | any high ward weapon | any high ward weapon | questing bow
-Weapon Adornments | Full "Symbol of War"
-(+2% View Distance Per) | Full Superior+ Jewels of Avalon
-(Or your best 2% ward adorns) | 3x Assassin Jewels, 
-#x Superior+ Mammon Tear's | Full Superior+ Jewels of Avalon
-(Or your best 2% ward adorns) | Full Superior+ Jewels of Avalon
+=== Basic View Distance ===
+Build Name: Basic View Distance
+Priorities: To see really far...
+Notes: Does this one need notes?
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spec: seeker
+Weapon: Firepike
+Weapon: fey helhest
+Weapon Adornments: Full "Symbol of War"
+(+2% View Distance Per)
+Offhand: Firepike
+Offhand: fey helhest
+Headpiece: Argos
+Headpiece: fallen sky helmet
+Armor: ---
+Armor: does not matter
+Legwear: ---
+Legwear: does not matter
+Armor Adornments: Does not matter
+Accessory 1: Unfelled Concord
+Accessory 1: lanturn
+Accessory 2: Unfelled Concord
+Accessory 2: lanturn
+Amity: +5% View Distance
+Amity: ---
+Pet: Crimson Gazer
+Pet: Or any other "Gazer"
+Spells: Attacking/Damaging skills
+Spells: ---
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: How to Play This Build
+Notes: Notes coming soon...
+
+=== Boss Horde Dungeons (No Exotic Items) ===
+Build Name: Boss Horde Dungeons
+(No Exotic Items)
+Priorities: Surviving/Successfully Clearing Boss Horde Dungeons
+Notes: As you begin to feel more comfortable try some luck gear! (Remeber, in Orna this is no direct downside from dying)
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spec: Tamer
+Weapon: Axe of Gilgamesh
+Weapon: any high ward weapon
+Weapon Adornments: Full Superior+ Jewels of Avalon
 (Or your best 2% ward adorns)
-Offhand | Firepike | Arisen Shield | Arisen Shield | Arisen Shield | Questing Axe
-fey helhest | best ward shield you have | best ward shield you have | best ward shield you have | questing bow
-Headpiece | Argos | Old Nothren Crown | Old Nothren Crown | Old Nothren Crown | Mighty Mimic Head
-fallen sky helmet | best ward helm you have | best ward helm you have | best ward helm you have | lost helmet
-Armor | --- | Fey Yeti Coat | Fey Yeti Coat | Fey Yeti Coat | Court Jester's Outfit
-does not matter | best ward torso you have | best ward torso you have | best ward torso you have | darkest garb/jester's outfit
-Legwear | --- | Realm Boots | Realm Boots | Realm Boots | Fey Chimera Leggings
-does not matter | best ward boots you have | best ward boots you have | best ward boots you have | best ward boots you have
-Armor Adornments | Does not matter | Superior+ Jewels of the End
-(Or your best 2% ward adorns) | Superior+ Jewels of the End
-(Or your best 2% ward adorns) | Superior+ Jewels of the End
-(Or your best 2% ward adorns) | Superior+ Jewels of the End
+Offhand: Arisen Shield
+Offhand: best ward shield you have
+Headpiece: Old Nothren Crown
+Headpiece: best ward helm you have
+Armor: Fey Yeti Coat
+Armor: best ward torso you have
+Legwear: Realm Boots
+Legwear: best ward boots you have
+Armor Adornments: Superior+ Jewels of the End
 (Or your best 2% ward adorns)
-Accessory 1 | Unfelled Concord | Briny Pendant | Beowulf's Charm | Briny Pendant | Band of Gods
-lanturn | or any relevant immunities | or any relevant immunities | or any relevant immunities | exp tome
-Accessory 2 | Unfelled Concord | Arch-Gadget | Ring of Annwn | Ankou's Ring | Band of Gods
-lanturn | or any relevant immunities | or any relevant immunities | Arch-Gadget | exp tome
-Amity | Mnemonic-Blank | +5% View Distance | +5% Ward Recovery | +15% Follower Stats | +75% Defending | +25% Accessory
-Mnemonic | --- | +15% follower stats | +5% ward recovery | +5% ward recovery | +15% follower stats
-Amity 2
-Pet | Crimson Gazer | Fey Cactus | Fjalar | Mammon Acolyte | Fey Cactus
-Or any other "Gazer" | Best horde option | Best Non-event Raid Pet | AoE + High 1-Target Dmg | Best horde option
-Spells | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills
---- | Guarding Strikes 2/3 | Guarding Strikes 2/3 | Guarding Strikes 2/3 | Guarding Strikes 2/3
-Buff/Debuff Skills | Swordplay 3 | Double Edge | Buff/Debuff Skills | Swordplay 3
---- | Double Edge | Buff/Debuff Skills | Ward of Ortanite/Mythrill | Double Edge
-Buff/Debuff Skills | Ward of Ortanite/Mythrill | Golem's Fortitude | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills
-Ward of Ortanite/Mythrill | Divine Bastion 1/2 | Ward of Ortanite/Mythrill
-Divine Bastion 1/2 | Golem's Fortitude | Divine Bastion 1/2
-Golem's Fortitude | Barrier 2 | Golem's Fortitude
-Barrier 2 | Bear's Might | Barrier 2
-Bear's Might | Wyvern Speed 2 | Bear's Might
-Wyvern Speed 2 | Gait of Gunner | Wyvern Speed 2
-Gait of Gunner | Call of skadi | Gait of Gunner
-Call of Dumbr | Call of Dumbr
-Stun Dart | Stun Dart
-Notes | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose
-This build is what you'd use when you just really want to complete horde dungeons, usually for the sake of grinding out T10 gear. | A full farm version of the second build on this page. A few ALs are recommended, but have not tested enough to know exactly how many.
-How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build
-Notes coming soon... | Simply use Ward of Ortanite/Mythril turn 1 to have some ward up for using divine bastion turn 2/3 
-(If your cactus is starting to 1-shot the early floors stopping you from finishing divine bastion, using call of Dumbr first can stop it from attacking, then simply use it again when done). | Notes coming soon... | Notes coming soon... | Notes coming soon...
-Then start buffing up completely while your cactus clears everything. Using Golem's + Bear's and then a "Pancea" or "Ichor" if def/res↓↓ is present.
-Your Dmg buffs should be priortized as follows:
-1. Bear's Might 
+Accessory 1: Briny Pendant
+Accessory 1: or any relevant immunities
+Accessory 2: Arch-Gadget
+Accessory 2: or any relevant immunities
+Amity: +5% Ward Recovery
+Amity: +15% follower stats
+Pet: Fey Cactus
+Pet: Best horde option
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes 2/3
+Spells: Swordplay 3
+Spells: Double Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite/Mythrill
+Spells: Divine Bastion 1/2
+Spells: Golem's Fortitude
+Spells: Barrier 2
+Spells: Bear's Might
+Spells: Wyvern Speed 2
+Spells: Gait of Gunner
+Spells: Call of Dumbr
+Spells: Stun Dart
+Notes: Build Purpose
+Notes: This build is what you'd use when you just really want to complete horde dungeons, usually for the sake of grinding out T10 gear.
+Notes: How to Play This Build
+Notes: Simply use Ward of Ortanite/Mythril turn 1 to have some ward up for using divine bastion turn 2/3 
+(If your cactus is starting to 1-shot the early floors stopping you from finishing divine bastion, using call of Dumbr first can stop it from attacking, then simply use it again when done).
+Notes: Then start buffing up completely while your cactus clears everything. Using Golem's + Bear's and then a "Pancea" or "Ichor" if def/res↓↓ is present.
+Notes: Your Dmg buffs should be priortized as follows:
+Notes: 1. Bear's Might 
 (+50% dmg)
-2. Gunner 
+Notes: 2. Gunner 
 (+50% dmg)
-3. Double Edge, recommend to 40%
+Notes: 3. Double Edge, recommend to 40%
 (or wherever comfortable)
+
+=== Raiding as Beo (No Exotic Items) ===
+Build Name: Raiding as Beo 
+(No Exotic Items)
+Priorities: Be as tanky as possible while throwing in a few attacks when you can for the Def- while your pet does the dmg
+Notes: ...
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spec: Tamer
+Weapon: Axe of Gilgamesh
+Weapon: any high ward weapon
+Weapon Adornments: 3x Assassin Jewels, 
+#x Superior+ Mammon Tear's
+Offhand: Arisen Shield
+Offhand: best ward shield you have
+Headpiece: Old Nothren Crown
+Headpiece: best ward helm you have
+Armor: Fey Yeti Coat
+Armor: best ward torso you have
+Legwear: Realm Boots
+Legwear: best ward boots you have
+Armor Adornments: Superior+ Jewels of the End
+(Or your best 2% ward adorns)
+Accessory 1: Beowulf's Charm
+Accessory 1: or any relevant immunities
+Accessory 2: Ring of Annwn
+Accessory 2: or any relevant immunities
+Amity: +15% Follower Stats
+Amity: +5% ward recovery
+Pet: Fjalar
+Pet: Best Non-event Raid Pet
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes 2/3
+Spells: Double Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite/Mythrill
+Spells: Divine Bastion 1/2
+Spells: Golem's Fortitude
+Spells: Barrier 2
+Spells: Bear's Might
+Spells: Wyvern Speed 2
+Spells: Gait of Gunner
+Spells: Call of skadi
+Notes: Build Purpose
+Notes: How to Play This Build
+Notes: Notes coming soon...
+
+=== Struggling in T10 Towers (No Exotic Items) ===
+Build Name: Struggling in T10 Towers (No Exotic Items)
+Priorities: Towers will be a struggle until you can manage to get a few levels or some event gear.
+Notes: ...
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spec: Cataphract
+Weapon: Axe of Gilgamesh
+Weapon: any high ward weapon
+Weapon Adornments: Full Superior+ Jewels of Avalon
+(Or your best 2% ward adorns)
+Offhand: Arisen Shield
+Offhand: best ward shield you have
+Headpiece: Old Nothren Crown
+Headpiece: best ward helm you have
+Armor: Fey Yeti Coat
+Armor: best ward torso you have
+Legwear: Realm Boots
+Legwear: best ward boots you have
+Armor Adornments: Superior+ Jewels of the End
+(Or your best 2% ward adorns)
+Accessory 1: Briny Pendant
+Accessory 1: or any relevant immunities
+Accessory 2: Ankou's Ring
+Accessory 2: Arch-Gadget
+Amity: +75% Defending
+Amity: +5% ward recovery
+Pet: Mammon Acolyte
+Pet: AoE + High 1-Target Dmg
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes 2/3
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite/Mythrill
+Spells: Golem's Fortitude
+Notes: Build Purpose
+Notes: How to Play This Build
+Notes: Notes coming soon...
+
+=== Boss Horde Orn Farming (No Exotic Items) ===
+Build Name: Boss Horde Orn Farming
+(No Exotic Items)
+Priorities: Try to earn as much orn's/exp you possibly can while still clearing the dungeon.
+Notes: If you feel you do not require the extra damage from tamer, using oracle with a second "+25% Accessory" amity is a big increase.
+Recommended AL: 10 - 20?
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spec: Tamer
+Weapon: Questing Axe
+Weapon: questing bow
+Weapon Adornments: Full Superior+ Jewels of Avalon
+(Or your best 2% ward adorns)
+Offhand: Questing Axe
+Offhand: questing bow
+Headpiece: Mighty Mimic Head
+Headpiece: lost helmet
+Armor: Court Jester's Outfit
+Armor: darkest garb/jester's outfit
+Legwear: Fey Chimera Leggings
+Legwear: best ward boots you have
+Armor Adornments: Superior+ Jewels of the End
+(Or your best 2% ward adorns)
+Accessory 1: Band of Gods
+Accessory 1: exp tome
+Accessory 2: Band of Gods
+Accessory 2: exp tome
+Amity: +25% Accessory
+Amity: +15% follower stats
+Pet: Fey Cactus
+Pet: Best horde option
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes 2/3
+Spells: Swordplay 3
+Spells: Double Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite/Mythrill
+Spells: Divine Bastion 1/2
+Spells: Golem's Fortitude
+Spells: Barrier 2
+Spells: Bear's Might
+Spells: Wyvern Speed 2
+Spells: Gait of Gunner
+Spells: Call of Dumbr
+Spells: Stun Dart
+Notes: Build Purpose
+Notes: A full farm version of the second build on this page. A few ALs are recommended, but have not tested enough to know exactly how many.
+Notes: How to Play This Build
+Notes: Notes coming soon...
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Template (do not use - only copy) ===
+Build Name: Template
+(do not use - only copy)
+Priorities: ...
+Notes: ...
+Recommended AL: 0
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
 
 --- BeoA Builds ---
 Beowulf Auriga Builds
 Builds centered around the "Pet Focused" gameplay.
 All the credit for this build page template and format goes to Konq <3
-Build Name | :Kek:tus Full Farm | Semi-Farm Horde Clear | The Nuclear Bomb Known as Arisen Spiritgarm | "Chrono-Garm" Raiding | Towerfall Raiding | Temp | Temp | Temp | Template
-(do not use - only copy)
-Priorities | Orn's and seeing that "Dungeon Complete" screen. | To clear horde dungeons with speed and at least earn somthing. | The easiest way to clear raids fast. | ... | ... | ... | ... | ... | ...
-Notes | Use all resource bonuses such as:
-Lucky Coin's, EXP potion, Dowsing Rod, Shrine of Luck/Wisdom, Vulcan's Brew, Kingdom Temple's | ... | A starter ASG build that is more beginner friendly than "Chrono-Garm" | ... | Not nearly as strong as it used to be but still hit's like a truck. | ... | ... | ... | ...
-Recommended AL | TBD | AL 0 | AL 0 | AL 0 | AL 0 | ... | ... | ... | ...
-Anguish 2.0 | Melacholy 0 | Melacholy 0 | Agony 0 | Agony 0 -> ? | Agony 0 -> ? | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0
-Video Link | --- | --- | --- | --- | --- | n/a | n/a | n/a | n/a
-Class | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga | Beowulf Auriga
-Spec | Oracle | Tamer | Inquisitor | Chronomancer | Chronomancer
-Weapon | Questing Axe | Celestial Axe | Celestial Lute | Celestial Lute | Finesse's Enchanted Epee
-celestial axe | celestial lute | --- | --- | ---
-Weapon Adornments | 12x Goat's Eye | 5x Legs of Selene,
-6x Goat's Eye | 5x Legs of Selene | 5x Legs of Selene | 20x Soul's of Achlys
-Offhand | Questing Axe | Questing Axe | Arisen Cursed Autumna Crested Shield | Arisen Cursed Autumna Crested Shield | Finesse's Enchanted Epee
-questing bow | questing bow | arisen shield | damona shield | ---
-Headpiece | Mightiest Mimic Head | Mightiest Mimic Head | Arisen Rift Helmet | Arisen Rift Helmet | Fomorian King Crown
-mighty mimic head | mighty mimic head | fey gerd's headdress | fey gerd's headdress | fey gerd's headdress
-Armor | Court Jester's Outfit | Fey Surtr's Cuirass | Beastfelled Garb | Beastfelled Garb | Arisen Aaru Robe
-Court Jester's Outfit | or high ward/mag chest | or high ward/mag chest | Bulwark
-Legwear | Fey Gerd's Legwraps | Arisen Jolly Stockings | Footpads of Dynasty | Footpads of Dynasty | Fomorian King Boots
-arisen riftrogue boots | fey gerd's legwraps | fey gerd's legwraps | niskus' boots | fallen sky shoes
-Armor Adornments | Full Superior+ JoC's,
-(or best 2% ward adorns) | Full Superior+ JoC's,
-(or best 2% ward adorns) | Mountain Acorns / 
-Full Superior+ JoC's, | Mountain Acorns / 
-Full Superior+ JoC's, | Full Superior+ JoC's,
+=== :Kek:tus Full Farm ===
+Build Name: :Kek:tus Full Farm
+Priorities: Orn's and seeing that "Dungeon Complete" screen.
+Notes: Use all resource bonuses such as:
+Lucky Coin's, EXP potion, Dowsing Rod, Shrine of Luck/Wisdom, Vulcan's Brew, Kingdom Temple's
+Recommended AL: TBD
+Anguish 2.0: Melacholy 0
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Oracle
+Weapon: Questing Axe
+Weapon: celestial axe
+Weapon Adornments: 12x Goat's Eye
+Offhand: Questing Axe
+Offhand: questing bow
+Headpiece: Mightiest Mimic Head
+Headpiece: mighty mimic head
+Armor: Court Jester's Outfit
+Legwear: Fey Gerd's Legwraps
+Legwear: arisen riftrogue boots
+Armor Adornments: Full Superior+ JoC's,
 (or best 2% ward adorns)
-Accessory 1 | Band of Gods | Band of Gods | Arisen Arch-Gadget | Naggeneen's Belt | Naggeneen's Belt
---- | unfelled concord | any relevant immunities | --- | ---
-Accessory 2 | Band of Gods | Ymir Vritra Charm | Beowulf's Charm | Naggeneen's Belt | Naggeneen's Belt
---- | any relevant immunities | --- | --- | ---
-Amity | Mnemonic-Blank | +25% Accessory | +15% Follower Stats | +50% Stat Duration | +50% Stat Duration | +30% Dragon Damage
-Mnemonic | +15% follower stats | +5% ward recovery | +15% follower stats | +15% follower stats | +30% Arcane Damage
-Amity 2 | +25% Accessory
----
-Pet | Fey Cactus | Fey Cactus | Arisen Spiritgarm | Arisen Spiritgarm | Replica Prometheus
---- | --- | --- | atlas of olympia
-Spells | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills
-Guarding Strikes IV | Guarding Strikes IV | Lacuna II | Lacuna II
-Ward of Light III | Ward of Light III | Evasive strikes
-Double Edge | Double Edge | Double Edge
-Quad Edge | Quad Edge | Quad Edge | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills
-Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills
-Ward of Ortanite | Ward of Ortanite | Buff/Debuff Skills
-Divine Bastion 1/2 | Divine Bastion 1/2 | Ward of Ortanite
-Golem's Fortitude | Golem's Fortitude | Divine Bastion 1/2
-Barrier II | Barrier II | Gods of Aaru
-Bear's Might | Bear's Might | Wyvern Speed I
-Wyvern Speed II | Wyvern Speed II | Wyrm's Song
-Gait of Gunnr | Gait of Gunnr | Gait of Snotra
-Stun Dart | Call of Dumbr
-Notes | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose
-BeoA is special in the fact that it has the ability to farm T10/11 boss horde dungeons in 100% farm gear. | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :)
-Will Finish these soon :)
-How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build
-Notes coming soon... | Since ASG can actually crit, we use Wyrm's Song to improve its crit capabilities (Only buffs can affect pet crit chance), you can also utilise Evasive strikes for t.crit.
+Accessory 1: Band of Gods
+Accessory 1: ---
+Accessory 2: Band of Gods
+Accessory 2: ---
+Amity: +25% Accessory
+Amity: +15% follower stats
+Amity 2: +25% Accessory
+Amity 2: ---
+Pet: Fey Cactus
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes IV
+Spells: Ward of Light III
+Spells: Double Edge
+Spells: Quad Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite
+Spells: Divine Bastion 1/2
+Spells: Golem's Fortitude
+Spells: Barrier II
+Spells: Bear's Might
+Spells: Wyvern Speed II
+Spells: Gait of Gunnr
+Spells: Stun Dart
+Notes: Build Purpose
+Notes: BeoA is special in the fact that it has the ability to farm T10/11 boss horde dungeons in 100% farm gear.
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+Notes: Notes coming soon...
+
+=== Semi-Farm Horde Clear ===
+Build Name: Semi-Farm Horde Clear
+Priorities: To clear horde dungeons with speed and at least earn somthing.
+Notes: ...
+Recommended AL: AL 0
+Anguish 2.0: Melacholy 0
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Tamer
+Weapon: Celestial Axe
+Weapon: celestial lute
+Weapon Adornments: 5x Legs of Selene,
+6x Goat's Eye
+Offhand: Questing Axe
+Offhand: questing bow
+Headpiece: Mightiest Mimic Head
+Headpiece: mighty mimic head
+Armor: Fey Surtr's Cuirass
+Armor: Court Jester's Outfit
+Legwear: Arisen Jolly Stockings
+Legwear: fey gerd's legwraps
+Armor Adornments: Full Superior+ JoC's,
+(or best 2% ward adorns)
+Accessory 1: Band of Gods
+Accessory 1: unfelled concord
+Accessory 2: Ymir Vritra Charm
+Accessory 2: any relevant immunities
+Amity: +15% Follower Stats
+Amity: +5% ward recovery
+Pet: Fey Cactus
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: Guarding Strikes IV
+Spells: Ward of Light III
+Spells: Double Edge
+Spells: Quad Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite
+Spells: Divine Bastion 1/2
+Spells: Golem's Fortitude
+Spells: Barrier II
+Spells: Bear's Might
+Spells: Wyvern Speed II
+Spells: Gait of Gunnr
+Spells: Call of Dumbr
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== The Nuclear Bomb Known as Arisen Spiritgarm ===
+Build Name: The Nuclear Bomb Known as Arisen Spiritgarm
+Priorities: The easiest way to clear raids fast.
+Notes: A starter ASG build that is more beginner friendly than "Chrono-Garm"
+Recommended AL: AL 0
+Anguish 2.0: Agony 0
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Inquisitor
+Weapon: Celestial Lute
+Weapon: ---
+Weapon Adornments: 5x Legs of Selene
+Offhand: Arisen Cursed Autumna Crested Shield
+Offhand: arisen shield
+Headpiece: Arisen Rift Helmet
+Headpiece: fey gerd's headdress
+Armor: Beastfelled Garb
+Armor: or high ward/mag chest
+Legwear: Footpads of Dynasty
+Legwear: fey gerd's legwraps
+Armor Adornments: Mountain Acorns / 
+Full Superior+ JoC's,
+Accessory 1: Arisen Arch-Gadget
+Accessory 1: any relevant immunities
+Accessory 2: Beowulf's Charm
+Accessory 2: ---
+Amity: +50% Stat Duration
+Amity: +15% follower stats
+Pet: Arisen Spiritgarm
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== "Chrono-Garm" Raiding ===
+Build Name: "Chrono-Garm" Raiding
+Priorities: ...
+Notes: ...
+Recommended AL: AL 0
+Anguish 2.0: Agony 0 -> ?
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Chronomancer
+Weapon: Celestial Lute
+Weapon: ---
+Weapon Adornments: 5x Legs of Selene
+Offhand: Arisen Cursed Autumna Crested Shield
+Offhand: damona shield
+Headpiece: Arisen Rift Helmet
+Headpiece: fey gerd's headdress
+Armor: Beastfelled Garb
+Armor: or high ward/mag chest
+Legwear: Footpads of Dynasty
+Legwear: niskus' boots
+Armor Adornments: Mountain Acorns / 
+Full Superior+ JoC's,
+Accessory 1: Naggeneen's Belt
+Accessory 1: ---
+Accessory 2: Naggeneen's Belt
+Accessory 2: ---
+Amity: +50% Stat Duration
+Amity: +15% follower stats
+Pet: Arisen Spiritgarm
+Spells: Attacking/Damaging skills
+Spells: Lacuna II
+Spells: Evasive strikes
+Spells: Double Edge
+Spells: Quad Edge
+Spells: Buff/Debuff Skills
+Spells: Ward of Ortanite
+Spells: Divine Bastion 1/2
+Spells: Gods of Aaru
+Spells: Wyvern Speed I
+Spells: Wyrm's Song
+Spells: Gait of Snotra
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+Notes: Since ASG can actually crit, we use Wyrm's Song to improve its crit capabilities (Only buffs can affect pet crit chance), you can also utilise Evasive strikes for t.crit.
+
+=== Towerfall Raiding ===
+Build Name: Towerfall Raiding
+Priorities: ...
+Notes: Not nearly as strong as it used to be but still hit's like a truck.
+Recommended AL: AL 0
+Anguish 2.0: Agony 0 -> ?
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Chronomancer
+Weapon: Finesse's Enchanted Epee
+Weapon: ---
+Weapon Adornments: 20x Soul's of Achlys
+Offhand: Finesse's Enchanted Epee
+Offhand: ---
+Headpiece: Fomorian King Crown
+Headpiece: fey gerd's headdress
+Armor: Arisen Aaru Robe
+Armor: Bulwark
+Legwear: Fomorian King Boots
+Legwear: fallen sky shoes
+Armor Adornments: Full Superior+ JoC's,
+(or best 2% ward adorns)
+Accessory 1: Naggeneen's Belt
+Accessory 1: ---
+Accessory 2: Naggeneen's Belt
+Accessory 2: ---
+Amity: +30% Dragon Damage
+Amity: +30% Arcane Damage
+Pet: Replica Prometheus
+Pet: atlas of olympia
+Spells: Attacking/Damaging skills
+Spells: Lacuna II
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Auriga
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Auriga
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Auriga
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Template (do not use - only copy) ===
+Build Name: Template
+(do not use - only copy)
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Auriga
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
 
 --- BeoH Builds ---
 Beowulf Hydrus Builds
 Builds centered around the "Hybrid Focused" gameplay (this does not mean specifically using hybrid skills/amities).
 All the credit for this build page template and format goes to Konq <3
-Build Name | Horde Dungeons Minimal Buffing | Ultimastrikes Raiding | Single Turn Ultima Raiding | PvP with V4 as 
-BeoH's Should | Please get me out of the Spiked Shield 3 Meta... | Template
-(do not use - only copy) | Trying our Best to Still use SS3 for Raiding... | Hybrid Chakram Raiding | Torment Towers with Brilliant Lights II | Temp | Template
-(do not use - only copy)
-Priorities | Clear horde dungeons with as little buffs as fast as you can. | Hit raids hard. | Hit raids hard.
-But with magic :) | Hit as hard as you possibly can on turn 1 | Click SS3.
-Yes it's that boring. | Melacholy proof farming. | Survive and actually clear Agony raids. | Get as much damage done as you can before you eventually get 1 shot. | One-Shot all packs and farm torment proofs | ... | ...
-Notes | This build can be used with any Brilliant Lights II weapon. Just using swansong since it's the most accessible. | This build may be slighly outdated but can still preform quite well. | ... | ... | ... | Build could probably use some "refinement" but just wanted to have at least somthing here | Needs a bit more testing but seems like it's kinda working | A very specific, not very great, but very fun Agony raid build. | ... | ... | ...
-Recommended AL | TBD | TBD | TBD | TBD | TBD | Shackles | Shackles | Shackles | Shackles | ... | ...
-Anguish 2.0 | Melacholy 0 | Agony 0 -> 7 | Agony 0 -> 7 | n/a | n/a | Melacholy 13+ | Agony 10+ | Agony 0 -> 12 | Torment 1 ->22 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0
-Video Link | n/a | n/a | n/a | --- | --- | n/a | --- | --- | coming soon* | n/a | n/a
-Class | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus
-Spec | Oracle | Oracle | Sequencer | Oracle | Oracle | Oracle | Oracle | Oracle | Oracle
-Weapon | Swansong | Celestial Lute | Celestial Staff | Celestial Lute | Celestial Lute | Yelmogus Greatstaff | Beguiled Lute X | Celestial Lute | Yelmogus Greatstaff
-arisen trev staff | celestial axe | --- | --- | celestial axe | +10% crit damage | +10% faction dmg | 5x Prom Hands | +10% crit damage
-Weapon Adornments | 12x Ferocious Bull's Eye's
-or Gorgon Eye's | 5x Hands of Prometheus
-8x Soul Achlys | 5x Lungs of Oceanus
-10x Soul Achlys | 5x Prom Hands,
-8x Ferocious Bull's Eye's | 5x Hands of Selene | 15x Gorgon Eye's | 8x Blackend Eyes of Kerberos,
-1x Ashen Ruby | 5x Hands of Selene,
-8x Gorgon Eye's | 15x Ferocious Bull's Eye's
+=== Horde Dungeons Minimal Buffing ===
+Build Name: Horde Dungeons Minimal Buffing
+Priorities: Clear horde dungeons with as little buffs as fast as you can.
+Notes: This build can be used with any Brilliant Lights II weapon. Just using swansong since it's the most accessible.
+Recommended AL: TBD
+Anguish 2.0: Melacholy 0
+Video Link: n/a
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Swansong
+Weapon: arisen trev staff
+Weapon Adornments: 12x Ferocious Bull's Eye's
 or Gorgon Eye's
-Offhand | Finesse's Katana | Arisen Imagination | Arisen Fey Crowsong | Spiked Greatshield | Spiked Greatshield | Arisen Fey Crowsong
-finesse's greatsword | arisen kaladanda | or best hybrid weapon | arisen shield | +3% ward recovery | +10% crit damage
-Headpiece | Fey Menja's Hood | Arisen Cursed Fomor's Crown | Hood of Dynasty | Arisen Rift Cowl | Hyperion Cowl | Fey Menja's Hood | Hyperion Cowl | Fey Menja's Hood | Fey Menja's Hood
-riftrogue helmet / cowl | fallen sky cowl | fey menja's hood | arisen riftrogue helmet | arisen avalon helmet | +7% accuracy | +7% follower act | +7% accuracy | +7% accuracy
-Armor | Arisen Aaru Robe | Bulwark | Arisen Aaru Robe | Arisen Rift Chestplate | Fey Surtr's Cuirass | Arisen Aaru Robe | Beastfelled Garb | Arisen Aaru Robe | Heretic's Robe
-arisen pumpkinless armor | beastfelled garb | beastfelled garb | fey hel's garb | fey gerd's chestguard | +7% status protection | +3% ward recovery | +7% status protection | +150 dexterity
-Legwear | Beastfelled Shoes | Windtamer Shoes | Fallen Sky Shoes | Windtamer Shoes | Arisen Pumpkinless leggings | Beastfelled Shoes | Windtamer Shoes | Windtamer Shoes | Fallen Sky Shoes
-arisen pumpkinless legs | arisen riftrogue boots | arisen riftrogue boots | arisen riftrogue boots | windtamer shoes | +15% two-handed power | +4% accuracy | +4% accuracy | +15% two-handed power
-Armor Adornments | Lyncus' Bristle / until 
-75% or 95% crit chance | Lyncus' Bristle / until 
-75% or 95% crit chance | Lyncus' Bristle / until 
-75% or 95% crit chance | Lyncus' Bristle / until 
-95% crit chance | Full Superior+
-"Jewels of Creation" | 16x Lyncus' Bristles,
-8x JoC's | Full Superior+
-"Jewels of Creation" | 16x Lyncus' Bristles,
-8x JoC's | 12x Lyncus' Bristles
+Headpiece: Fey Menja's Hood
+Headpiece: riftrogue helmet / cowl
+Armor: Arisen Aaru Robe
+Armor: arisen pumpkinless armor
+Legwear: Beastfelled Shoes
+Legwear: arisen pumpkinless legs
+Armor Adornments: Lyncus' Bristle / until 
+75% or 95% crit chance
+Accessory 1: Arisen Trev Charm
+Accessory 1: ---
+Accessory 2: Arisen Trev Charm
+Accessory 2: ---
+Amity: +40% Crit Damage
+Amity: +15% dmg at max hp
+Amity 2: +40% Crit Damage
+Amity 2: +15% dmg at max hp
+Pet: The Mightiest Mimic
+Pet: arisen stonewarg
+Spells: Attacking/Damaging skills
+Spells: Verse IV / Magic Chakram
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Ultimastrikes Raiding ===
+Build Name: Ultimastrikes Raiding
+Priorities: Hit raids hard.
+Notes: This build may be slighly outdated but can still preform quite well.
+Recommended AL: TBD
+Anguish 2.0: Agony 0 -> 7
+Video Link: n/a
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Celestial Lute
+Weapon: celestial axe
+Weapon Adornments: 5x Hands of Prometheus
+8x Soul Achlys
+Offhand: Finesse's Katana
+Offhand: finesse's greatsword
+Headpiece: Arisen Cursed Fomor's Crown
+Headpiece: fallen sky cowl
+Armor: Bulwark
+Armor: beastfelled garb
+Legwear: Windtamer Shoes
+Legwear: arisen riftrogue boots
+Armor Adornments: Lyncus' Bristle / until 
+75% or 95% crit chance
+Accessory 1: Naggeneen's Belt
+Accessory 1: ymir vritra charm
+Accessory 2: Naggeneen's Belt
+Accessory 2: briny pendant
+Amity: +40% Crit Damage
+Amity: +30% dragon / arcane
+Amity 2: +40% Crit Damage
+Amity 2: +30% dragon / arcane
+Pet: Lotan, Coiled One
+Pet: gorynych
+Spells: Attacking/Damaging skills
+Spells: Ultimastrikes
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Single Turn Ultima Raiding ===
+Build Name: Single Turn Ultima Raiding
+Priorities: Hit raids hard.
+But with magic :)
+Notes: ...
+Recommended AL: TBD
+Anguish 2.0: Agony 0 -> 7
+Video Link: n/a
+Class: Beowulf Hydrus
+Spec: Sequencer
+Weapon: Celestial Staff
+Weapon: ---
+Weapon Adornments: 5x Lungs of Oceanus
+10x Soul Achlys
+Offhand: Arisen Imagination
+Offhand: arisen kaladanda
+Headpiece: Hood of Dynasty
+Headpiece: fey menja's hood
+Armor: Arisen Aaru Robe
+Armor: beastfelled garb
+Legwear: Fallen Sky Shoes
+Legwear: arisen riftrogue boots
+Armor Adornments: Lyncus' Bristle / until 
+75% or 95% crit chance
+Accessory 1: Carl's Ring (T10)
+Accessory 1: lyncus' bracer
+Accessory 2: Ymir Vritra Charm
+Accessory 2: any relevant immuunities
+Amity: +40% Crit Damage
+Amity: +30% dragon / arcane
+Pet: The Mightiest Mimic
+Pet: lotan / gorynych
+Spells: Attacking/Damaging skills
+Spells: Ultima
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== PvP with V4 as BeoH's Should ===
+Build Name: PvP with V4 as 
+BeoH's Should
+Priorities: Hit as hard as you possibly can on turn 1
+Notes: ...
+Recommended AL: TBD
+Anguish 2.0: n/a
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Celestial Lute
+Weapon: ---
+Weapon Adornments: 5x Prom Hands,
+8x Ferocious Bull's Eye's
+Offhand: Arisen Fey Crowsong
+Offhand: or best hybrid weapon
+Headpiece: Arisen Rift Cowl
+Headpiece: arisen riftrogue helmet
+Armor: Arisen Rift Chestplate
+Armor: fey hel's garb
+Legwear: Windtamer Shoes
+Legwear: arisen riftrogue boots
+Armor Adornments: Lyncus' Bristle / until 
+95% crit chance
+Accessory 1: Carl's Ring (T10)
+Accessory 1: lyncus' bracer
+Accessory 2: Carl's Ring (T10)
+Accessory 2: any relevant immuunities
+Amity: +40% Crit Damage
+Amity: +15% dmg at max hp
+Amity 2: +40% Crit Damage
+Amity 2: +15% hybrid damage
+Pet: Macaroni Penguin
+Pet: great amarok
+Spells: Attacking/Damaging skills
+Spells: Verse IV
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Please get me out of the Spiked Shield 3 Meta... ===
+Build Name: Please get me out of the Spiked Shield 3 Meta...
+Priorities: Click SS3.
+Yes it's that boring.
+Notes: ...
+Recommended AL: TBD
+Anguish 2.0: n/a
+Video Link: ---
+Class: Beowulf hydrus
+Spec: Oracle
+Weapon: Celestial Lute
+Weapon: celestial axe
+Weapon Adornments: 5x Hands of Selene
+Offhand: Spiked Greatshield
+Offhand: arisen shield
+Headpiece: Hyperion Cowl
+Headpiece: arisen avalon helmet
+Armor: Fey Surtr's Cuirass
+Armor: fey gerd's chestguard
+Legwear: Arisen Pumpkinless leggings
+Legwear: windtamer shoes
+Armor Adornments: Full Superior+
+"Jewels of Creation"
+Accessory 1: Carl's Ring (T10)
+Accessory 1: ymir vritra charm
+Accessory 2: Carl's Ring (T10)
+Accessory 2: ymir vritra charm
+Amity: All Skills Hybrid
+Amity: 20% parapet
+Amity 2: Starting Ward Turns
+Amity 2: +7% follower protect
+Pet: Bone Mammoth
+Pet: great amarok
+Spells: Attacking/Damaging skills
+Spells: Spiked Shield III
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Template (do not use - only copy) ===
+Build Name: Template
+(do not use - only copy)
+Priorities: Melacholy proof farming.
+Notes: Build could probably use some "refinement" but just wanted to have at least somthing here
+Recommended AL: Shackles
+Anguish 2.0: Melacholy 13+
+Video Link: n/a
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Yelmogus Greatstaff
+Weapon: +10% crit damage
+Weapon Adornments: 15x Gorgon Eye's
+Headpiece: Fey Menja's Hood
+Headpiece: +7% accuracy
+Armor: Arisen Aaru Robe
+Armor: +7% status protection
+Legwear: Beastfelled Shoes
+Legwear: +15% two-handed power
+Armor Adornments: 16x Lyncus' Bristles,
+8x JoC's
+Accessory 1: Arisen Trev Charm
+Accessory 1: ---
+Accessory 2: Arisen Trev Charm
+Accessory 2: ---
+Amity: +40% Crit Damage
+Amity: +15% dmg at max hp
+Amity 2: +40% Crit Damage
+Amity 2: +15% dmg at max hp
+Pet: The Mightiest Mimic
+Pet: fey chimera
+Spells: Attacking/Damaging skills
+Spells: Magic Chakram
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Trying our Best to Still use SS3 for Raiding... ===
+Build Name: Trying our Best to Still use SS3 for Raiding...
+Priorities: Survive and actually clear Agony raids.
+Notes: Needs a bit more testing but seems like it's kinda working
+Recommended AL: Shackles
+Anguish 2.0: Agony 10+
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Beguiled Lute X
+Weapon: +10% faction dmg
+Weapon Adornments: 8x Blackend Eyes of Kerberos,
+1x Ashen Ruby
+Offhand: Spiked Greatshield
+Offhand: +3% ward recovery
+Headpiece: Hyperion Cowl
+Headpiece: +7% follower act
+Armor: Beastfelled Garb
+Armor: +3% ward recovery
+Legwear: Windtamer Shoes
+Legwear: +4% accuracy
+Armor Adornments: Full Superior+
+"Jewels of Creation"
+Accessory 1: Carl's Ring (T10)
+Accessory 1: ymir vritra charm
+Accessory 2: Carl's Ring (T10)
+Accessory 2: any relevant immuunities
+Amity: All Skills Hybrid
+Amity: +50% stat duration
+Amity 2: +20% Fire Damage
+Amity 2: +5% ward recovery
+Pet: Bone Mammoth
+Pet: arisen stonewarg
+Spells: Attacking/Damaging skills
+Spells: Spiked Shield III
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Hybrid Chakram Raiding ===
+Build Name: Hybrid Chakram Raiding
+Priorities: Get as much damage done as you can before you eventually get 1 shot.
+Notes: A very specific, not very great, but very fun Agony raid build.
+Recommended AL: Shackles
+Anguish 2.0: Agony 0 -> 12
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Celestial Lute
+Weapon: 5x Prom Hands
+Weapon Adornments: 5x Hands of Selene,
+8x Gorgon Eye's
+Offhand: Arisen Fey Crowsong
+Offhand: +10% crit damage
+Headpiece: Fey Menja's Hood
+Headpiece: +7% accuracy
+Armor: Arisen Aaru Robe
+Armor: +7% status protection
+Legwear: Windtamer Shoes
+Legwear: +4% accuracy
+Armor Adornments: 16x Lyncus' Bristles,
+8x JoC's
+Accessory 1: ymir vritra charm
+Accessory 1: Carl's Ring (T10)
+Accessory 2: Briny Pendant
+Accessory 2: any relevant immuunities
+Amity: All Skills Hybrid
+Amity: +40% crit damage
+Amity 2: +40% Crit Damage
+Amity 2: +15% dmg at max hp
+Pet: Macaroni Penguin
+Pet: bone mammoth
+Spells: Attacking/Damaging skills
+Spells: Magic Chakram
+Spells: Buff/Debuff Skills
+Spells: Mimic's Mischief
+Spells: Wyvern Speed
+Spells: Gait of Snotra
+Spells: Ward of Ortanite
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Torment Towers with Brilliant Lights II ===
+Build Name: Torment Towers with Brilliant Lights II
+Priorities: One-Shot all packs and farm torment proofs
+Notes: ...
+Recommended AL: Shackles
+Anguish 2.0: Torment 1 ->22
+Video Link: coming soon*
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Yelmogus Greatstaff
+Weapon: +10% crit damage
+Weapon Adornments: 15x Ferocious Bull's Eye's
+or Gorgon Eye's
+Headpiece: Fey Menja's Hood
+Headpiece: +7% accuracy
+Armor: Heretic's Robe
+Armor: +150 dexterity
+Legwear: Fallen Sky Shoes
+Legwear: +15% two-handed power
+Armor Adornments: 12x Lyncus' Bristles
 7x Azure Pinion's
-Accessory 1 | Arisen Trev Charm | Naggeneen's Belt | Carl's Ring (T10) | Carl's Ring (T10) | Carl's Ring (T10) | Arisen Trev Charm | Carl's Ring (T10) | ymir vritra charm | Arisen Trev Charm
---- | ymir vritra charm | lyncus' bracer | lyncus' bracer | ymir vritra charm | --- | ymir vritra charm | Carl's Ring (T10) | ---
-Accessory 2 | Arisen Trev Charm | Naggeneen's Belt | Ymir Vritra Charm | Carl's Ring (T10) | Carl's Ring (T10) | Arisen Trev Charm | Carl's Ring (T10) | Briny Pendant | Arisen Trev Charm
---- | briny pendant | any relevant immuunities | any relevant immuunities | ymir vritra charm | --- | any relevant immuunities | any relevant immuunities | ---
-Amity | Mnemonic-Blank | +40% Crit Damage | +40% Crit Damage | +40% Crit Damage | +40% Crit Damage | All Skills Hybrid | +40% Crit Damage | All Skills Hybrid | All Skills Hybrid | +40% Crit Damage
-Mnemonic | +15% dmg at max hp | +30% dragon / arcane | +30% dragon / arcane | +15% dmg at max hp | 20% parapet | +15% dmg at max hp | +50% stat duration | +40% crit damage | +15% dmg at max hp
-Amity 2 | +40% Crit Damage | +40% Crit Damage | +40% Crit Damage | Starting Ward Turns | +40% Crit Damage | +20% Fire Damage | +40% Crit Damage | +40% Crit Damage
-+15% dmg at max hp | +30% dragon / arcane | +15% hybrid damage | +7% follower protect | +15% dmg at max hp | +5% ward recovery | +15% dmg at max hp | +15% dmg at max hp
-Pet | The Mightiest Mimic | Lotan, Coiled One | The Mightiest Mimic | Macaroni Penguin | Bone Mammoth | The Mightiest Mimic | Bone Mammoth | Macaroni Penguin | Great Amarok
-arisen stonewarg | gorynych | lotan / gorynych | great amarok | great amarok | fey chimera | arisen stonewarg | bone mammoth | replica oceanus
-Spells | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills
-Verse IV / Magic Chakram | Ultimastrikes | Ultima | Verse IV | Spiked Shield III | Magic Chakram | Spiked Shield III | Magic Chakram | Magic Chakram
-Buff/Debuff Skills | Buff/Debuff Skills
-Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Mimic's Mischief | --- | Buff/Debuff Skills | Buff/Debuff Skills
-Wyvern Speed
-Gait of Snotra
-Ward of Ortanite
-Notes | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose
-Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :) | Will Finish these soon :)
-How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build
+Accessory 1: Arisen Trev Charm
+Accessory 1: ---
+Accessory 2: Arisen Trev Charm
+Accessory 2: ---
+Amity: +40% Crit Damage
+Amity: +15% dmg at max hp
+Amity 2: +40% Crit Damage
+Amity 2: +15% dmg at max hp
+Pet: Great Amarok
+Pet: replica oceanus
+Spells: Attacking/Damaging skills
+Spells: Magic Chakram
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: Will Finish these soon :)
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Hydrus
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Template (do not use - only copy) ===
+Build Name: Template
+(do not use - only copy)
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Class: Beowulf Hydrus
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
 
 --- Endless ---
 Beowulf Endless
 It's not ideal, but it is possble. Contains a set-up build, along with different ways to farm endless as both BeoA and BeoH.
 All the credit for this build page template and format goes to Konq <3
-Build Name | The Setup - Version 1 | BeoA Chimera
-Full Farm | BeoA TMM
-Depth | BeoH Viperseal
-Full Farm | BeoH Viperseal
-Full Farm (Mel 1) | BeoH Quickcast Ultima
-Semi-Farm / Depth | Temp | Temp | Template
-(do not use - only copy)
-Priorities | Use all buffs. Once complete swap to main endless build. | To earn as many orn's as possible. | To complete all your endless achievements (Floor 400+) and earn Orn's while doing so. | To earn as many orn's as possible. | To earn as many orn's as possible. But this time with Melacholy Bonuses. | To complete all your endless achievements (Floor 400+) and earn Orn's while doing so. | ... | ... | ...
-Notes | This is a VERY specific build that makes you fully immune to all debuffs to make setup very easy. Not completely necessary. | Need more input from others... | Need more input from others... | This is just worse Dara in every way. 0AL Dara will outpreform a 75AL+ BeoH easily. | ← | More Damage / Penetration in trade for orn % | ... | ... | ...
-Recommended AL | ... | ... | ... | ~AL75+ | ~AL75+ | ... | ... | ... | ...
-Anguish 2.0 | 0 / 0 / 0 / 0 | 0 / ? / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | Melacholy 1 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0
-Video Link | --- | --- | --- | --- | --- | --- | n/a | n/a | n/a
-Class | Beowulf | Beowulf Auriga | Beowulf Auriga | Beowulf Hydrus | Beowulf Hydrus | Beowulf Hydrus
-Spec | Oracle | Oracle | Oracle | Oracle | Sequencer
-Weapon | Crystalis | Questing Axe | Arisen Terror | Arisen Terror | Celestial Staff
-does not matter | questing bow | questing staff | +10% crit chance | ---
-Weapon Adornments | Does not matter. | ? | 12x Ferocious Bull's Eye | 12x  Ferocious Bull's Eye | 5x Ocean Lungs
-6x Ferocious Bull's Eye
-Offhand | Book of Dragon X | Questing Axe | Arisen Terror | Arisen Terror | Arisen Terror
-*check notes* | questing bow | questing staff | +10% crit chance | questing staff
-Headpiece | Dusk Cowl | Lost Helmet | Lost Helmet | Lost Helmet | Lost Helmet
-does not matter | mightiest mimic head | mightiest mimic head | +7% accuracy | mightiest mimic head
-Armor | Beastfelled Garb | Court Jester's Outfit | Court Jester's Outfit | Court Jester's Outfit | Court Jester's Outfit
-*check notes* | --- | --- | +150 dexterity | ---
-Legwear | Beastfelled Boots | ? | Arisen Riftrogue Boots | Arisen Riftrogue Boots | Arisen Riftrogue Boots
-does not matter | ? | ? | +150 dex / +4% acc | ?
-Armor Adornments | Does not matter. | JoC's? | 1x JoC,
-16x Lyncus' Bristles | 5x JoC Between Head & Torso,
-and 12x Turul Feathers | 4x JoC,
-13x Lyncus' Bristles
-Accessory 1 | Ymir Vritra Charm | Band of Gods | Band of Gods | Band of Gods | Band of Gods
---- | --- | --- | --- | ---
-Accessory 2 | Briny Pendant | Band of Gods | Band of Gods | Band of Gods | Band of Gods
---- | --- | --- | --- | ---
-Amity | Mnemonic-Blank | 5% Max HP Regen | +25% Accessory | +25% Accessory | +25% Accessory | +25% Accessory
-Mnemonic | 5% ward regen | +50% stat duration | +50% stat duration | +40% crit damage
-Amity 2 | 5% Max Mana Regen | +25% Accessory | +25% Accessory | +25% Accessory
-starting ward turns | +40% crit damage | +40% crit damage
-Pet | Steward Golem | Chimera | The Mightiest Mimic | Ashen Phoenix | Ashen Phoenix | Ashen Phoenix
---- | --- | --- | Macaroni Penguin | Macaroni Penguin | Macaroni Penguin
-Spells | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills | Attacking/Damaging skills
---- | Viperseal III | Viperseal III | Ultima
-Terraseal III | Terraseal III | Transference III
-Transference III | Transference III | Buff/Debuff Skills
-Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills | --- | Buff/Debuff Skills | Buff/Debuff Skills | Buff/Debuff Skills
-Divine Bastion II | --- | --- | --- | --- | ---
-Mimic's Mischief
-Wyvern Speed II
-Golem's Fortitude
-Barrier II
-Wyrm's Song
-Ward of Balor
-Call of "whatever you need depending on run"
-Notes | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose | Build Purpose
-Pretty self explanitory. Make sure you have all your buffs and then swap to your main endless loadout. | ... | ... | The highest bonus orn % possible. | ← | Earning the floor 400 achievement will net you ton's orn's
-... | ... | ... | ...
-How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build | How to Play This Build
-*Book of Dragon X* | Just spam "Viperseal III". If they're immune to dragon, use terraseal (or any "seal III" that they're not immune to).
-"Transference III" is here to use on weak/easy mobs if you need to regen your ward. | ← | Unlike the "Seal III" builds you do not gain ward turns through your attacks so you will need to set up/have a minimum 400+ ward turns prior to you using this build.
-When running endless using "Dragon Alignment" is by far the most common. This is due to it giving 0 weaknesses, an immunity to dragon element attacks, and +50% dmg to all dragon attacks.
-Of course you'll want to earn as many orn's and other resources as you can while doing so
-Just pray you don't miss and that "T.All+++" stay's active. | ←
-*Beastfelled Garb*
-This is purley a "QoL" piece. If you don't have one you can simply leave, swap to Chimera pet, and use "defend" untill it gives you "Berserk I".
-Other Berserks
-To get the other berserk effects you have two options.
-A.
+=== The Setup - Version 1 ===
+Build Name: The Setup - Version 1
+Priorities: Use all buffs. Once complete swap to main endless build.
+Notes: This is a VERY specific build that makes you fully immune to all debuffs to make setup very easy. Not completely necessary.
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: ---
+Class: Beowulf
+Spec: Oracle
+Weapon: Crystalis
+Weapon: does not matter
+Weapon Adornments: Does not matter.
+Offhand: Book of Dragon X
+Offhand: *check notes*
+Headpiece: Dusk Cowl
+Headpiece: does not matter
+Armor: Beastfelled Garb
+Armor: *check notes*
+Legwear: Beastfelled Boots
+Legwear: does not matter
+Armor Adornments: Does not matter.
+Accessory 1: Ymir Vritra Charm
+Accessory 1: ---
+Accessory 2: Briny Pendant
+Accessory 2: ---
+Amity: 5% Max HP Regen
+Amity: 5% ward regen
+Amity 2: 5% Max Mana Regen
+Amity 2: starting ward turns
+Pet: Steward Golem
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: ---
+Spells: Buff/Debuff Skills
+Spells: Divine Bastion II
+Spells: Mimic's Mischief
+Spells: Wyvern Speed II
+Spells: Golem's Fortitude
+Spells: Barrier II
+Spells: Wyrm's Song
+Spells: Ward of Balor
+Spells: Call of "whatever you need depending on run"
+Notes: Build Purpose
+Notes: Pretty self explanitory. Make sure you have all your buffs and then swap to your main endless loadout.
+Notes: ...
+Notes: How to Play This Build
+Notes: *Book of Dragon X*
+Notes: When running endless using "Dragon Alignment" is by far the most common. This is due to it giving 0 weaknesses, an immunity to dragon element attacks, and +50% dmg to all dragon attacks.
+Notes: *Beastfelled Garb*
+Notes: This is purley a "QoL" piece. If you don't have one you can simply leave, swap to Chimera pet, and use "defend" untill it gives you "Berserk I".
+Notes: Other Berserks
+Notes: To get the other berserk effects you have two options.
+Notes: A.
 Have 2 lower tier classes, 1st set to the "Berserker" spec to gain "All+" (this can also be used to gain "Dmg+" from "Berserk I" if you don't have Chimera), The 2nd will other use "Raider" spec to gain "All++".
-B.
+Notes: B.
 Simply use a "Berserk Mushroom" for "All+" and a "Smelly Mushroom" for "All++".
 There is no other way to gain "Dmg+" besdies your follower, or the "Berserker" spec.
-Finished View
-*may vary*
+Notes: Finished View
+Notes: *may vary*
+
+=== BeoA Chimera Full Farm ===
+Build Name: BeoA Chimera
+Full Farm
+Priorities: To earn as many orn's as possible.
+Notes: Need more input from others...
+Recommended AL: ...
+Anguish 2.0: 0 / ? / 0 / 0
+Video Link: ---
+Class: Beowulf Auriga
+Spec: Oracle
+Weapon: Questing Axe
+Weapon: questing bow
+Weapon Adornments: ?
+Offhand: Questing Axe
+Offhand: questing bow
+Headpiece: Lost Helmet
+Headpiece: mightiest mimic head
+Armor: Court Jester's Outfit
+Armor: ---
+Legwear: ?
+Legwear: ?
+Armor Adornments: JoC's?
+Accessory 1: Band of Gods
+Accessory 1: ---
+Accessory 2: Band of Gods
+Accessory 2: ---
+Amity: +25% Accessory
+Amity 2: +25% Accessory
+Pet: Chimera
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: ...
+Notes: ...
+Notes: How to Play This Build
+
+=== BeoA TMM Depth ===
+Build Name: BeoA TMM
+Depth
+Priorities: To complete all your endless achievements (Floor 400+) and earn Orn's while doing so.
+Notes: Need more input from others...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: ---
+Class: Beowulf Auriga
+Pet: The Mightiest Mimic
+Pet: ---
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: ...
+Notes: ...
+Notes: How to Play This Build
+
+=== BeoH Viperseal Full Farm ===
+Build Name: BeoH Viperseal
+Full Farm
+Priorities: To earn as many orn's as possible.
+Notes: This is just worse Dara in every way. 0AL Dara will outpreform a 75AL+ BeoH easily.
+Recommended AL: ~AL75+
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Arisen Terror
+Weapon: questing staff
+Weapon Adornments: 12x Ferocious Bull's Eye
+Offhand: Arisen Terror
+Offhand: questing staff
+Headpiece: Lost Helmet
+Headpiece: mightiest mimic head
+Armor: Court Jester's Outfit
+Armor: ---
+Legwear: Arisen Riftrogue Boots
+Legwear: ?
+Armor Adornments: 1x JoC,
+16x Lyncus' Bristles
+Accessory 1: Band of Gods
+Accessory 1: ---
+Accessory 2: Band of Gods
+Accessory 2: ---
+Amity: +25% Accessory
+Amity: +50% stat duration
+Amity 2: +25% Accessory
+Amity 2: +40% crit damage
+Pet: Ashen Phoenix
+Pet: Macaroni Penguin
+Spells: Attacking/Damaging skills
+Spells: Viperseal III
+Spells: Terraseal III
+Spells: Transference III
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: The highest bonus orn % possible.
+Notes: How to Play This Build
+Notes: Just spam "Viperseal III". If they're immune to dragon, use terraseal (or any "seal III" that they're not immune to).
+"Transference III" is here to use on weak/easy mobs if you need to regen your ward.
+Notes: Just pray you don't miss and that "T.All+++" stay's active.
+
+=== BeoH Viperseal Full Farm (Mel 1) ===
+Build Name: BeoH Viperseal
+Full Farm (Mel 1)
+Priorities: To earn as many orn's as possible. But this time with Melacholy Bonuses.
+Notes: ←
+Recommended AL: ~AL75+
+Anguish 2.0: Melacholy 1
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Oracle
+Weapon: Arisen Terror
+Weapon: +10% crit chance
+Weapon Adornments: 12x  Ferocious Bull's Eye
+Offhand: Arisen Terror
+Offhand: +10% crit chance
+Headpiece: Lost Helmet
+Headpiece: +7% accuracy
+Armor: Court Jester's Outfit
+Armor: +150 dexterity
+Legwear: Arisen Riftrogue Boots
+Legwear: +150 dex / +4% acc
+Armor Adornments: 5x JoC Between Head & Torso,
+and 12x Turul Feathers
+Accessory 1: Band of Gods
+Accessory 1: ---
+Accessory 2: Band of Gods
+Accessory 2: ---
+Amity: +25% Accessory
+Amity: +50% stat duration
+Amity 2: +25% Accessory
+Amity 2: +40% crit damage
+Pet: Ashen Phoenix
+Pet: Macaroni Penguin
+Spells: Attacking/Damaging skills
+Spells: Viperseal III
+Spells: Terraseal III
+Spells: Transference III
+Spells: Buff/Debuff Skills
+Spells: ---
+Notes: Build Purpose
+Notes: ←
+Notes: How to Play This Build
+Notes: ←
+Notes: ←
+
+=== BeoH Quickcast Ultima Semi-Farm / Depth ===
+Build Name: BeoH Quickcast Ultima
+Semi-Farm / Depth
+Priorities: To complete all your endless achievements (Floor 400+) and earn Orn's while doing so.
+Notes: More Damage / Penetration in trade for orn %
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: ---
+Class: Beowulf Hydrus
+Spec: Sequencer
+Weapon: Celestial Staff
+Weapon: ---
+Weapon Adornments: 5x Ocean Lungs
+6x Ferocious Bull's Eye
+Offhand: Arisen Terror
+Offhand: questing staff
+Headpiece: Lost Helmet
+Headpiece: mightiest mimic head
+Armor: Court Jester's Outfit
+Armor: ---
+Legwear: Arisen Riftrogue Boots
+Legwear: ?
+Armor Adornments: 4x JoC,
+13x Lyncus' Bristles
+Accessory 1: Band of Gods
+Accessory 1: ---
+Accessory 2: Band of Gods
+Accessory 2: ---
+Amity: +25% Accessory
+Amity: +40% crit damage
+Pet: Ashen Phoenix
+Pet: Macaroni Penguin
+Spells: Attacking/Damaging skills
+Spells: Ultima
+Spells: Transference III
+Spells: Buff/Debuff Skills
+Spells: ---
+Spells: ---
+Notes: Build Purpose
+Notes: Earning the floor 400 achievement will net you ton's orn's
+Notes: ...
+Notes: How to Play This Build
+Notes: Unlike the "Seal III" builds you do not gain ward turns through your attacks so you will need to set up/have a minimum 400+ ward turns prior to you using this build.
+Notes: Of course you'll want to earn as many orn's and other resources as you can while doing so
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Temp ===
+Build Name: Temp
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build
+
+=== Template (do not use - only copy) ===
+Build Name: Template
+(do not use - only copy)
+Priorities: ...
+Notes: ...
+Recommended AL: ...
+Anguish 2.0: 0 / 0 / 0 / 0
+Video Link: n/a
+Spells: Attacking/Damaging skills
+Spells: Buff/Debuff Skills
+Notes: Build Purpose
+Notes: How to Play This Build

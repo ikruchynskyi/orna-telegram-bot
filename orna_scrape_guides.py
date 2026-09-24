@@ -46,6 +46,7 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -191,13 +192,93 @@ def _fetch_csv_rows(spreadsheet_id: str, gid: str) -> list[list[str]]:
 
 def _clean_rows(rows: list[list[str]]) -> list[str]:
     """Same flattening convention as orna_scrape_knowledge.py._clean_rows -
-    one ' | '-joined line per non-empty row, no fixed column schema."""
+    one ' | '-joined line per non-empty row, no fixed column schema.
+    Only correct for a DENSE table (one entity per row, e.g. Gilgamesh/
+    Swash's gear-list sheets) - see _find_build_row/_transpose_build_table
+    for the wide "one entity per column-block" layout this silently
+    scrambles."""
     lines = []
     for row in rows:
         cells = [c.strip() for c in row if c.strip()]
         if cells:
             lines.append(" | ".join(cells))
     return lines
+
+
+_LABEL_COL = 1  # column B - every guide sheet seen so far puts row labels here
+
+
+def _find_build_row(rows: list[list[str]]) -> Optional[int]:
+    """Some guide tabs lay builds out as PARALLEL COLUMN BLOCKS (one
+    build per block of columns, not one row per build) instead of a
+    dense per-row table - marked by a row whose cells literally read
+    "Build Name" (the row label) followed by each build's own name at
+    that build's start column. Scanning the first 15 rows is enough -
+    every sheet seen has this header within the first 6."""
+    for i, row in enumerate(rows[:15]):
+        for cell in row:
+            if cell.strip().lower() == "build name":
+                return i
+    return None
+
+
+def _transpose_build_table(rows: list[list[str]], build_row_idx: int) -> str:
+    """Reconstructs one "=== Build Name ===" section per build from a
+    column-block-laid-out table, instead of _clean_rows' naive "strip
+    empty cells, join what's left" flattening - which silently loses
+    column identity the moment ANY row has a gap (nearly every row
+    here). Live-verified data loss this caused: Heretic's Raids tab,
+    "Omniflask Weakness" build - its own data spans TWO columns (S:
+    Priorities/Notes/Spells, T: the actual Class/Spec/Weapon/Offhand/
+    Headpiece/Armor/Legwear/Accessories/Amity/Pet gear list) while the
+    row label lives in column B; the old flattening happened to keep
+    column S's values (Priorities/Notes survived - directly under the
+    label in the exact row they occupied) but dropped T's ENTIRE gear
+    list outright, since most of those rows had label column B empty
+    (a build's 2nd weapon/offhand option) or had OTHER builds' cells
+    at different relative offsets, so the positional join scrambled or
+    dropped them. Confirmed both Heretic (6 of 8 tabs) and Beowulf (4
+    of 9 tabs) use this exact layout for their build-comparison sheets;
+    Gilgamesh and Swash's gear-list sheets are dense one-item-per-row
+    tables and never hit this function at all (_find_build_row returns
+    None for them).
+
+    A build's own column range is [its start column, the NEXT build's
+    start column) - taken from the "Build Name" row itself, which names
+    every build at its own start column. A row with an empty label
+    (a build's second gear option, e.g. two possible Weapons) is
+    attached to the PREVIOUS non-empty label, not dropped - matches how
+    the sheet visually merges that label cell downward instead of
+    repeating it."""
+    header = rows[build_row_idx]
+    build_starts = [(j, cell.strip()) for j, cell in enumerate(header) if j != _LABEL_COL and cell.strip()]
+    if not build_starts:
+        return ""
+    ncols = max(len(r) for r in rows[build_row_idx:])
+
+    build_lines: list[list[str]] = [[] for _ in build_starts]
+    last_label = ""
+    for row in rows[build_row_idx:]:
+        label = row[_LABEL_COL].strip() if len(row) > _LABEL_COL else ""
+        if label:
+            last_label = label
+        use_label = label or last_label
+        for bi, (start_col, _name) in enumerate(build_starts):
+            end_col = build_starts[bi + 1][0] if bi + 1 < len(build_starts) else ncols
+            values = [row[c].strip() for c in range(start_col, min(end_col, len(row))) if row[c].strip()]
+            if values and use_label:
+                build_lines[bi].append(f"{use_label}: {', '.join(values)}")
+
+    sections = [
+        # A build name can itself carry an embedded newline (a sheet
+        # author's own multi-line cell, e.g. "Boss Horde Dungeons\n(No
+        # Exotic Items)") - collapse it to one line so the "=== ... ==="
+        # section delimiter this reuses orna_knowledge.txt's own
+        # convention for stays a single, greppable line.
+        f"=== {' '.join(name.split())} ===\n" + "\n".join(lines)
+        for (_, name), lines in zip(build_starts, build_lines) if lines
+    ]
+    return "\n\n".join(sections)
 
 
 def _fetch_doc_text(doc_id: str) -> str:
@@ -230,9 +311,19 @@ def _build_sheet_body(source: dict) -> str:
     sections = []
     for tab_name, gid in source["tabs"]:
         rows = _fetch_csv_rows(source["spreadsheet_id"], gid)
-        lines = _clean_rows(rows)
-        sections.append(f"--- {tab_name} ---\n" + "\n".join(lines))
-        print(f"    [{tab_name}] {len(lines)} lines")
+        build_row = _find_build_row(rows)
+        if build_row is not None:
+            # Rows before the build table itself (an intro paragraph,
+            # etc.) still get the normal dense flattening.
+            intro = _clean_rows(rows[:build_row])
+            body = _transpose_build_table(rows, build_row)
+            text = "\n".join(intro + ([body] if body else []))
+            kind = "build-table"
+        else:
+            text = "\n".join(_clean_rows(rows))
+            kind = "dense"
+        sections.append(f"--- {tab_name} ---\n{text}")
+        print(f"    [{tab_name}] {len(text.splitlines())} lines ({kind})")
     return "\n\n".join(sections)
 
 
