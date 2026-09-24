@@ -1181,10 +1181,29 @@ fallback when it doesn't have the answer either.
   (`orna_knowledge.search`) that a model reads and interprets itself is
   the right fit, not bespoke parsing code per sheet - same
   "tool retrieves, model interprets" split `web_search` and
-  `orna_calendar.fetch_events` already use. Regeneration is a one-off
-  script run (`python3 orna_scrape_knowledge.py`, mirrors
-  `orna_scrape_material_names.py`'s pattern), not something the bot does
-  at runtime - re-run it by hand if the source sheets change.
+  `orna_calendar.fetch_events` already use. **The bot refreshes this itself on a 1-week TTL**
+  (2026-09-24, on ask): `_corpus_text()` rebuilds from the live sheets via
+  `orna_scrape_knowledge.build_text()` - the SAME builder the script uses,
+  extracted for exactly this so the corpus format can't drift from the
+  parser reading it - and caches into `.knowledge_cache/` (gitignored),
+  matching `orna_aussies`/`orna_releases`. Three things to know:
+  - **The committed `orna_knowledge.txt` is now a FALLBACK, not the live
+    source.** Order: fresh cache -> rebuild from sheets -> stale cache ->
+    committed file. Every fetch failure is a warning, never an exception, so
+    a Google outage degrades to the last good copy rather than taking the
+    knowledge base down. Verified by simulating one: still 16 sections,
+    search still answers.
+  - Still worth re-running `python3 orna_scrape_knowledge.py` and committing
+    occasionally, precisely BECAUSE that file is the safety net - left alone
+    for a year it becomes a very old one.
+  - A rebuild is ~16 HTTP requests (one per tab). Every caller reaches
+    `search()` through `asyncio.to_thread`
+    (`telegram_orna._run_knowledge_tool`), which is what keeps that off the
+    event loop - don't add a caller that skips it.
+  These sheets drift independently of any game patch: two rebuilds minutes
+  apart during this work returned 306,425 and 305,263 bytes, i.e. someone
+  was editing a sheet live. That is what the TTL is for, and why
+  `/update_codex` refreshes this too (its slow leg, so it runs last).
   `search(query, section="", limit=20)` tries an exact case-insensitive
   substring match first, then retries once with each query word
   fuzzy-corrected against the corpus's own ~3500-word vocabulary
