@@ -66,9 +66,10 @@ if not os.environ.get("SHEETS_API_KEY"):
 import telegram_orna as T  # noqa: E402  (import after sys.path/env setup)
 
 if os.environ.get("FORCE_LOCAL") == "1":
-    # CLOUD_STEPS gates how many opening turns may try the cloud model; 0
-    # means every turn goes straight to local Ollama.
-    T.CLOUD_STEPS = 0
+    # MAX_CLOUD_CALLS caps how many steps may try the cloud model; 0 means
+    # every step goes straight to local Ollama (routing is by context weight
+    # now - see telegram_orna.CLOUD_CONTEXT_CHARS).
+    T.MAX_CLOUD_CALLS = 0
 
 
 class FakeMessage:

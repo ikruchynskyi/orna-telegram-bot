@@ -291,12 +291,25 @@ structurally can't recover from.
 
 **Session/step design**, in `telegram_orna.py`'s `OrnaSession`/
 `_ORNA_SESSIONS`/`_advance`/`_call_step_model`:
-- `MAX_STEPS = 16`. Only the first `CLOUD_STEPS = 8` turns are allowed to
-  try Ollama Cloud at all (still falling back to local mid-turn if the
-  cloud call itself fails, same as `/go`) — turns past that skip the cloud
-  attempt entirely, local only, since a request still running this long
-  is already the unusual case and spending more cloud quota/cost on it
-  isn't worth it when local can still finish the reasoning for free.
+- `MAX_STEPS = 16`. Cloud/local is routed per step by CONTEXT WEIGHT, not
+  turn number (`_call_step_model`): a step tries Ollama Cloud only when the
+  accumulated context BEYOND the (constant, large) system prompt reaches
+  `CLOUD_CONTEXT_CHARS = 1500`, and no more than `MAX_CLOUD_CALLS = 8` cloud
+  attempts are made per request (still falling back to local mid-turn if a
+  cloud call itself fails, same as `/go`). This spends the limited cloud
+  quota on the HEAVY calls (synthesizing a final answer, reasoning over the
+  big blob a class_guide/knowledge_search/web_search returns into the
+  context) and keeps the cheap ones (deciding which tool to run, building a
+  codex-search query) on the free local model - which works because the
+  codex-LOOKUP tools return only short observations (rich data goes to
+  Telegram), so a plain lookup stays small→local, while the read-and-
+  synthesize tools return their full text into the context, crossing the
+  threshold→cloud. (This replaced an earlier "first 8 turns → cloud" scheme
+  that spent cloud on the cheap early routing and left the heavy final
+  synthesis on local - the opposite of what's wanted. Tradeoff: the initial
+  tool-routing call is now on the less-reliable local model; lower
+  `CLOUD_CONTEXT_CHARS` to send more calls to cloud if routing quality
+  suffers, raise it to save more quota.)
 - `LOOP_TIMEOUT_SECONDS = 300` — a hard wall-clock ceiling on the whole
   request (`asyncio.wait_for` around the loop), regardless of step count.
   This is the actual guarantee the loop always replies within a bounded

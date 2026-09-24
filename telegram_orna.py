@@ -94,13 +94,25 @@ _RESULTS_PER_PAGE = 8
 # (+ maybe a refined retry) + finish. 16 gives real headroom for that
 # chain plus a genuinely multi-part request on top of it.
 MAX_STEPS = 16
-# Only the first CLOUD_STEPS turns are allowed to try the cloud model at
-# all (still falling back to local mid-turn if the cloud call itself
-# fails, same as always) - turns past that go straight to local, no cloud
-# attempt. A request still running this long is already the unusual case;
-# spending more cloud quota/cost on it isn't worth it when local can
-# still finish the reasoning for free.
-CLOUD_STEPS = 8
+# Cloud/local routing is by CONTEXT WEIGHT, not turn number, because cloud
+# quota is limited and best spent on the HEAVY calls: synthesizing a final
+# answer, or reasoning over the big blob a "read-and-interpret" tool
+# (class_guide/knowledge_search/web_search) dumps into the context. The
+# cheap calls - deciding which tool to run, building a codex-search query -
+# only ever see a small context and go to the free local model. This works
+# because the codex-LOOKUP tools (search_codex/query/open_entry/...) return
+# only SHORT observations (their rich data goes to Telegram, not the model),
+# so a plain lookup stays small -> local; the read-and-synthesize tools
+# instead return their full text INTO the context, crossing the threshold
+# -> cloud, exactly where the heavy reasoning is. A step goes to cloud when
+# the context BEYOND the (constant, large) system prompt reaches
+# CLOUD_CONTEXT_CHARS. MAX_CLOUD_CALLS caps cloud calls per request so a
+# long research chain can't drain the quota; past it, local only (a cloud
+# call still falls back to local mid-turn on failure, as always). Tune
+# CLOUD_CONTEXT_CHARS down to send more (smaller-context) calls to cloud if
+# local routing quality is a problem, up to save more quota.
+CLOUD_CONTEXT_CHARS = 1500
+MAX_CLOUD_CALLS = 8
 # Shorter than ollama_client.DEFAULT_TIMEOUT's 90s read timeout (which
 # /go still uses, unchanged, via its own default call) - /orna's loop has
 # a hard step budget where a slow/hanging call is pure waste (it can
@@ -1556,6 +1568,7 @@ class OrnaSession:
     steps_left: int
     created: float = field(default_factory=time.monotonic)
     ask_options: list = field(default_factory=list)
+    cloud_calls: int = 0  # cloud attempts made this request (bounded by MAX_CLOUD_CALLS)
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -1645,23 +1658,43 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
     Live report: a long multi-tool-call request (several query/
     knowledge_search calls gathering numbers for a final calculation)
     died on ONE "Ollama returned non-JSON content: ''" - empty output,
-    most likely the local model (this step had already passed CLOUD_STEPS)
+    most likely the local model (this step's small context routed it local)
     running out of its own generation budget mid-"thought" under a long
     accumulated tool-call history, not a systematic failure. Discarding
     every step of reasoning already done over one blip is a bad trade -
     retrying the identical call once before giving up on the whole
     request costs a few seconds and matches the retry-once convention
-    telegram_nlp._local_chat_json already uses for the same reason."""
+    telegram_nlp._local_chat_json already uses for the same reason.
+
+    Cloud vs local is decided by CONTEXT WEIGHT (see CLOUD_CONTEXT_CHARS /
+    MAX_CLOUD_CALLS): a HEAVY-context step tries cloud first; a light one
+    stays local to save quota but escalates to cloud on its retry if local
+    fails; all bounded by the per-request cloud budget. So cheap tool-routing
+    calls stay local and cloud is saved for the big synthesis calls (and for
+    rescuing a light call the local model flubbed)."""
+    # Weigh everything AFTER the (constant, large) system prompt - that's what
+    # grows when a read-and-synthesize tool dumps its text in, and stays tiny
+    # for plain lookup routing.
+    context_chars = sum(len(m.get("content") or "") for m in session.messages[1:])
+    heavy = context_chars >= CLOUD_CONTEXT_CHARS
     for attempt in range(2):
+        # Cloud on attempt 0 only for HEAVY calls; a LIGHT call's first try
+        # stays local (save quota). But on the retry (attempt 1, after a
+        # failure) escalate a light call to cloud too, so a flaky local model
+        # doesn't sink a simple request that cloud could still answer - the
+        # cloud->local safety net the old scheme gave every early turn, now
+        # spent only when local actually fails. All bounded by MAX_CLOUD_CALLS.
+        try_cloud = (heavy or attempt == 1) and session.cloud_calls < MAX_CLOUD_CALLS
         try:
-            if step_number <= CLOUD_STEPS:
-                # Normal path: try cloud, fall back to local mid-turn if the
-                # cloud call itself fails (out of credits, network, ...).
+            if try_cloud:
+                session.cloud_calls += 1
+                # try cloud, fall back to local mid-turn if the cloud call
+                # itself fails (out of credits, network, ...).
                 return await chat_json_with_fallback(
                     GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
                     timeout=STEP_MODEL_TIMEOUT,
                 )
-            # Past CLOUD_STEPS: skip the cloud attempt entirely, local only.
+            # Light call (small context): local only, to save cloud quota.
             return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, timeout=STEP_MODEL_TIMEOUT)
         except (OllamaError, UnsupportedMultimodal) as e:
             if attempt == 0:
