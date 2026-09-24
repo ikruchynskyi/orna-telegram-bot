@@ -129,6 +129,49 @@ _HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+)$", re.M)
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", re.S)
 _BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+", re.M)
+# A Markdown table's separator row - "|---|:--:|--:|" etc, dashes/colons
+# only per cell.
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+
+def _stash_markdown_tables(text: str, keep) -> str:
+    """Telegram's HTML mode has no <table> tag at all, so a Markdown pipe
+    table ("| a | b |\\n|---|---|\\n| 1 | 2 |") otherwise shows up
+    completely literally - the exact same "model writes Markdown, nothing
+    renders it" gap the rest of this converter exists for, just needing
+    real per-column width alignment instead of a simple regex swap.
+    Converts each detected table block to a column-aligned plain-text
+    table wrapped in <pre> (cell content escaped here, once, same as the
+    code-block stashing above) and stashes it via the caller's `keep` so
+    it survives the html.escape() pass untouched, like a code block does."""
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.count("|") >= 2 and i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1]):
+            header = [c.strip() for c in line.strip().strip("|").split("|")]
+            j = i + 2
+            body: list[list[str]] = []
+            while j < len(lines) and lines[j].count("|") >= 2 and not _TABLE_SEP_RE.match(lines[j]):
+                body.append([c.strip() for c in lines[j].strip().strip("|").split("|")])
+                j += 1
+            widths = [len(c) for c in header]
+            for row in body:
+                for k, c in enumerate(row):
+                    if k < len(widths):
+                        widths[k] = max(widths[k], len(c))
+            table_lines = [" | ".join(c.ljust(widths[k]) for k, c in enumerate(header))]
+            table_lines.append("-+-".join("-" * w for w in widths))
+            for row in body:
+                cells = [(row[k] if k < len(row) else "").ljust(widths[k]) for k in range(len(widths))]
+                table_lines.append(" | ".join(cells))
+            out.append(keep(f"<pre>{html.escape(chr(10).join(table_lines))}</pre>"))
+            i = j
+        else:
+            out.append(line)
+            i += 1
+    return "\n".join(out)
 
 
 def _markdown_to_html(text: str) -> str:
@@ -151,6 +194,7 @@ def _markdown_to_html(text: str) -> str:
 
     text = _CODE_BLOCK_RE.sub(lambda m: _keep(f"<pre>{html.escape(m.group(1).strip())}</pre>"), text)
     text = _INLINE_CODE_RE.sub(lambda m: _keep(f"<code>{html.escape(m.group(1))}</code>"), text)
+    text = _stash_markdown_tables(text, _keep)
 
     text = html.escape(text)
 
@@ -1007,3 +1051,32 @@ def build_go_callback_handler() -> CallbackQueryHandler:
 
 def build_go_continue_handler() -> MessageHandler:
     return MessageHandler(_pending_continue_filter & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_go_continue)
+
+
+def _demo() -> None:
+    """Pinned regression checks for _markdown_to_html - run via
+    `python3 telegram_go.py`. Covers both the original conversions
+    (verified manually per this repo's history, now pinned for real) and
+    the table support added alongside telegram_orna.py's class_guide
+    tool, whose long-form answers turned out to use Markdown tables the
+    original converter had no path for at all."""
+    assert _markdown_to_html("# Heading\ntext") == "<b>Heading</b>\ntext"
+    assert _markdown_to_html("**bold** and *italic*") == "<b>bold</b> and <i>italic</i>"
+    assert _markdown_to_html("- one\n- two") == "• one\n• two"
+    assert _markdown_to_html("`code`") == "<code>code</code>"
+    assert _markdown_to_html("```\nx = 1\n```") == "<pre>x = 1</pre>"
+    assert _markdown_to_html("[Orna](https://playorna.com)") == '<a href="https://playorna.com">Orna</a>'
+    assert _markdown_to_html("<3 & you") == "&lt;3 &amp; you"  # literal HTML-special chars survive as text, not tags
+
+    table = "| Longname | B |\n|---|----|\n| 1 | 22 |"
+    got = _markdown_to_html(table)
+    assert got.startswith("<pre>") and got.endswith("</pre>"), got
+    # Every row's first column is padded to the widest cell in it ("Longname"),
+    # not just its own header width - real column alignment, not per-cell.
+    assert "Longname | B" in got and "1        | 22" in got, got
+
+    print("telegram_go._demo: all checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

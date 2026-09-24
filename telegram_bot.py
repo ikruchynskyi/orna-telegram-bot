@@ -41,7 +41,7 @@ async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if not message:
         return
-    await message.reply_text(await _today_text())
+    await message.reply_text(await _today_text(), parse_mode="HTML")
 
 
 async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):

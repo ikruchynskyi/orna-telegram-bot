@@ -44,6 +44,7 @@ import asyncio
 import httpx
 import datetime
 import html
+import io
 import json
 import logging
 import re
@@ -53,6 +54,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+from PIL import Image
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
@@ -75,7 +77,9 @@ from orna_assess import (
 from orna_codex import codex_search, fetch_codex_json
 from telegram_assess import _format_response
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
-from telegram_go import GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY, TAVILY_API_KEY, _calculate, _tavily_search
+from telegram_go import (
+    GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY, TAVILY_API_KEY, _calculate, _reply_markdown, _tavily_search,
+)
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
 from telegram_resources import build_report, send_report_blocks
@@ -197,10 +201,12 @@ async def _today_text() -> str:
 
     if not tdg:
         return f"Сьогодні ({today}) немає ресурсів."
-    lines = [f"Ресурси {today}"]
-    for guild, materials in tdg.items():
-        lines.append(f"{guild}      {', '.join(materials)}")
-    return "\n".join(lines)
+
+    guild_w = max((len(g) for g in tdg), default=10) + 2
+    table_text = "\n".join(
+        f"{html.escape(guild).ljust(guild_w)}{html.escape(', '.join(materials))}" for guild, materials in tdg.items()
+    )
+    return f"<b>Ресурси {html.escape(today)}</b>\n<pre>{table_text}</pre>"
 
 
 async def _next_text(resource_query: str) -> Optional[str]:
@@ -224,15 +230,16 @@ async def _next_text(resource_query: str) -> Optional[str]:
         except ValueError:
             continue
         lines.append(f"<b>{html.escape(res[0])}:</b>")
-        for guild, date in guild_dates:
-            lines.append(f"{guild}      {date}")
+        guild_w = max((len(g) for g, _ in guild_dates), default=10) + 2
+        table_text = "\n".join(f"{html.escape(g).ljust(guild_w)}{html.escape(d)}" for g, d in guild_dates)
+        lines.append(f"<pre>{table_text}</pre>")
 
     return "\n".join(lines) if found else None
 
 
 async def _run_today_tool(message) -> str:
     text = await _today_text()
-    await message.reply_text(text)
+    await message.reply_text(text, parse_mode="HTML")
     return "sent today's resources to the user"
 
 
@@ -321,21 +328,34 @@ def _result_list_keyboard(entries: list[dict], key: str, page: int = 0) -> Inlin
     return InlineKeyboardMarkup(rows)
 
 
-def _section_keyboard_rows(sections: list[dict], key: str) -> list:
-    """Button rows for a list of {"title", "entries"} sections - returns
-    rows (not a wrapped InlineKeyboardMarkup) so callers can append extra
-    rows (e.g. an "Assess" button) before building the final keyboard.
-    Reused for both a codex entry's own cross-link sections AND an
-    events() card's roster categories (Raids/Bosses/Followers/...) -
-    structurally the same shape (a title + a list of entries), so no
-    separate rendering path was needed for the calendar feature."""
-    rows = []
+def _pack_buttons(buttons: list, per_row: int = 2) -> list:
+    """Groups a flat button list into rows of `per_row` - Telegram divides
+    a row's width evenly among its buttons, so several per row (instead
+    of the old one-button-per-row layout) makes each button take a
+    proportional share of the message width instead of spanning it full
+    width. Live report: on a wide (desktop) client, a short label like
+    "Gives (1)" in a full-width button looked oversized/clunky - a real
+    Telegram Bot API constraint worth knowing here: there is no "text
+    link that fires a callback", only an actual InlineKeyboardButton can
+    carry callback_data, a plain link can only open a URL - so a
+    tighter grid, not links, is the fix."""
+    return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+
+
+def _section_buttons(sections: list[dict], key: str) -> list:
+    """Flat button list (not rows - see _pack_buttons) for a list of
+    {"title", "entries"} sections. Reused for both a codex entry's own
+    cross-link sections AND an events() card's roster categories (Raids/
+    Bosses/Followers/...) - structurally the same shape (a title + a
+    list of entries), so no separate rendering path was needed for the
+    calendar feature."""
+    buttons = []
     for i, section in enumerate(sections):
         entries = section.get("entries") or []
         if not entries:
             continue
-        rows.append([InlineKeyboardButton(f"{section['title']} ({len(entries)})"[:60], callback_data=f"orna|sec|{key}|{i}")])
-    return rows
+        buttons.append(InlineKeyboardButton(f"{section['title']} ({len(entries)})"[:60], callback_data=f"orna|sec|{key}|{i}"))
+    return buttons
 
 
 def _format_entry(detail: dict) -> str:
@@ -605,7 +625,7 @@ async def _run_events_tool(message, keyword: str) -> str:
         rows = []
         if sections:
             key = _remember({"sections": sections, "lang": "en"})
-            rows = _section_keyboard_rows(sections, key)
+            rows = _pack_buttons(_section_buttons(sections, key))
         await message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows) if rows else None)
         summaries.append(f"{e['name']} ({e['starts']} to {e['ends']}, live={e['live']}): {e['description']}")
     await message.reply_text(_CALENDAR_LINK_HTML, parse_mode="HTML", disable_web_page_preview=True)
@@ -622,20 +642,64 @@ async def _run_towers_tool(message) -> str:
     actually asked about."""
     now = datetime.datetime.now(datetime.timezone.utc)
     floors = orna_towers.get_tower_floors(now)
-    lines = ["🗼 Вежі Олімпії зараз:"]
+
+    NAME_W = 11
+    table_rows = ["Вежа".ljust(NAME_W) + "Поверх"]
     for tf in floors:
-        label = "МАКС (очищена, очікує скидання)" if tf.floor >= 50 else f"поверх {tf.floor}"
-        lines.append(f"  {tf.kind.capitalize()}: {label}")
+        label = "МАКС" if tf.floor >= 50 else str(tf.floor)
+        table_rows.append(tf.kind.capitalize().ljust(NAME_W) + label)
+    table_text = "\n".join(table_rows)
+    lines = ["🗼 <b>Вежі Олімпії зараз:</b>", f"<pre>{html.escape(table_text)}</pre>"]
 
     upcoming = orna_towers.get_tower_floors_in_next_days(now, 1)
     if upcoming:
         nxt = upcoming[0]
         delta_min = int((nxt["time"] - now).total_seconds() // 60)
-        lines.append(f"\nНаступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
+        lines.append(f"Наступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
 
-    await message.reply_text("\n".join(lines))
+    await message.reply_text("\n".join(lines), parse_mode="HTML")
     summary = "; ".join(f"{tf.kind}={tf.floor}" for tf in floors)
     return f"posted current tower floors (out of 50, 50=cleared/at the top): {summary}"
+
+
+_SPRITE_TARGET_PX = 200
+
+
+def _upscale_sprite_sync(raw: bytes, target: int = _SPRITE_TARGET_PX) -> bytes:
+    """playorna's own sprite images are tiny pixel-art icons (16-24px -
+    the same size the in-game inventory slot icon uses) - even the
+    site's own "entry-icon" detail-page class, which LOOKS bigger,
+    renders that exact same tiny source stretched via plain HTML
+    width/height (verified directly against playorna's production JS
+    bundle: `<img src="detail.sprite" width="128">` - no separate
+    higher-resolution image exists anywhere on their site for this).
+    Handing Telegram a URL lets ITS OWN scaler blur a 16px source across
+    a much larger bubble (confirmed visually - a live screenshot showed
+    a soft, blurry icon). Fetching it ourselves and upscaling by an
+    INTEGER factor with nearest-neighbor (no interpolation) instead
+    keeps every source pixel a crisp, distinct square - the correct way
+    to enlarge small pixel art, not smooth-blur it into mush."""
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
+    factor = max(1, target // max(img.size))
+    if factor > 1:
+        img = img.resize((img.width * factor, img.height * factor), Image.Resampling.NEAREST)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def _fetch_upscaled_sprite(url: str):
+    """Returns upscaled PNG bytes for Telegram to send directly, or None
+    on any failure (caller falls back to the raw URL - a slightly blurry
+    icon beats no icon at all)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        return await asyncio.to_thread(_upscale_sprite_sync, resp.content)
+    except Exception:
+        logger.warning("orna: sprite upscale failed for %s", url, exc_info=True)
+        return None
 
 
 async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
@@ -663,20 +727,23 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     sprite = detail.get("sprite")
     if sprite:
         try:
-            await message.reply_photo(sprite)
+            upscaled = await _fetch_upscaled_sprite(sprite)
+            await message.reply_photo(upscaled if upscaled else sprite)
         except TelegramError:
             logger.warning("orna: failed to send entry sprite %s", sprite, exc_info=True)
 
     sections = detail.get("sections") or []
     key = _remember({"sections": sections, "lang": lang})
-    rows = _section_keyboard_rows(sections, key)
+    buttons = _section_buttons(sections, key)
 
     # playorna urls are always "/codex/<category>/<id>/" - reuse that to
     # link an "Assess" button to aussiescodex.com's calculator for the
     # same record, when it has a page (only 4 of 9 categories do).
     parts = [p for p in url.split("/") if p]
     if len(parts) >= 3 and parts[0] == "codex" and has_aussies_page(parts[1]):
-        rows.append([InlineKeyboardButton("📊 Assess", url=build_aussies_url(parts[1], parts[2]))])
+        buttons.append(InlineKeyboardButton("📊 Assess", url=build_aussies_url(parts[1], parts[2])))
+
+    rows = _pack_buttons(buttons)
 
     await message.reply_text(
         _format_entry(detail),
@@ -951,17 +1018,33 @@ async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str
         return "none of these items have any comparable stats"
 
     base_name, base_stats = rows[0]
-    header = " vs ".join(html.escape(n) for n, _ in rows)
-    lines = [f"⚖️ <b>Порівняння</b> (якість {quality}%, рівень {level}):", header]
+    lines = [f"⚖️ <b>Порівняння</b> (якість {quality}%, рівень {level}):"]
+    for i, (name, _) in enumerate(rows):
+        lines.append(f"{i + 1}. {html.escape(name)}")
+
+    # Fixed-width columns in a <pre> block (same convention telegram_assess.
+    # _format_response uses for its own stat table) instead of plain
+    # comma/pipe-joined text - full item names go above as a numbered list
+    # since they vary too much in length to fit a narrow column without
+    # cramped truncation; the table itself just references them by number.
+    NAME_W, VAL_W = 14, 13
+    table_rows = [["Stat".ljust(NAME_W)] + [f"#{i + 1}".rjust(VAL_W) for i in range(len(rows))]]
     for key in all_keys:
         base_val = base_stats.get(key, 0.0)
-        cells = [f"{base_val:g}"]
+        cells = [key.replace("_", " ")[:NAME_W].ljust(NAME_W), f"{base_val:g}".rjust(VAL_W)]
         for _, stats in rows[1:]:
             v = stats.get(key, 0.0)
             diff = v - base_val
             sign = "+" if diff >= 0 else ""
-            cells.append(f"{v:g} ({sign}{diff:g})")
-        lines.append(f"  {key}: " + " | ".join(cells))
+            cells.append(f"{v:g}({sign}{diff:g})".rjust(VAL_W))
+        table_rows.append(cells)
+    # Space-joined even though each cell is already padded to its column
+    # width (same belt-and-suspenders convention telegram_assess._format_
+    # response uses) - a value+diff string that runs slightly over VAL_W
+    # (a big stat, a big diff) still gets a visible gap instead of
+    # butting straight into the next column with no separation at all.
+    table_text = "\n".join(" ".join(c) for c in table_rows)
+    lines.append(f"<pre>{html.escape(table_text)}</pre>")
 
     await message.reply_text("\n".join(lines), parse_mode="HTML")
     names_summary = ", ".join(n for n, _ in rows)
@@ -1026,16 +1109,23 @@ async def _run_build_optimize_tool(message, slots: list, stat: str, useable_by: 
         rows.append((slot, chosen.name, base, scaled))
 
     multiplier = 1.0
-    lines = [f"🏗 <b>Оптимізація {html.escape(stat)}</b> по слотах (якість {quality}%):"]
+    SLOT_W, NAME_W, VAL_W = 10, 20, 8
+    table_rows = [["Slot".ljust(SLOT_W), "Item".ljust(NAME_W), "База".rjust(VAL_W), "Якість".rjust(VAL_W)]]
     for slot, name, base, scaled in rows:
         if name is None:
-            lines.append(f"  {slot}: — нічого не знайдено")
+            table_rows.append([slot.ljust(SLOT_W), "—".ljust(NAME_W), "-".rjust(VAL_W), "-".rjust(VAL_W)])
             continue
         multiplier *= (1 + scaled / 100)
-        lines.append(f"  {slot}: {html.escape(name)} — {scaled:.1f}% (база {base:g}%)")
+        display = name if len(name) <= NAME_W else name[:NAME_W - 1] + "…"
+        table_rows.append([slot.ljust(SLOT_W), display.ljust(NAME_W), f"{base:g}%".rjust(VAL_W), f"{scaled:.1f}%".rjust(VAL_W)])
+    table_text = "\n".join(" ".join(c) for c in table_rows)
     total_pct = (multiplier - 1) * 100
-    lines.append(f"\n<b>Сумарний бонус (множення, не сума): {total_pct:.1f}%</b>")
 
+    lines = [
+        f"🏗 <b>Оптимізація {html.escape(stat)}</b> (якість {quality}%):",
+        f"<pre>{html.escape(table_text)}</pre>",
+        f"<b>Сумарний бонус (множення, не сума): {total_pct:.1f}%</b>",
+    ]
     await message.reply_text("\n".join(lines), parse_mode="HTML")
     items_summary = "; ".join(f"{slot}={name}({scaled:.1f}%)" for slot, name, base, scaled in rows if name)
     return f"posted build_optimize result [total={total_pct:.1f}]: total {stat} bonus = {total_pct:.1f}%. Items: {items_summary}"
@@ -1184,13 +1274,21 @@ _TOOLS_TEXT = (
     "the user, only what you eventually finish with) - retry with a simpler form rather than giving up.\n"
     "- query(args={...}): search the full item/monster/boss/class/spell/building/dungeon/follower/raid database "
     "by attributes - see the condition rules below.\n"
-    "- events(action_input=<keyword, or empty>): the current/near-term event calendar (double-orns weekends, EXP "
-    "events, raids, ...) - ALREADY filtered to what's live or upcoming (anything fully ended is excluded before "
-    "you ever see it, and a link to the full calendar is always shown to the user alongside the results), so you "
-    "don't need to reason about dates yourself - only about whether a description's wording matches what was "
-    'asked (wording varies: "earn 25% more orns" and "double orns, gold, and experience" both mean "gives more '
-    'orns"). If nothing shown matches, say so plainly - the user already has the calendar link, so don\'t guess '
-    "or invent a match that isn't really there. Leave action_input empty to see everything currently listed.\n"
+    "- events(action_input=<keyword, or empty>): the current/near-term event calendar - ONLY for a scheduled, "
+    "time-limited game EVENT (a double-orns weekend, an EXP event, a limited-time special raid/gauntlet event "
+    "that appears and disappears on the calendar) - ALREADY filtered to what's live or upcoming (anything fully "
+    "ended is excluded before you ever see it, and a link to the full calendar is always shown to the user "
+    "alongside the results), so you don't need to reason about dates yourself - only about whether a "
+    'description\'s wording matches what was asked (wording varies: "earn 25% more orns" and "double orns, gold, '
+    'and experience" both mean "gives more orns"). If nothing shown matches, say so plainly - the user already '
+    "has the calendar link, so don't guess or invent a match that isn't really there. Leave action_input empty "
+    "to see everything currently listed. NOT for \"raids\" in general - a question about raid STRATEGY, raid "
+    "ITEMS/gear, or a specific raid boss (\"items for heretic raids\", \"how do I beat raid X\") is a class_guide/"
+    "knowledge_search/query/web_search question, never events - \"raids\" only means events() when the ask is "
+    "clearly about a scheduled calendar occurrence (\"коли наступний рейд-івент\", \"is there a raid event right "
+    "now\"), not raids as an ongoing PvE content type. Live-verified failure: \"suggest items for heretic raids\" "
+    "was misread as an events() ask and answered \"no matching event\" instead of using class_guide/knowledge_"
+    "search - the word \"raids\" alone is not enough, check what's actually being asked FOR.\n"
     "- open_entry(action_input=<url from a previous observation, e.g. \"/codex/items/foo/\">): fetch one specific "
     "entry's full detail - facts, effects, AND its cross-link sections (e.g. an item's \"Dropped by\" monsters, a "
     "class's \"Skills\") all come back in the digest. This is how to answer \"which monster/boss drops X\" or "
@@ -1268,11 +1366,18 @@ _TOOLS_TEXT = (
     "briefly mention a source if one was genuinely useful, and if nothing useful turns up, say so honestly rather "
     "than guessing. One follow-up web_search with a refined query is fine if the first didn't help; don't loop on "
     "it beyond that.\n"
-    "- BOTH knowledge_search and web_search - CRITICAL: only state a specific detail (a follower/spell/item name, "
-    "an exact number, a named mechanic) if it's ACTUALLY present in what came back - never invent a plausible-"
-    "sounding specific to make the answer feel more complete. If the results only support a general insight (e.g. "
-    "\"immune to everything except arcane damage\"), give exactly that general insight and stop there rather than "
-    "padding it with specifics you don't actually have.\n"
+    "- knowledge_search, web_search, AND class_guide - CRITICAL: only state a specific detail (a follower/spell/"
+    "item name, an exact number, a named mechanic, a build/gear recommendation) if it's ACTUALLY present in what "
+    "came back - never invent a plausible-sounding specific to make the answer feel more complete, and never fill "
+    "a gap with confident-sounding general RPG knowledge that isn't specific to Orna. Live-verified failure: a "
+    "class_guide-informed answer invented a generic \"element X beats element Y\" rock-paper-scissors chart and "
+    "specific items/bosses that don't exist in Orna at all - Orna has NO such fixed elemental triangle (per-"
+    "monster elemental resistance comes from knowledge_search's Monster Data multipliers, not a genre trope), and "
+    "the actual class_guide excerpt that turned up (the Heretic guide's real \"Raids\" section: named builds like "
+    "\"Omniflask Weakness\", real gear like \"Arisen Kaladanda\"/\"Celestial Staff\") was right there and got "
+    "ignored in favor of invented content. If the results only support a general insight (e.g. \"immune to "
+    "everything except arcane damage\"), give exactly that general insight and stop there rather than padding it "
+    "with specifics you don't actually have.\n"
     "- ask(action_input=<question>, options=[2-4 short choices]): a clarifying question. The user can only TAP a "
     "button, never type free text - always give options. Only when a specific missing detail would materially "
     'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class, or a '
@@ -1554,7 +1659,15 @@ async def _advance_inner(sid: str, message) -> None:
 
         if action == "finish" or not action:
             usage_stats.record_tool_call("finish")
-            await message.reply_text(action_input or "Не вдалося сформувати відповідь.")
+            # finish() is the one place the model's own free-form prose
+            # reaches the user (every other reply is a tool-built,
+            # already-HTML message) - nothing in the prompt asks for
+            # Markdown, but it writes it anyway often enough (**bold**,
+            # headings, and - since class_guide started handing back
+            # long-form guide excerpts - full pipe tables) that a plain
+            # reply_text was showing that syntax completely literally.
+            # Same fix /go already has for its own model-authored replies.
+            await _reply_markdown(message, action_input or "Не вдалося сформувати відповідь.")
             return
 
         if action == "ask":
@@ -1572,7 +1685,7 @@ async def _advance_inner(sid: str, message) -> None:
                 InlineKeyboardButton(opt[:30], callback_data=f"orna|ask|{sid}|{i}")
                 for i, opt in enumerate(options)
             ]])
-            await message.reply_text(action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
+            await _reply_markdown(message, action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
             return
 
         session.messages.append({"role": "assistant", "content": json.dumps(step)})
