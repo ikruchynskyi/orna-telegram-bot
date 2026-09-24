@@ -18,6 +18,7 @@ only caller.
 from __future__ import annotations
 
 import difflib
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -110,6 +111,124 @@ def read_guide(topic_key: str) -> Optional[str]:
     return path.read_text(encoding="utf-8")
 
 
+def guide_excerpt(text: str, query: str, max_chars: int) -> str:
+    """A query-focused slice of a guide's full `text` (or its opening when
+    `query` is empty / matches nothing) - the ReAct loop's class_guide tool
+    hands the model a slice, not a whole ~10-180KB guide. Two tiers:
+
+    TIER 1 (header match) - these guides nest "=== Build ===" sections under
+    "--- Tab ---" sections (the source sheet's own tabs, e.g. "Raids" vs
+    "Early T10"), and matching is hierarchy-aware:
+      - A query word matching a TAB name is an intentional section selector
+        ("raid" -> the "Raids" tab), STRONGER than the same word appearing
+        inside a build name in a different tab. So when a tab matches, the
+        build search is restricted to it. That's what keeps "omniflask raid"
+        on the Raids-tab "Omniflask Weakness" build instead of the Early-T10
+        "Omniflask Raiding" build whose name merely contains "raid" - a live
+        bug where the model was fed (and echoed) the wrong build's gear, and
+        where returning BOTH builds still leaked the wrong one back some of
+        the time as the model helpfully listed everything it was handed.
+      - When no tab is named, builds are scored by their own name and every
+        top scorer is returned, each prefixed with its "--- Tab ---" header,
+        so a bare "omniflask" (which ties both omniflask builds) shows both
+        WITH the tab each lives under for the model to pick from context.
+      - A tab that matches with no matching build inside returns the whole
+        tab (live: "ideal items" -> the "Your (Ideal) Inventory" tab).
+
+    TIER 2 (word scan) - broader fallback when no header word-matches: the
+    lines containing the most distinct query words, with a little context.
+
+    # ponytail: still no fuzzy/typo correction like orna_knowledge.search has
+    # (difflib against the guide's own vocabulary) - add it if a class-guide
+    # ask with a genuine typo (not just different wording) turns up nothing.
+    """
+    query = (query or "").strip()
+    if not query:
+        return text[:max_chars]
+
+    # Short words (<=2 chars - "of", "in", "an", ...) dropped so they don't
+    # inflate every line's score meaninglessly.
+    words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+    lines = text.split("\n")
+    tab_re = re.compile(r"^-{3,}\s*(.+?)\s*-{3,}$")       # --- Tab ---
+    build_re = re.compile(r"^={3,}\s*(.+?)\s*={3,}$")     # === Build ===
+    header_re = re.compile(r"^(?:-{3,}|={3,})\s*(.+?)\s*(?:-{3,}|={3,})$")
+
+    def _score(name: str) -> int:
+        return sum(1 for w in words if w in name)
+
+    def _emit(build_line: int, tab_line: int) -> str:
+        """One build section (from its === header to the next header),
+        prefixed with its --- Tab --- header so the model knows the tab."""
+        end = next((j for j in range(build_line + 1, len(lines))
+                    if header_re.match(lines[j].strip())), len(lines))
+        return "\n".join(([lines[tab_line]] if tab_line >= 0 else []) + lines[build_line:end])
+
+    if words:
+        # Parse the two-level structure: each --- Tab --- owns the
+        # === Build === sections that follow it until the next tab.
+        tabs = []  # [tab_line_idx, tab_text_lower, [(build_line_idx, build_name_lower), ...]]
+        for i, line in enumerate(lines):
+            s = line.strip()
+            mt = tab_re.match(s)
+            if mt:
+                tabs.append([i, mt.group(1).lower(), []])
+            else:
+                mb = build_re.match(s)
+                if mb and tabs:
+                    tabs[-1][2].append((i, mb.group(1).lower()))
+
+        tab_scores = [(_score(t[1]), idx) for idx, t in enumerate(tabs)]
+        best_tab_score = max((s for s, _ in tab_scores), default=0)
+
+        if best_tab_score > 0:
+            # The query names a tab - restrict the build search to it.
+            ti = max(tab_scores, key=lambda x: x[0])[1]  # first best-scoring tab
+            tab_line, _, tab_builds = tabs[ti]
+            name_hits = [(bl, _score(bn)) for bl, bn in tab_builds]
+            top = max((sc for _, sc in name_hits), default=0)
+            if top > 0:
+                out = [_emit(bl, tab_line) for bl, sc in name_hits if sc == top]
+                return "\n\n".join(out)[:max_chars]
+            # Tab matched but no build inside it did - return the whole tab.
+            end = next((j for j in range(tab_line + 1, len(lines))
+                        if tab_re.match(lines[j].strip())), len(lines))
+            return "\n".join(lines[tab_line:end])[:max_chars]
+
+        # No tab named by the query - score every build by its own name and
+        # return all top scorers, each with its tab header.
+        builds = [(bl, _score(bn), tl) for tl, _, blds in tabs for bl, bn in blds]
+        top = max((sc for _, sc, _ in builds), default=0)
+        if top > 0:
+            out = [_emit(bl, tl) for bl, sc, tl in builds if sc == top]
+            return "\n\n".join(out)[:max_chars]
+
+    # TIER 2: word-level OR match, ranked by how many distinct query words a
+    # line contains - broader fallback when no header matched.
+    scores = [sum(1 for w in words if w in line.lower()) for line in lines]
+    hit_indices = sorted((i for i, s in enumerate(scores) if s > 0), key=lambda i: -scores[i])
+    if not hit_indices:
+        # No word match at all - the guide's own opening beats nothing, since
+        # it may answer this in wording that shares no words with the query.
+        return text[:max_chars]
+
+    seen: set = set()
+    out_lines: list = []
+    total = 0
+    for idx in hit_indices:
+        start, end = max(0, idx - 3), min(len(lines), idx + 4)
+        for i in range(start, end):
+            if i in seen:
+                continue
+            seen.add(i)
+            out_lines.append(lines[i])
+            total += len(lines[i])
+        out_lines.append("...")
+        if total >= max_chars:
+            break
+    return "\n".join(out_lines)[:max_chars]
+
+
 def _demo() -> None:
     """Run via `python3 orna_guides.py`."""
     assert resolve_guide("thief") == "thief"
@@ -125,6 +244,27 @@ def _demo() -> None:
         content = read_guide(key)
         assert content, f"{key}: expected non-empty guide content"
         assert len(content) > 500, f"{key}: suspiciously short ({len(content)} chars)"
+
+    # guide_excerpt: the "omniflask raid" bug - "raid" is a substring of the
+    # Early-T10 "Omniflask Raiding" build, but the user means the Raids-tab
+    # "Omniflask Weakness" build. A query naming the "raid" TAB must select
+    # ONLY the Raids build, never leak the Early-T10 one.
+    heretic = read_guide("heretic")
+    for q in ("omniflask raid", "raid heretic omniflask build"):
+        ex = guide_excerpt(heretic, q, 6000)
+        assert "Omniflask Weakness" in ex and "Scholar's Chargeblade" in ex, f"{q!r}: missing Raids build"
+        assert "--- Raids ---" in ex, f"{q!r}: missing tab-header context"
+        assert "Arisen Kaladanda" not in ex, f"{q!r}: leaked Early-T10 build gear"
+    # A bare "omniflask" names no tab, so both omniflask builds come back
+    # (each with its tab header) for the model to disambiguate from context.
+    ex = guide_excerpt(heretic, "omniflask", 6000)
+    assert "Omniflask Weakness" in ex and "Scholar's Chargeblade" in ex and "--- Raids ---" in ex
+    # A precise single-build ask resolves to just that build; empty -> opening;
+    # a tab-only query (no matching build inside) returns the whole tab.
+    assert "Scholar's Chargeblade" in guide_excerpt(heretic, "omniflask weakness", 6000)
+    assert "Arisen Kaladanda" not in guide_excerpt(heretic, "omniflask weakness", 6000)
+    assert guide_excerpt(heretic, "", 40) == heretic[:40]
+    assert "--- Dungeon ---" in guide_excerpt(heretic, "dungeon", 6000)
 
     print(f"orna_guides._demo: all checks passed ({len(GUIDES)} guides)")
 

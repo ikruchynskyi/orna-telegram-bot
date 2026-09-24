@@ -1155,14 +1155,10 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     cross-class build - see orna_guides.py for the full topic list and
     why this is separate from knowledge_search's short-fact corpus. These
     guides run from ~10KB to ~180KB of prose - far too much to hand the
-    model whole every time - so this returns a query-focused excerpt
-    (word-level OR match, ranked by how many distinct query words a line
-    contains - see below for why this isn't a single exact-phrase match)
-    when `query` is given, or the guide's own opening otherwise.
-    # ponytail: still no fuzzy/typo correction like orna_knowledge.search
-    has (difflib against the guide's own vocabulary) - add it if a
-    class-guide ask with a genuine typo (not just different wording)
-    turns up nothing in practice.
+    model whole every time - so this returns a query-focused excerpt via
+    orna_guides.guide_excerpt (see it for the header-/tab-aware ranking that
+    keeps a "raid" query from landing on the wrong same-named build), or the
+    guide's own opening when no query is given.
     No reply_text - like knowledge_search/web_search, this is raw source
     material for the model to read and write the real answer from in
     finish(), not already-formatted content to show verbatim."""
@@ -1177,65 +1173,7 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     if not text:
         return f"guide for {key!r} is empty or missing on disk"
 
-    query = (query or "").strip()
-    if not query:
-        return text[:_GUIDE_EXCERPT_CHARS]
-
-    # Short words (<=2 chars - "of", "in", "an", ...) dropped so they
-    # don't inflate every line's score meaninglessly.
-    words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
-    lines = text.split("\n")
-
-    # TIER 1: a query word matching a "--- Tab ---"/"=== Build ===" HEADER
-    # line is a far stronger, more specific signal than matching some
-    # random prose line elsewhere - a header names its WHOLE section, so
-    # prefer the best-matching header over the generic word-scan below.
-    # Live-verified gap this fixes: "ideal items" (real heading: "Your
-    # (Ideal) Inventory") scored a scattered set of unrelated lines under
-    # a plain word-scan - "item"/"items" alone appears constantly across
-    # a 46KB guide, so the actual matching section got buried under
-    # earlier-appearing, equally-scored, unrelated hits instead of the
-    # ONE section that's actually about this.
-    header_re = re.compile(r"^(?:-{3,}|={3,})\s*(.+?)\s*(?:-{3,}|={3,})$")
-    if words:
-        header_hits = []
-        for i, line in enumerate(lines):
-            m = header_re.match(line.strip())
-            if m:
-                score = sum(1 for w in words if w in m.group(1).lower())
-                if score:
-                    header_hits.append((score, i))
-        if header_hits:
-            header_hits.sort(key=lambda t: -t[0])
-            start = header_hits[0][1]
-            end = next((j for j in range(start + 1, len(lines)) if header_re.match(lines[j].strip())), len(lines))
-            return "\n".join(lines[start:end])[:_GUIDE_EXCERPT_CHARS]
-
-    # TIER 2: word-level OR match, ranked by how many distinct query
-    # words a line contains - broader fallback when no header matched.
-    scores = [sum(1 for w in words if w in line.lower()) for line in lines]
-    hit_indices = sorted((i for i, s in enumerate(scores) if s > 0), key=lambda i: -scores[i])
-    if not hit_indices:
-        # No word match at all - the guide's own opening beats nothing,
-        # since it may still answer this in wording that shares no words
-        # with the query at all.
-        return text[:_GUIDE_EXCERPT_CHARS]
-
-    seen = set()
-    out_lines = []
-    total = 0
-    for idx in hit_indices:
-        start, end = max(0, idx - 3), min(len(lines), idx + 4)
-        for i in range(start, end):
-            if i in seen:
-                continue
-            seen.add(i)
-            out_lines.append(lines[i])
-            total += len(lines[i])
-        out_lines.append("...")
-        if total >= _GUIDE_EXCERPT_CHARS:
-            break
-    return "\n".join(out_lines)[:_GUIDE_EXCERPT_CHARS]
+    return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
 async def _run_knowledge_tool(message, query: str) -> str:
@@ -1371,10 +1309,13 @@ _TOOLS_TEXT = (
     "long-form WRITTEN COMMUNITY GUIDES (strategy reasoning - why a build works, gear priorities, playstyle "
     "tradeoffs) for a SPECIFIC class or cross-class build the user is clearly asking about - use whenever the "
     "request names one of these classes/builds AND wants strategy/gear/build advice, not just a stat lookup (a "
-    "stat lookup is still query/search_codex/assess). Give a `query` whenever the ask has a specific angle (a gear "
-    "slot, a stat, a playstyle word) - without one you only see the guide's own opening, which may not be the "
-    "relevant part for a long guide. No reply_text - like knowledge_search/web_search, read this as source "
-    "material and write the real answer in finish().\n"
+    "stat lookup is still query/search_codex/assess). Give a `query` whenever the ask has a specific angle - and "
+    "INCLUDE the game-mode/section word the request names (raid/raids, dungeon, tower, early, endless, ...) "
+    "ALONGSIDE the build/gear/stat word, e.g. query \"omniflask raid\", not just \"omniflask\": a class guide often "
+    "splits the SAME build name across tabs by mode (an Early-T10 \"Omniflask Raiding\" and a Raids-tab \"Omniflask "
+    "Weakness\" are different gear), so dropping the mode word can land on the wrong one. Without any query you only "
+    "see the guide's own opening, which may not be the relevant part for a long guide. No reply_text - like "
+    "knowledge_search/web_search, read this as source material and write the real answer in finish().\n"
     "- knowledge_search(action_input=<search term>): a curated community reference (player-maintained sheets) for "
     "exactly what Orna's own codex genuinely doesn't track: PER-MONSTER/BOSS ELEMENTAL DAMAGE RESISTANCES/"
     "IMMUNITIES most of all (the codex has NO immunity field for bosses at all - not even an empty one - even "
@@ -1487,7 +1428,9 @@ _CLASS_GUIDE_RULE = (
     "outdated answer instead of using the actual curated guide - these guides are written specifically for this "
     "and kept current; general training knowledge about a live-patched mobile game is exactly the kind of thing "
     "that goes stale. Give a specific `query` argument (a gear slot, a stat, a playstyle word from the request) "
-    "to focus the excerpt on the relevant part of a long guide, then base finish() on what it actually says.\n"
+    "to focus the excerpt on the relevant part of a long guide - and keep the game-mode/section word the request "
+    "names (raid/dungeon/tower/early/endless/...) IN that query, since the same build name recurs across tabs "
+    "tuned per mode and dropping it fetches the wrong build's gear - then base finish() on what it actually says.\n"
     "SECOND mandatory rule, once class_guide's excerpt already lists a build's own gear (Weapon:/Headpiece:/"
     "Armor:/Legwear:/Accessory:/... lines naming real items): finish() MUST be built from those exact names - do "
     "NOT ALSO run a generic stat-sorted query() (sort_by magic/ward/attack/...) \"just in case\" and let ITS "
