@@ -38,7 +38,9 @@ import usage_stats
 logger = logging.getLogger(__name__)
 
 OLLAMA_CLOUD_HOST = "https://ollama.com"
-DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
+# read=120s: the local models this falls back to are slow on a long
+# context, and cutting one off mid-generation wastes the whole call.
+DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
 
 
 class OllamaError(RuntimeError):
@@ -93,8 +95,17 @@ def _from_tool_calls(message: dict) -> Optional[dict]:
     The model's decision is CORRECT in these replies, just delivered in the
     wrong field - so translate rather than discard. Prompt wording alone can't
     close this (measured: 9/20 -> 17/20 OK, never 20/20); this is the half of
-    the fix that's deterministic. A call Ollama turned into a 500 is
-    unrecoverable here and still falls to the caller's retry.
+    the fix that's deterministic.
+
+    The 500 itself is NOT recoverable here (it carries no body) - it's
+    prevented instead, by declaring those action names in `tools` so the
+    parser HAS a reverse mapping. Live 2026-09-24: 91 "no reverse mapping"
+    warnings -> 27 bare 500s in one day's ollama server log with nothing
+    declared; 0 warnings and 0 500s over the same probe with the names
+    declared. See telegram_orna._STEP_TOOLS. This function still matters
+    after that fix - a mapped call comes back as a perfectly valid
+    tool_calls reply with EMPTY content, which is exactly what it
+    translates.
 
     `arguments` IS the object the model meant to send. Two real shapes:
     the whole object inside arguments ({"action":"open_entry",...}), or the
@@ -121,13 +132,21 @@ def _from_tool_calls(message: dict) -> Optional[dict]:
 
 
 async def chat_json(host: str, model: str, messages: list[dict], headers: Optional[dict] = None,
-                     timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> dict:
+                     timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None) -> dict:
     """POST /api/chat with think:True + format=json, return the parsed
     JSON object (a single HTTP attempt - no retry/fallback here, see
     chat_json_with_fallback for that). Raises OllamaError on any HTTP
     failure or unusable reply, UnsupportedMultimodal if the model rejected
-    an attached image."""
+    an attached image.
+
+    `tools` is passed straight through to Ollama. A caller whose prompt asks
+    the model to pick one of several NAMED actions should declare those names
+    here even though this function never dispatches a tool call itself - see
+    _from_tool_calls for why (a harmony-format model emits a native call
+    regardless, and with nothing declared Ollama 500s on some of them)."""
     payload = {"model": model, "messages": messages, "stream": False, "format": "json", "think": True}
+    if tools:
+        payload["tools"] = tools
     usage_stats.record_llm_call(model, "cloud" if host == OLLAMA_CLOUD_HOST else "local")
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -163,7 +182,8 @@ def drop_images(messages: list[dict]) -> bool:
 
 async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model: str, messages: list[dict],
                                    api_key: Optional[str] = None, cloud_host: str = OLLAMA_CLOUD_HOST,
-                                   timeout: httpx.Timeout = DEFAULT_TIMEOUT) -> dict:
+                                   timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None,
+                                   local_timeout: Optional[httpx.Timeout] = None) -> dict:
     """Try Ollama Cloud first, falling back to a local Ollama model/host if
     the cloud call fails for any reason (out of credits, network, flaky
     wifi, ...). Either way, if a vision-carrying message hits a model with
@@ -183,15 +203,21 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
     real failure doesn't produce several redundant stack traces across
     every retry/fallback layer (verified live: 4 full tracebacks for one
     failed step before this)."""
+    # A caller that tries cloud on EVERY call (telegram_orna's loop) wants the
+    # two legs on different deadlines: cloud short, so a slow/dead cloud call
+    # gives up and hands over quickly, and local long, since the local model is
+    # genuinely slower and is the last resort - cutting it off produces nothing
+    # at all. Defaults to one deadline for both, which is what /go passes.
+    local_timeout = local_timeout or timeout
     cloud_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
+        return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", cloud_model)
         if not drop_images(messages):
             raise
         try:
-            return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout)
+            return await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
         except OllamaError as e:
             # The post-image-drop retry can still fail for an ordinary
             # transient reason (rate limit, network). Fall through to the
@@ -205,11 +231,11 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
     # Local fallback - reached from a cloud OllamaError (first call OR the
     # post-image-drop retry). Same drop-image-and-retry-once shape.
     try:
-        return await chat_json(local_host, local_model, messages, timeout=timeout)
+        return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", local_model)
         if drop_images(messages):
-            return await chat_json(local_host, local_model, messages, timeout=timeout)
+            return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
         raise
 
 
@@ -235,6 +261,13 @@ def _demo() -> None:
     assert got["args"]["category"] == "items" and got["args"]["sort_by"] == "magic", got
     assert got["args"]["conditions"][0]["field"] == "magic", got
     assert "conditions" not in got, got
+
+    # 3b. with tools DECLARED the model also nests an action's own args under
+    #     "args" itself (observed live 2026-09-24) - keep that dict as-is.
+    got = _from_tool_calls({"tool_calls": [{"function": {"name": "query", "arguments": {
+        "args": {"category": "items", "combinator": "or", "conditions": [{"kind": "text"}]}}}}]})
+    assert got == {"action": "query", "args": {
+        "category": "items", "combinator": "or", "conditions": [{"kind": "text"}]}}, got
 
     # 4. an ordinary reply must NOT be rescued - it goes to _extract_json.
     assert _from_tool_calls({"content": '{"action":"finish"}'}) is None

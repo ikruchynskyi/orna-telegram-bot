@@ -291,25 +291,24 @@ structurally can't recover from.
 
 **Session/step design**, in `telegram_orna.py`'s `OrnaSession`/
 `_ORNA_SESSIONS`/`_advance`/`_call_step_model`:
-- `MAX_STEPS = 16`. Cloud/local is routed per step by CONTEXT WEIGHT, not
-  turn number (`_call_step_model`): a step tries Ollama Cloud only when the
-  accumulated context BEYOND the (constant, large) system prompt reaches
-  `CLOUD_CONTEXT_CHARS = 1500`, and no more than `MAX_CLOUD_CALLS = 8` cloud
-  attempts are made per request (still falling back to local mid-turn if a
-  cloud call itself fails, same as `/go`). This spends the limited cloud
-  quota on the HEAVY calls (synthesizing a final answer, reasoning over the
-  big blob a class_guide/knowledge_search/web_search returns into the
-  context) and keeps the cheap ones (deciding which tool to run, building a
-  codex-search query) on the free local model - which works because the
-  codex-LOOKUP tools return only short observations (rich data goes to
-  Telegram), so a plain lookup stays small→local, while the read-and-
-  synthesize tools return their full text into the context, crossing the
-  threshold→cloud. (This replaced an earlier "first 8 turns → cloud" scheme
-  that spent cloud on the cheap early routing and left the heavy final
-  synthesis on local - the opposite of what's wanted. Tradeoff: the initial
-  tool-routing call is now on the less-reliable local model; lower
-  `CLOUD_CONTEXT_CHARS` to send more calls to cloud if routing quality
-  suffers, raise it to save more quota.)
+- `MAX_STEPS = 16`. **EVERY step tries Ollama Cloud first and falls back to
+  local mid-turn if that call fails** (`_call_step_model`), per explicit ask
+  2026-09-24. `MAX_CLOUD_CALLS = 20` is now only a runaway guard, not a
+  routing decision - `MAX_STEPS` is 16, so 20 covers every step plus the
+  close-out call and never binds on a normal request. Setting it to 0 forces
+  local-only (that is exactly what the verification harness's `FORCE_LOCAL`
+  does). This is the third routing scheme here, and the history matters
+  because each was a reasonable-sounding answer to the previous one's
+  failure: "first 8 turns → cloud" spent the quota on cheap early routing
+  and left the heavy final synthesis on local; "cloud only above
+  `CLOUD_CONTEXT_CHARS = 1500` of accumulated context" (now deleted)
+  inverted that, keeping tool-routing and codex lookups local because their
+  observations are short. What killed the second one: **a cheap step is not
+  cheap to get WRONG.** The local model picking the wrong tool, or dropping
+  a number it was handed, costs a step out of `MAX_STEPS` and real
+  wall-clock - and once `/orna` started ending on `LOOP_TIMEOUT_SECONDS`
+  rather than on the step budget (see the assess notes below), wall-clock
+  became the scarce resource, not cloud quota.
 - `LOOP_TIMEOUT_SECONDS = 300` — a hard wall-clock ceiling on the whole
   request (`asyncio.wait_for` around the loop), regardless of step count.
   This is the actual guarantee the loop always replies within a bounded
@@ -321,17 +320,24 @@ structurally can't recover from.
   (2026-09-23): a long multi-tool-call request died on one empty-content
   response from the local model; discarding every step of reasoning
   already done over what's often a transient blip was a bad trade.
-- **`/orna`'s own model-call timeout (`STEP_MODEL_TIMEOUT`, 45s read) is
-  deliberately shorter than `/go`'s unchanged 90s** (`ollama_client.
-  DEFAULT_TIMEOUT`, still `/go`'s default via its own call). A step-
-  budgeted loop treats a slow/hanging call as pure waste — it can retry,
-  fall back to local, or just move on — where `/go`'s single-shot-per-
-  turn design tolerates waiting out a genuinely-slow-but-working cloud
-  response better. Live incident (2026-09-23): before this, one step
-  could spend ~2.5 minutes (a full 90s cloud timeout, then a slow empty
+- **The two legs of a step run on DIFFERENT deadlines, because they have
+  different jobs.** Cloud gets `STEP_MODEL_TIMEOUT` (45s read) - it should
+  give up fast, since there is a fallback waiting and a step-budgeted loop
+  treats a hanging call as pure waste. Local gets `LOCAL_MODEL_TIMEOUT`
+  (120s read) - it IS the fallback, nothing comes after it, so cutting it
+  off mid-generation throws the whole step away for nothing; gpt-oss:20b
+  runs ~49 tok/s here and a long accumulated tool history genuinely can
+  take over 45s. `chat_json_with_fallback`'s `local_timeout` parameter is
+  what makes this possible (it defaults to `timeout`, which is what `/go`
+  passes - one deadline for both legs). `ollama_client.DEFAULT_TIMEOUT`
+  (`/go`'s, and the default) went 90s → 120s at the same time and for the
+  same reason. Live incident (2026-09-23) that set the cloud side: one step
+  once spent ~2.5 minutes (a full 90s cloud timeout, then a slow empty
   local response) before failing — see `concurrent_updates` below for why
   that alone was enough to lock up the *entire* bot for every user, not
-  just the one slow request.
+  just the one slow request. Worst case per step is now 45s + 120s, so
+  `LOOP_TIMEOUT_SECONDS` can be consumed by two pathological steps; that
+  is the knob to raise if legitimately-long requests start getting cut.
 - Logging is deliberately light (no `exc_info=True`) at every
   intermediate retry/fallback point, with the full traceback logged once
   — at the point the loop actually gives up — not at every layer.
@@ -350,12 +356,57 @@ structurally can't recover from.
   end is often just one step in the model retrying with a different
   spelling or field, and only a genuinely final "nothing anywhere"
   belongs in the user's chat (that's `finish()`'s job).
-- Any tool that produces a ranked number (`query`'s `sort_by`) includes
-  that number directly in its text observation as `"[sort_by=value]"`,
-  not just in the posted message's button labels — live bug: the model
-  couldn't see button labels as text, so it `open_entry`'d items just to
-  re-read a number it already had, wasting steps on a multi-slot
-  calculation.
+- Any tool that produces a number the model will REASON WITH puts that
+  number in its text observation, not only in the message it posted —
+  the model cannot read what it only sent to Telegram. `query`'s
+  `sort_by` carries `"[sort_by=value]"` (live bug: the model couldn't
+  see button labels as text, so it `open_entry`'d items just to re-read
+  a number it already had); `build_optimize` carries `"[total=N]"`; and
+  `assess` carries `"[orn_bonus=57.5%, ...]"` — that last one added
+  2026-09-24 after a live report where the whole request was "total the
+  Orn Bonus of these six godforged items", the loop assessed every one
+  of them CORRECTLY, got back only `"posted assessment for X"`, and
+  answered "на жаль, не отримали точні дані про бонуси". The one number
+  the request was about was computed and then dropped on the floor.
+  When adding a tool, ask what number the model needs back, not just
+  what the user sees.
+- **A quality-scaled bonus and a codex base value are different numbers,
+  and only `assess` produces the first.** An item's codex page shows its
+  UNSCALED base (Lost Helmet: "Orn Bonus: +5%"); at godforged that same
+  item is +57.5%. Before the observation fix above, the loop's only
+  readable numbers were the base ones, so it totalled those. The prompt
+  (`_AGGREGATE_RULE`'s NAMED-ITEM clause) now spells out the third
+  question shape explicitly: the user naming items AND their qualities is
+  neither a `build_optimize` ask (that PICKS items for you) nor a plain
+  lookup — it's `assess` once per named item, then `calculate`. Verified
+  live 3/3 that the loop calls `assess` per item after this, where before
+  it used `search_codex`/`open_entry` base values 0/1.
+- **`knowledge_search` substring-matches the corpus, so one query naming
+  several subjects matches NOTHING — `_run_knowledge_tool` splits on a
+  miss.** Live report: `knowledge_search("Shrine of Luck, Lucky Silver
+  Coin, Temple of Wealth, Volcan's Brew orn")` returned empty and the
+  answer said none of them were in the data, while each name on its own
+  returns its exact row (`Shrine of Luck | - | World Shrine | - | 2 |
+  ...`). On an empty result the tool now splits the query on
+  `,`/`;`/`/`/`and`/`та` (`_split_subjects` — deliberately NOT a bare
+  Ukrainian "і", one letter hits inside ordinary names), searches each
+  subject, and returns the found blocks plus an explicit list of which
+  subjects genuinely have no match. Fixed in the tool rather than the
+  prompt because the model batching related lookups into one query is
+  reasonable behavior, not a mistake to instruct away.
+- **Bonus stacking is multiplicative and the product is a MULTIPLIER, not
+  a percentage — both halves were got wrong live, in the same session.**
+  `build_optimize` has always been the canonical implementation
+  (`multiplier *= (1 + scaled / 100)`, then `total_pct = (multiplier - 1)
+  * 100`); the hand-rolled path had no such anchor, and two runs of the
+  same request answered "650%" (additive sum) and "21.76%" (the raw
+  product labelled as a percentage; it's ×21.76, i.e. +2076%).
+  `_AGGREGATE_RULE` ends with a STACKING CONVENTION paragraph stating
+  both rules and requiring finish() to give both forms. The deterministic
+  half: `_run_calculate_tool` detects a `(1 + …)` stacking expression and
+  appends `"[as a stacking bonus: xN total = +M% bonus]"`, so the
+  `(product - 1) * 100` step is never done in the model's head — it
+  slipped exactly there (21.76× reported as "+1776%").
 - Codex/query dead ends get the same mechanical retries `search_codex`
   always had (trailing-number-strip, space-collapse) plus two added
   2026-09-23: collapsing consecutive duplicated letters, and dropping a
@@ -1260,11 +1311,91 @@ error '500'" replies. Two halves, both needed:
   against the three real shapes - run `python3 ollama_client.py`.
 - **Prompt wording alone cannot close this** (measured: 9/20 → 14/20 with
   an explicit "you have no callable functions" rule, 17/20 also
-  de-function-ifying the tool bullets - never 20/20), so the rule is in
+  de-function-ifying the tool bullets - never 20/20), so the rule was in
   `_orna_system_prompt` as a cheap reduction, not as the fix. After both:
   **39/40** usable actions across two batches, vs 9/20 before. The residual
-  is Ollama's own 500, which carries no body to translate and is left to
-  the loop's existing retry-once (confirmed recovering it live).
+  was Ollama's own 500 - see the next paragraph, which removes it.
+
+**The bare 500 above is PREVENTED by declaring the action names as
+`tools`, not recovered - and the fix is the opposite of what the symptom
+suggests (it is not a bad model, and swapping models fixes nothing).**
+Live report 2026-09-24: a long multi-item `/orna` request died at step 11
+with `Ollama request failed: Server error '500'`, throwing away ten steps
+of gathered data. `~/.ollama/logs/server.log` named the cause exactly -
+every 500 is preceded by `harmony parser: no reverse mapping found for
+function name` with the action the model picked
+(`harmonyFunctionName=search_codex`). gpt-oss:20b DOES support tool
+calling (`/api/show` → `capabilities: ['completion','tools','thinking']`);
+the bug was that the loop declared NO tools while prompting the model to
+pick one of 17 named actions, so when Harmony emitted the call it wanted,
+Ollama had nothing to map the name back to. Measured over one day's
+server log: 91 such warnings → 27 bare 500s (~30% of them; the other 70%
+come back as an ordinary `tool_calls` reply `_from_tool_calls` handles).
+The fix is `telegram_orna._STEP_TOOLS` - the 17 action names declared in
+`/api/chat`'s `tools` array, passed through the new `tools=` parameter on
+`ollama_client.chat_json`/`chat_json_with_fallback`. Verified live: 8
+probe calls on the failing prompt with nothing declared → warnings and
+tool-call replies; the same 8 with the names declared → **0 warnings, 0
+500s**, and a full 16-step local-only run of the exact failing request →
+0 warnings, 0 500s. Notes:
+  * `_ACTIONS` is now the single list the prompt's action enum AND
+    `_STEP_TOOLS` are both built from - they cannot drift apart.
+  * The tools' `parameters` schema mirrors the JSON object the prompt
+    asks for (`thought`/`action_input`/`args`/`options`) so a native
+    call's arguments land under the keys `_run_tool` actually reads. An
+    un-schema'd declaration produced `{"name": "godforged lost helmet"}`
+    where the loop wanted `action_input`.
+  * `_orna_system_prompt`'s old "you have NO callable functions, NEVER
+    emit a tool call" paragraph is now FALSE and contradicted by the tool
+    list Ollama's own template injects - replaced with a plain statement
+    that JSON content is preferred and a native call is understood too.
+  * `_from_tool_calls` still matters after this: a correctly-MAPPED call
+    comes back as a valid `tool_calls` reply with empty `content`, which
+    is exactly what it translates. Its `_demo()` pins one more real shape
+    seen only once tools were declared (the action's args nested under
+    `"args"` by the model itself).
+  * `/go` and `telegram_nlp` pass no `tools` and their payloads are
+    byte-identical to before - `tools` is only added to the payload when
+    truthy. They are lower-risk anyway: their prompts ask for an
+    extraction, not a choice among named actions.
+  * A 500 whose log line shows a duration of exactly `45.00Xs` is NOT
+    this bug - that is `STEP_MODEL_TIMEOUT`'s own read timeout
+    disconnecting mid-generation, which Ollama then logs as a 500. Check
+    for the harmony warning immediately above the line before chasing it.
+
+**Two live follow-on blockers, both found only because the 500 stopped
+masking them - a request can now run its full budget and still show the
+user nothing.** Same request as above:
+- **The model repeats a tool call with the identical input, despite the
+  prompt telling it not to.** Measured on the real loop: 4 of 16 steps
+  were the SAME `search_codex 'godforged lost helmet'`, which both
+  exhausted the step budget and posted the same result card to the chat 4
+  times. `OrnaSession.seen_calls` (signature → its observation) replays
+  the cached observation plus a "stop repeating it" nudge instead of
+  re-running the tool - no duplicate Telegram card, no wasted step. After
+  this, the same request spent all 16 steps on distinct work and reached
+  `assess`/`calculate`.
+- **Both ways a request can end without `finish()` threw away everything
+  gathered — `_close_out` is the shared fix.** Out of steps: the loop had
+  looked up all four items' Orn Bonus and run the arithmetic, then spent
+  its last steps on `web_search` and replied only "не вдалося сформувати
+  відповідь". Out of wall-clock (`LOOP_TIMEOUT_SECONDS`): runs had
+  assessed five of six items, with every number sitting in context, and
+  showed the user "запит триває надто довго" and nothing else. Both
+  endings now append a "no further tool calls are possible, answer NOW
+  with what you have" observation and take ONE more model call, falling
+  back to the old fixed message only if that call fails. It cannot loop,
+  and is bounded by `_call_step_model`'s retry-once at ~90s past
+  whichever limit was hit — so the wall-clock guarantee is now
+  `LOOP_TIMEOUT_SECONDS` + one bounded call, not a hard 300s. That is a
+  deliberate trade: a late real answer beats a punctual useless one.
+  NOTE the second ending got MORE common, not less, after the assess
+  fixes above — `assess` per named item is slower than the
+  `search_codex`/`open_entry` path it replaced, so a six-item request now
+  does more real work per step and more often runs out of time rather
+  than steps. If these requests keep timing out, `LOOP_TIMEOUT_SECONDS`
+  is the knob, and the dominant per-step cost is a cloud call that eats
+  its full `STEP_MODEL_TIMEOUT` before falling back to local.
 
 **OCR text needs defensive parsing, not clean regexes.** Real OCR output
 puts junk in front of every offerings row (a misread icon — a stray letter,

@@ -31,9 +31,9 @@ Usage (from the repo root, with the bot's env loaded):
     # never one. N repeats the same request:
     Q="балор меч" N=5 python3 .../orna_loop_harness.py
 
-    # Force local-only (skip the cloud attempt entirely - faster, and works
-    # with no OLLAMA_API_KEY; but test the CLOUD path too before shipping,
-    # since that is what real users hit for the first CLOUD_STEPS turns):
+    # Force local-only (skip the cloud attempt entirely - works with no
+    # OLLAMA_API_KEY; but test the CLOUD path too before shipping, since
+    # every step of a real request tries cloud first):
     Q="..." FORCE_LOCAL=1 python3 .../orna_loop_harness.py
 
 Environment:
@@ -66,9 +66,8 @@ if not os.environ.get("SHEETS_API_KEY"):
 import telegram_orna as T  # noqa: E402  (import after sys.path/env setup)
 
 if os.environ.get("FORCE_LOCAL") == "1":
-    # MAX_CLOUD_CALLS caps how many steps may try the cloud model; 0 means
-    # every step goes straight to local Ollama (routing is by context weight
-    # now - see telegram_orna.CLOUD_CONTEXT_CHARS).
+    # Every step tries cloud first now; MAX_CLOUD_CALLS is only a runaway
+    # guard, so setting it to 0 is what makes a run local-only.
     T.MAX_CLOUD_CALLS = 0
 
 

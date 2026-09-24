@@ -94,25 +94,50 @@ _RESULTS_PER_PAGE = 8
 # (+ maybe a refined retry) + finish. 16 gives real headroom for that
 # chain plus a genuinely multi-part request on top of it.
 MAX_STEPS = 16
-# Cloud/local routing is by CONTEXT WEIGHT, not turn number, because cloud
-# quota is limited and best spent on the HEAVY calls: synthesizing a final
-# answer, or reasoning over the big blob a "read-and-interpret" tool
-# (class_guide/knowledge_search/web_search) dumps into the context. The
-# cheap calls - deciding which tool to run, building a codex-search query -
-# only ever see a small context and go to the free local model. This works
-# because the codex-LOOKUP tools (search_codex/query/open_entry/...) return
-# only SHORT observations (their rich data goes to Telegram, not the model),
-# so a plain lookup stays small -> local; the read-and-synthesize tools
-# instead return their full text INTO the context, crossing the threshold
-# -> cloud, exactly where the heavy reasoning is. A step goes to cloud when
-# the context BEYOND the (constant, large) system prompt reaches
-# CLOUD_CONTEXT_CHARS. MAX_CLOUD_CALLS caps cloud calls per request so a
-# long research chain can't drain the quota; past it, local only (a cloud
-# call still falls back to local mid-turn on failure, as always). Tune
-# CLOUD_CONTEXT_CHARS down to send more (smaller-context) calls to cloud if
-# local routing quality is a problem, up to save more quota.
-CLOUD_CONTEXT_CHARS = 1500
-MAX_CLOUD_CALLS = 8
+# EVERY step tries Ollama Cloud first and falls back to local, per explicit
+# ask 2026-09-24. This replaced a context-weight scheme (CLOUD_CONTEXT_CHARS,
+# now gone) that kept the "cheap" routing/lookup steps on the free local model
+# and spent cloud only on the heavy read-and-synthesize ones. The reason that
+# was abandoned: the cheap steps are not actually cheap to get WRONG - the
+# local model picking the wrong tool, or dropping a number, costs a step out
+# of MAX_STEPS and (since /orna started timing out rather than running out of
+# steps) real wall-clock, which is now the scarcer resource. MAX_CLOUD_CALLS
+# stays only as a runaway guard, high enough not to bind on a normal request
+# - MAX_STEPS is 16, so 20 covers every step plus the close-out call. Set it
+# to 0 to force local-only (that is what the verification harness's
+# FORCE_LOCAL does).
+MAX_CLOUD_CALLS = 20
+# The loop's action names, in ONE place - both the system prompt's action
+# enum and the `tools` array below are built from this.
+_ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "calculate", "assess",
+            "compare", "build_optimize", "towers", "class_guide", "knowledge_search", "web_search", "ask", "finish")
+# Declared to Ollama on every step call - NOT because the loop wants native
+# tool calling (it reads its action out of either channel, see
+# ollama_client._from_tool_calls), but because NOT declaring them made the
+# LOCAL model 500. gpt-oss:20b is a harmony-format model and emits a native
+# tool call for roughly half of these "pick one named action" prompts; with
+# no tools declared, Ollama's harmony parser has no name to map back, logs
+# "no reverse mapping found for function name", and fails the whole request
+# with a bare 500 on about a third of them (live 2026-09-24: 91 such
+# warnings -> 27 500s in one day's server log). That 500 carries no body, so
+# nothing downstream can translate it, and the retry hits the same wall - a
+# request that has already spent a dozen steps dies outright. Declaring the
+# names gives the parser its mapping: 0 warnings, 0 500s over the same
+# probe, with the tool-call replies arriving in the shape _from_tool_calls
+# already handles. The parameter schema mirrors the JSON object the prompt
+# asks for, so a native call's arguments land under the keys the loop reads
+# rather than whatever the model invents (an unschema'd call produced
+# {"name": "godforged lost helmet"} where the loop wanted "action_input").
+_STEP_TOOLS = [{"type": "function", "function": {
+    "name": name,
+    "description": f"The /orna ReAct action {name!r}.",
+    "parameters": {"type": "object", "properties": {
+        "thought": {"type": "string"},
+        "action_input": {"type": "string"},
+        "args": {"type": "object"},
+        "options": {"type": "array", "items": {"type": "string"}},
+    }},
+}} for name in _ACTIONS]
 # Shorter than ollama_client.DEFAULT_TIMEOUT's 90s read timeout (which
 # /go still uses, unchanged, via its own default call) - /orna's loop has
 # a hard step budget where a slow/hanging call is pure waste (it can
@@ -122,6 +147,12 @@ MAX_CLOUD_CALLS = 8
 # minutes (a full 90s cloud timeout, then a slow local response) before
 # giving up - this halves the worst case per attempt.
 STEP_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=20.0, pool=10.0)
+# The LOCAL leg gets much longer than the cloud one. Different jobs: the cloud
+# call should give up fast so the fallback happens quickly, but local IS the
+# fallback - there is nothing after it, so cutting it off mid-generation just
+# throws the step away. gpt-oss:20b runs ~49 tok/s here and a long accumulated
+# tool history can take well over 45s to answer.
+LOCAL_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
 # Hard wall-clock ceiling on one /orna request, regardless of what's
 # happening inside it - MAX_STEPS bounds the number of turns, but each
 # turn's own timeouts (chat_json_with_fallback: up to 90s cloud + up to
@@ -977,18 +1008,29 @@ async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
     # formula - append them if the item actually has any, since that's
     # exactly the number a "best build" bonus calculation needs.
     quality_code = get_quality_code(quality, level)
-    bonus_lines = []
+    bonus_lines, bonus_observed = [], []
     for key in sorted(QUALITY_CODE_BONUS_KEYS & entry.stats.keys()):
         base = entry.stats.get(key)
         if not isinstance(base, (int, float)) or isinstance(base, bool):
             continue
         scaled = get_quality_bonus(base, quality, quality_code, entry.is_adornment, key)
         bonus_lines.append(f"{key.replace('_', ' ')}: {base:g}% base → {scaled:g}% at this quality")
+        bonus_observed.append(f"{key}={scaled:g}%")
     if bonus_lines:
         reply += "\n\n<b>Бонус-статистики (поза основною таблицею):</b>\n" + "\n".join(f"• {l}" for l in bonus_lines)
 
     await message.reply_text(reply, parse_mode="HTML", disable_web_page_preview=True)
-    return f"posted assessment for {entry.name} at quality={quality}% level={level}"
+    # The SCALED bonus numbers go back to the model as text, not just into
+    # the posted table - same rule query's "[sort_by=value]" already follows,
+    # and for the same live reason: the model cannot read what it only sent
+    # to Telegram. Live report 2026-09-24: asked to total the Orn Bonus of six
+    # named godforged items, the loop assessed them correctly, got back only
+    # "posted assessment for X", and answered "на жаль, не отримали точні дані
+    # про бонуси" - the one number the whole request was about was computed and
+    # then dropped on the floor.
+    bonuses = ", ".join(bonus_observed) if bonus_observed else "none"
+    return (f"posted assessment for {entry.name} at quality={quality}% level={level}. "
+            f"Quality-scaled bonus stats [{bonuses}] - use THESE numbers, not the item's base values.")
 
 
 async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str:
@@ -1175,7 +1217,20 @@ async def _run_calculate_tool(message, expression: str) -> str:
     unreliable at doing in free-form "thought" text. Synchronous, no I/O."""
     if not expression:
         return "calculate needs a numeric expression in action_input"
-    return _calculate(expression)
+    out = _calculate(expression)
+    # A stacking expression - the "(1 + b1/100) * (1 + b2/100) * ..." form
+    # _AGGREGATE_RULE tells the model to write - produces a MULTIPLIER, and
+    # the answer the user wants is the percentage (product - 1) * 100. Doing
+    # that one last step in its head is exactly the arithmetic this tool
+    # exists to take away, and it slipped live (21.76x reported as "+1776%",
+    # not +2076%), so hand it over already converted.
+    if "(1 +" in expression or "(1+" in expression:
+        try:
+            value = float(out.rsplit("=", 1)[-1].strip())
+        except ValueError:
+            return out
+        return f"{out}  [as a stacking bonus: x{value:g} total = +{(value - 1) * 100:g}% bonus]"
+    return out
 
 
 _GUIDE_EXCERPT_CHARS = 6000
@@ -1208,6 +1263,21 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
+# "," / ";" / "/" / "and" / "та" between subjects. Deliberately NOT a bare
+# Ukrainian "і" - one letter is far too easy to hit inside an ordinary name.
+_SUBJECT_SPLIT_RE = re.compile(r"\s*(?:,|;|/|\band\b|\bта\b)\s*", re.I)
+
+
+def _split_subjects(query: str) -> list:
+    """Split a query naming SEVERAL things into the individual things, or
+    [] if it only names one. See _run_knowledge_tool for why: the corpus
+    is substring-searched, so a combined query can only match a line that
+    contains every subject at once - i.e. nothing."""
+    parts = [p.strip(" .\u2019'\"") for p in _SUBJECT_SPLIT_RE.split(query)]
+    parts = [p for p in parts if len(p) > 2]
+    return parts if len(parts) > 1 else []
+
+
 async def _run_knowledge_tool(message, query: str) -> str:
     """Curated community reference (orna_knowledge.txt, see
     orna_scrape_knowledge.py) for exactly the gap web_search exists for -
@@ -1229,6 +1299,19 @@ async def _run_knowledge_tool(message, query: str) -> str:
     # vocabulary; individually fast, but any blocking call on the event
     # loop stalls every other chat's request too, not just this one.
     result = await asyncio.to_thread(orna_knowledge.search, query)
+    if not result and (parts := _split_subjects(query)):
+        # The corpus is searched as a SUBSTRING, so a query naming several
+        # things at once can only match a line containing all of them - i.e.
+        # nothing. Live report 2026-09-24: knowledge_search("Shrine of Luck,
+        # Lucky Silver Coin, Temple of Wealth, Volcan's Brew orn") returned
+        # empty and the answer said none of them were in the data, while each
+        # name searched on its own returns its exact row. Splitting here fixes
+        # it for every caller instead of hoping the model asks one at a time.
+        found = [(part, r) for part in parts if (r := await asyncio.to_thread(orna_knowledge.search, part))]
+        if found:
+            missing = [p for p in parts if p not in {f[0] for f in found}]
+            note = f" No knowledge-base match for: {', '.join(missing)}." if missing else ""
+            return ("\n\n".join(f"[{part}]\n{r}" for part, r in found)[:3000] + note)
     if not result:
         return f"no knowledge-base matches for {query!r} - try web_search instead"
     return result[:3000]
@@ -1507,7 +1590,25 @@ _AGGREGATE_RULE = (
     "using scaled = ((100 + base) * (100 + scaling) - 10000) / 100 (scaling per quality tier: superior=+10, "
     "famed=+15, legendary=+20, ornate=+25, masterforged=+30, demonforged=+40, godforged=+50, regular/poor=+0), "
     "then calculate() the multiplicative stack: (1 + slot1%/100) * (1 + slot2%/100) * ... - never multiply more "
-    "than two numbers in your own head, write the calculate() expression out."
+    "than two numbers in your own head, write the calculate() expression out.\n"
+    "NAMED-ITEM BONUS TOTALS - a DIFFERENT shape, don't confuse it with the two above (e.g. \"total orn bonus "
+    "from godforged lost helmet, godforged court jester outfit, legendary band of gods\"): the user already "
+    "named the items AND each one's quality, so build_optimize (which PICKS the items for you) does not fit. "
+    "Call assess(args={\"item\":\"<name>\",\"quality\":\"<the quality given FOR THAT item>\"}) once per named "
+    "item - assess's observation hands back that item's QUALITY-SCALED bonus as \"[orn_bonus=57.5%]\", and THAT "
+    "is the number to total. An item's codex page value (open_entry's \"Orn Bonus: +5%\") is the UNSCALED base "
+    "and is simply wrong for a godforged/legendary/ornate item - never total those. Then calculate() the stack: "
+    "(1 + b1/100) * (1 + b2/100) * ... written out as one expression. A flat bonus the user states themselves "
+    "(\"+25% за кроки\", \"+25% from world event\") is just another (1 + 25/100) factor - no lookup needed. "
+    "Anything else named that is not a codex item (Shrine of Luck, Temple of Wealth, Lucky Silver Coin, ...) is "
+    "a knowledge_search lookup - those community tables give a MULTIPLIER (e.g. \"2\" = x2 = +100%), already in "
+    "the same stacking form.\n"
+    "STACKING CONVENTION - applies to EVERY case above, and both halves get got wrong live: (a) these bonuses "
+    "stack MULTIPLICATIVELY, never additively - four +57.5% items are not \"+230%\"; (b) the product you get out "
+    "of calculate() is a MULTIPLIER, not a percentage - the bonus percentage is (product - 1) * 100, so a product "
+    "of 21.76 means x21.76, i.e. +2076%, NOT \"21.76%\". This is exactly what build_optimize computes and "
+    "reports, so your answer must match how it would phrase the same total. State both forms (xN and +N%) in "
+    "finish() so the number can't be misread."
 )
 
 
@@ -1516,8 +1617,7 @@ _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 def _orna_system_prompt(user_text: str = "") -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
-    actions = ('"today"|"next"|"need"|"search_codex"|"query"|"events"|"open_entry"|"calculate"|"assess"|'
-               '"compare"|"build_optimize"|"towers"|"class_guide"|"knowledge_search"|"web_search"|"ask"|"finish"')
+    actions = "|".join(f'"{a}"' for a in _ACTIONS)
     # Deterministic per-request language lock. Prompt-only "reply in the
     # user's language" guidance kept losing, for build/class_guide answers, to
     # the prompt's Ukrainian examples plus the long ENGLISH guide excerpt the
@@ -1559,15 +1659,17 @@ def _orna_system_prompt(user_text: str = "") -> str:
         '"args":{"...only for action \\"query\\", see above..."},"options":["<opt1>","<opt2>"]}. "options" is only '
         "used with action \"ask\". Don't call finish before you have enough information, don't ask more than "
         "once, and don't repeat a tool call you've already made with the same input.\n\n"
-        # gpt-oss is a Harmony-format model: "pick one of these named tools"
-        # makes it emit a NATIVE tool call ~half the time, leaving content
-        # empty (Ollama then logs "no reverse mapping found for function name"
-        # and sometimes 500s). Saying this outright measurably cuts that -
-        # 9/20 -> 14/20 clean replies, live 2026-09-24 - but never to zero, so
-        # ollama_client._from_tool_calls translates the stragglers back.
-        "OUTPUT FORMAT - ABSOLUTE: you have NO callable functions and NO tool-calling channel. The names above "
-        "are just allowed string values for the \"action\" field. NEVER emit a function/tool call of any kind - "
-        "reply with the single JSON object described above as ordinary message content."
+        # This used to insist "you have NO callable functions" to stop
+        # gpt-oss emitting a native tool call, because an undeclared one
+        # could 500 the request. The action names ARE declared now
+        # (_STEP_TOOLS) precisely so that can't happen, which makes that
+        # claim both false and contradicted by the tool list Ollama's own
+        # template injects - so it now just states the preference. Either
+        # channel parses: ollama_client._from_tool_calls translates a native
+        # call back into this same object.
+        "OUTPUT FORMAT: send that single JSON object as ordinary message content - that is the preferred "
+        "channel, and the only one every backend agrees on. Emitting a native tool call for one of the action "
+        "names above is understood too, but never mix the two or send anything besides the JSON object."
     )
 
 
@@ -1578,6 +1680,16 @@ class OrnaSession:
     created: float = field(default_factory=time.monotonic)
     ask_options: list = field(default_factory=list)
     cloud_calls: int = 0  # cloud attempts made this request (bounded by MAX_CLOUD_CALLS)
+    # Every tool call already made this request, signature -> its observation.
+    # The prompt tells the model not to repeat a call with the same input; it
+    # does anyway (live 2026-09-24, the 11-item orn-bonus request: 4 of 16
+    # steps were the IDENTICAL search_codex, which is what exhausted the step
+    # budget before it could answer, and posted the same result card to the
+    # chat 4 times). Replaying the cached observation instead of re-running
+    # costs no step-budget-worth of new information either way, but it skips
+    # the duplicate Telegram card and tells the model outright that it is
+    # going in a circle.
+    seen_calls: dict = field(default_factory=dict)
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -1647,6 +1759,37 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
             "class_guide, ask, finish.")
 
 
+async def _close_out(session: "OrnaSession", message, limit_hit: str, fallback: str) -> None:
+    """Take ONE more model call to answer with whatever the loop already
+    gathered, instead of ending on a bare "couldn't do it".
+
+    Both ways a request can end without finish() - out of steps, out of
+    wall-clock time - hit after the loop has usually already collected what
+    it needed and simply never got a turn to SAY it. Live 2026-09-24, the
+    six-item orn-bonus request: runs that ended here had assessed five of
+    the six items and had every number in context, and the user was shown
+    none of it. This call is beyond MAX_STEPS and (for the timeout path)
+    beyond LOOP_TIMEOUT_SECONDS, but it cannot loop - whatever comes back
+    is the reply, and `fallback` is sent if it fails. It is bounded by
+    _call_step_model's own retry-once, i.e. at most 2 x STEP_MODEL_TIMEOUT
+    (~90s) past whichever limit was hit."""
+    session.messages.append({
+        "role": "user",
+        "content": f"Observation: {limit_hit} - no further tool calls are possible. Reply NOW with action "
+                   '"finish", putting the best answer you can give from everything gathered so far into '
+                   "action_input, and say plainly which parts you could not confirm.",
+    })
+    try:
+        final = str((await _call_step_model(session, MAX_STEPS)).get("action_input") or "").strip()
+    except (OllamaError, UnsupportedMultimodal):
+        logger.warning("orna: forced closing answer failed (%s)", limit_hit, exc_info=True)
+        final = ""
+    try:
+        await _reply_markdown(message, final or fallback)
+    except Exception:
+        logger.warning("orna: failed to send closing answer", exc_info=True)
+
+
 async def _advance(sid: str, message) -> None:
     """Wraps _advance_inner in a hard wall-clock deadline - see
     LOOP_TIMEOUT_SECONDS. No matter what happens inside (a hung call, a
@@ -1656,10 +1799,16 @@ async def _advance(sid: str, message) -> None:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.warning("orna: loop exceeded %ss, cut off (sid=%s)", LOOP_TIMEOUT_SECONDS, sid)
-        try:
-            await message.reply_text("Запит триває надто довго — спробуйте ще раз або сформулюйте простіше.")
-        except Exception:
-            logger.warning("orna: failed to notify user about loop timeout", exc_info=True)
+        session = _ORNA_SESSIONS.get(sid)
+        fallback = "Запит триває надто довго — спробуйте ще раз або сформулюйте простіше."
+        if session is None:
+            try:
+                await message.reply_text(fallback)
+            except Exception:
+                logger.warning("orna: failed to notify user about loop timeout", exc_info=True)
+            return
+        usage_stats.record_tool_call("_loop_timeout")
+        await _close_out(session, message, "the time limit for this request was reached", fallback)
 
 
 async def _call_step_model(session: "OrnaSession", step_number: int):
@@ -1675,36 +1824,23 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
     request costs a few seconds and matches the retry-once convention
     telegram_nlp._local_chat_json already uses for the same reason.
 
-    Cloud vs local is decided by CONTEXT WEIGHT (see CLOUD_CONTEXT_CHARS /
-    MAX_CLOUD_CALLS): a HEAVY-context step tries cloud first; a light one
-    stays local to save quota but escalates to cloud on its retry if local
-    fails; all bounded by the per-request cloud budget. So cheap tool-routing
-    calls stay local and cloud is saved for the big synthesis calls (and for
-    rescuing a light call the local model flubbed)."""
-    # Weigh everything AFTER the (constant, large) system prompt - that's what
-    # grows when a read-and-synthesize tool dumps its text in, and stays tiny
-    # for plain lookup routing.
-    context_chars = sum(len(m.get("content") or "") for m in session.messages[1:])
-    heavy = context_chars >= CLOUD_CONTEXT_CHARS
+    EVERY step tries cloud first and falls back to local mid-turn if the
+    cloud call fails (out of credits, network, ...) - see MAX_CLOUD_CALLS,
+    which is now only a runaway guard rather than a routing decision. The
+    two legs run on different deadlines (STEP_MODEL_TIMEOUT for cloud,
+    LOCAL_MODEL_TIMEOUT for local) - see those constants."""
     for attempt in range(2):
-        # Cloud on attempt 0 only for HEAVY calls; a LIGHT call's first try
-        # stays local (save quota). But on the retry (attempt 1, after a
-        # failure) escalate a light call to cloud too, so a flaky local model
-        # doesn't sink a simple request that cloud could still answer - the
-        # cloud->local safety net the old scheme gave every early turn, now
-        # spent only when local actually fails. All bounded by MAX_CLOUD_CALLS.
-        try_cloud = (heavy or attempt == 1) and session.cloud_calls < MAX_CLOUD_CALLS
         try:
-            if try_cloud:
+            if session.cloud_calls < MAX_CLOUD_CALLS:
                 session.cloud_calls += 1
-                # try cloud, fall back to local mid-turn if the cloud call
-                # itself fails (out of credits, network, ...).
                 return await chat_json_with_fallback(
                     GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
-                    timeout=STEP_MODEL_TIMEOUT,
+                    timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS,
                 )
-            # Light call (small context): local only, to save cloud quota.
-            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, timeout=STEP_MODEL_TIMEOUT)
+            # Only past the runaway guard (or MAX_CLOUD_CALLS=0, i.e. the
+            # harness's FORCE_LOCAL): local is all there is.
+            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages,
+                                   timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS)
         except (OllamaError, UnsupportedMultimodal) as e:
             if attempt == 0:
                 # Light log here on purpose (no exc_info) - this is an
@@ -1767,11 +1903,19 @@ async def _advance_inner(sid: str, message) -> None:
             return
 
         session.messages.append({"role": "assistant", "content": json.dumps(step)})
-        observation = await _run_tool(message, action, action_input, args)
+        sig = json.dumps([action, action_input, args], sort_keys=True, ensure_ascii=False)
+        if sig in session.seen_calls:
+            observation = (f"You already made this exact call earlier and it returned: "
+                           f"{session.seen_calls[sig]} - it was NOT run again. Stop repeating it: use that "
+                           f"result, try a DIFFERENT tool or input, or finish with what you have.")
+        else:
+            observation = await _run_tool(message, action, action_input, args)
+            session.seen_calls[sig] = observation
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
     usage_stats.record_tool_call("_step_budget_exhausted")
-    await message.reply_text("Не вдалося сформувати відповідь за відведену кількість кроків — спробуйте уточнити запит.")
+    await _close_out(session, message, "the step budget is exhausted",
+                     "Не вдалося сформувати відповідь за відведену кількість кроків — спробуйте уточнити запит.")
 
 
 # -----------------------------------------------------------------------------
