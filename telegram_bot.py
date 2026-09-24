@@ -17,7 +17,8 @@ from telegram_assess import build_assess_conversation
 from telegram_resources import build_reminder_callback_handler, build_resource_conversation
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
 from telegram_remind import (build_remind_handler, build_tz_callback_handler,
-                             build_tz_edit_callback_handler, reschedule_pending)
+                             build_tz_edit_callback_handler, build_tz_input_handler,
+                             reschedule_pending)
 from telegram_orna import build_orna_callback_handler, build_orna_handler, build_update_codex_handler
 from telegram_orna import _next_text, _today_text
 import usage_stats
@@ -244,6 +245,11 @@ def main():
     # the guild members who use the ungated reminder buttons, not just the
     # /remind allowlist.
     app.add_handler(build_tz_edit_callback_handler())
+    # The typed answer to the timezone ask. Registered BEFORE the assess and
+    # resources conversations, like /go's Continue handler: its filter only
+    # matches a chat with a live timezone ask, so for every other chat it is a
+    # guaranteed no-op that falls through to them untouched.
+    app.add_handler(build_tz_input_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.

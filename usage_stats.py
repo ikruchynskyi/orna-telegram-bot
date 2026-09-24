@@ -36,6 +36,12 @@ _user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Coun
 _user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
 _user_log: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{command,text,ts}, ...], newest last
 _user_tz: Dict[str, float] = {}  # user_id str -> UTC offset in hours, from telegram_remind.request_utc_offset
+# user_id str -> IANA zone name ("Europe/Kyiv"), when the user gave a PLACE
+# rather than a bare offset. Preferred over _user_tz whenever present: a
+# stored NUMBER freezes at whatever the offset was on the day it was picked,
+# so a user in any DST region silently drifts an hour twice a year with
+# nothing to signal it. A zone is re-evaluated on every read instead.
+_user_zone: Dict[str, str] = {}
 _since: str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -57,6 +63,7 @@ def _load() -> None:
     for uid, log in data.get("user_log", {}).items():
         _user_log[uid] = log
     _user_tz.update(data.get("user_tz", {}))
+    _user_zone.update(data.get("user_zone", {}))
     _since = data.get("since", _since)
 
 
@@ -76,6 +83,7 @@ def _save() -> None:
             "user_names": _user_names,
             "user_log": _user_log,
             "user_tz": _user_tz,
+            "user_zone": _user_zone,
         }))
         tmp.replace(_STORE_PATH)
     except OSError:
@@ -161,12 +169,32 @@ def get_user_tz(user_id) -> Optional[float]:
     button) to an actual moment - None if never asked/answered. A
     DURATION-based reminder ("/remind 2h ...") never calls this at all,
     since a relative delay needs no timezone."""
+    zone = _user_zone.get(str(user_id))
+    if zone:
+        try:
+            from zoneinfo import ZoneInfo
+            off = datetime.now(ZoneInfo(zone)).utcoffset()
+            if off is not None:
+                return off.total_seconds() / 3600
+        except Exception:  # unknown/renamed zone in a future tzdata - fall through
+            logger.warning("usage_stats: stored zone %r no longer resolves, using saved offset", zone)
     v = _user_tz.get(str(user_id))
     return float(v) if v is not None else None
 
 
-def set_user_tz(user_id, utc_offset: float) -> None:
+def get_user_zone(user_id) -> Optional[str]:
+    """The IANA zone name the user's offset came from, if they gave a place."""
+    return _user_zone.get(str(user_id))
+
+
+def set_user_tz(user_id, utc_offset: float, zone: Optional[str] = None) -> None:
+    """Record the user's timezone. `zone` (an IANA name) is stored alongside
+    the offset whenever we have one, and wins on read - see _user_zone."""
     _user_tz[str(user_id)] = float(utc_offset)
+    if zone:
+        _user_zone[str(user_id)] = zone
+    else:
+        _user_zone.pop(str(user_id), None)
     _save()
 
 

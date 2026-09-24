@@ -1641,43 +1641,46 @@ created later the same day, scraping `playorna.com/calendar/`'s live
 event list rather than generating Google Calendar links. Same filename,
 two unrelated histories - `git log --follow` on it will jump between them.
 
-**Telegram CLIPS an inline-button label that doesn't fit, with no
-ellipsis - so a too-narrow button doesn't look truncated, it looks like a
-DIFFERENT value.** Live report 2026-09-24 on the UTC-offset picker
-(`telegram_remind._tz_keyboard`): 27 buttons labelled `UTC-12`…`UTC+14`, 6
-to a row, rendered on a phone as `UTC-1`/`UTC-2` for everything from ±10
-upward, because each button was narrower than its own text. The user read
-it as the picker repeating itself and as "more than 24 buttons of
-nonsense"; there were no duplicates, just different offsets displaying
-identically. That is worse than a cosmetic bug here: `usage_stats.
-set_user_tz` persists the pick and every later reminder reuses it WITHOUT
-asking again, so one clipped mis-tap silently shifted every future reminder
-by hours. Fixed on both axes - the label is the bare offset (`+2`, `-11`,
-≤3 chars instead of 6) and `_TZ_PER_ROW = 4` instead of 6, so each button
-gets roughly double the width for half the text. The list is also 24 wide
-now (`-11..+12`), not 27: one per hour of the day, which is every distinct
-wall-clock offset. The dropped three are the ones nobody in this guild will
-be in - `-12` is uninhabited, `+13`/`+14` are Kiribati and Samoa - and that
-cut is NOT purely cosmetic, since their wall clock equals `-11`/`-10` on a
-different calendar day, so a date-pinned reminder would be 24h out for
-someone actually there. Restore `range(-12, 15)` if that ever matters. Correctness beats
-compactness for this keyboard: an extra row costs a scroll, a clipped
-timezone is wrong forever. **When adding any inline keyboard, budget the
-label against the row width** - the existing `_bundle_label` 64-char cap
-guards Telegram's API limit, which is a different thing entirely and does
-nothing about on-screen clipping.
+**The timezone ask is FREE TEXT now - an offset ("+3") or a place
+("Київ", "New York") - not a grid of buttons.** It was 24-27 offset
+buttons, and Telegram CLIPS an inline-button label that doesn't fit with no
+ellipsis, so at 6 per row `UTC-10`/`UTC-11`/`UTC-12` all rendered as
+`UTC-1` on a phone: the user read that as the picker repeating itself, and
+tapping any of them silently saved a timezone hours off. That was worse
+than cosmetic, because `usage_stats.set_user_tz` persists the pick and
+every later reminder reuses it without asking again. **When adding any
+inline keyboard, budget the label against the row width** - the
+`_bundle_label` 64-char cap guards Telegram's API limit, a different thing
+that does nothing about on-screen clipping.
+The replacement (`request_utc_offset`/`handle_tz_input`/`handle_tz_confirm`):
+- `_parse_offset_text` handles a typed offset deterministically, including
+  fractional ones (`+5:30`, `+5.5`) that the old whole-hour grid couldn't
+  express at all.
+- Anything else goes to the model, which proposes only an IANA NAME; then
+  `zoneinfo` decides whether that name is real and what its offset is. A
+  hallucinated zone therefore can't become a plausible wrong offset - it
+  raises and we say we couldn't work it out. Same "LLM for the fuzzy part,
+  deterministic lookup for the answer" split as the rest of the repo.
+- The resolved zone is shown for **confirm/decline**, and either button
+  removes the keyboard (`_drop_keyboard`) so nothing stays tappable.
+- **A place also fixes DST**, which no stored number can: `usage_stats`
+  keeps `_user_zone` alongside `_user_tz` and `get_user_tz` recomputes from
+  the zone on every read, so a user in a DST region stops drifting an hour
+  twice a year. A bare typed offset still stores just the number - that is
+  the user's choice, and it still freezes.
+- `/remind tz` re-asks, because an already-saved timezone was otherwise
+  unreachable: the "change" button only lives on the confirmation message,
+  which scrolls away.
 
-**A silently-persisted choice needs a way to change it.** The same report
-exposed that a saved UTC offset was unreachable afterwards: nothing re-asks,
-`/remind` is gated to `GO_ALLOWED_USER_IDS`, and the guild "remind me"
-buttons that CONSUME the offset are open to everyone - so exactly the users
-who could set it wrong were the ones who couldn't fix it. The confirmation
-now carries a "🔄 Змінити часовий пояс" button
-(`handle_tz_edit_button`/`build_tz_edit_callback_handler`, registered in
-`telegram_bot.py`), which re-opens the picker with a no-op continuation
-since there is no pending action to resume the second time. It checks the
-tapping user matches the id in `callback_data`, so one member can't re-pick
-another's zone from a shared group message.
+**Free text is NOT free in this bot - reuse the pending-filter pattern.**
+`_PENDING_TZ_INPUT` + `_PendingTzInputFilter` + `build_tz_input_handler`
+copy `/go`'s Continue handler exactly: a `filters.MessageFilter` that
+matches only a chat with a live pending ask, registered in
+`telegram_bot.py` BEFORE the assess and resources conversations. For every
+chat without a pending ask it is a guaranteed no-op that falls straight
+through, so it cannot steal text from those registration-order-sensitive
+flows. Any future free-text prompt in this repo should be built the same
+way rather than with a bare `MessageHandler`.
 
 **Button labels include the material name(s), not just the guild -
 `_bundle_label`.** Live report: asking about 2 materials produced 19

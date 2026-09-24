@@ -32,16 +32,21 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+                          filters)
 
+from ollama_client import OllamaError, chat_json
 from telegram_go import GO_ALLOWED_USER_IDS
+from telegram_nlp import OLLAMA_HOST, OLLAMA_MODEL
 import usage_stats
 
 logger = logging.getLogger(__name__)
@@ -57,21 +62,97 @@ _UNIT_SECONDS = {
 _DURATION_RE = re.compile(r"^(\d+)\s*([a-z]+)\s+(.+)$", re.IGNORECASE | re.DOTALL)
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)\s+(.+)$", re.DOTALL)
 
-# -11..+12: 24 offsets, one per hour of the day, which is every distinct
-# wall-clock offset there is. The full real-world range is -12..+14 (27), but
-# the three extras are the ones nobody here will ever be in: -12 is
-# uninhabited, and +13/+14 are Kiribati's Line Islands and Samoa.
-# ponytail: dropping +13/+14 is not purely cosmetic - their wall clock equals
-# -11/-10 on a DIFFERENT calendar day, so a date-pinned reminder (the guild
-# restock buttons, which pass target_date) would be 24h out for someone
-# actually there. Restore the -12..15 range if a member ever turns up in the
-# Pacific; nothing else needs to change.
-# Whole hours only - skips half/quarter-hour zones (India +5:30, Nepal +5:45,
-# ...), which round to the nearest hour. Fine for "remind me around this
-# time"; add real fractional offsets if that precision is ever reported.
-_TZ_OFFSETS = list(range(-11, 13))
-_PENDING_TZ: dict = {}  # short id -> {"user_id": int, "on_offset": async fn(float)} - in-memory only, same as _REMINDER_STATE/telegram_go._SESSIONS
+# The offset is asked as FREE TEXT ("+3", "Київ", "New York"), not picked
+# from a grid. The grid was 24-27 buttons that Telegram clipped on a phone
+# until the labels were cut to 3 chars (see git history) - and even correct,
+# it made the user hunt through a 6-row wall for one cell, and froze a NUMBER
+# that silently drifts an hour every DST change. A place instead resolves to
+# an IANA zone, which stays right forever (usage_stats stores the zone and
+# re-reads it live) and costs one line of UI.
+#
+# Free text in this codebase is not free, though: a bare MessageHandler would
+# race the assess/resources ConversationHandlers, whose registration order is
+# load-bearing (see CLAUDE.md). Same solution /go's "Continue" uses - a
+# custom MessageFilter that matches ONLY a chat with a live pending ask, so
+# for every other chat it is a guaranteed no-op that falls straight through.
+_PENDING_TZ: dict = {}  # pending_id -> {"user_id", "chat_id", "on_offset", "candidate"} - in-memory, like _REMINDER_STATE
 _PENDING_TZ_MAX = 200
+_PENDING_TZ_INPUT: dict = {}  # chat_id -> (pending_id, expires_monotonic)
+TZ_INPUT_TTL_SECONDS = 600
+
+# "+3", "-5", "3", "utc+3", "UTC +5:30", "+5.5" - the deterministic path,
+# tried before the model is ever asked. A bare number is read as an offset
+# only within the real range; "Dublin 8" style input falls through to the
+# location resolver instead of being misread as UTC+8.
+_OFFSET_RE = re.compile(r"^\s*(?:utc|гмт|utc\s*)?\s*([+-]?\d{1,2})(?:[:.](\d{1,2}))?\s*$", re.IGNORECASE)
+
+
+def _parse_offset_text(text: str) -> Optional[float]:
+    """A typed UTC offset as a float, or None if it isn't one."""
+    m = _OFFSET_RE.match(text)
+    if not m:
+        return None
+    hours = int(m.group(1))
+    frac = m.group(2)
+    minutes = int(frac.ljust(2, "0")) if frac else 0
+    if frac and len(frac) == 1:          # "+5.5" means five and a half hours
+        minutes = int(frac) * 6
+    if not (-12 <= hours <= 14) or not (0 <= minutes < 60):
+        return None
+    return hours + (minutes / 60) * (-1 if hours < 0 else 1)
+
+
+_TZ_LOOKUP_PROMPT = (
+    "Map the user text to ONE IANA timezone name (e.g. \"Europe/Kyiv\"). The text may be a city, region or "
+    "country, in English or Ukrainian. For a country spanning several zones, pick its most populous. "
+    "Reply ONLY with {\"timezone\":\"<IANA name>\"}, or {\"timezone\":null} if the text is not a place."
+)
+
+
+async def _resolve_location(text: str) -> Optional[tuple]:
+    """(utc_offset, zone_name) for a free-text place, or None.
+
+    The model only ever proposes a NAME; zoneinfo then decides whether that
+    name is real and what its offset currently is. So a hallucinated zone
+    can't turn into a plausible-looking wrong offset - it raises and we say
+    we couldn't work it out. Same "LLM for the fuzzy part, deterministic
+    lookup for the answer" split the rest of this repo uses."""
+    try:
+        data = await chat_json(OLLAMA_HOST, OLLAMA_MODEL,
+                               [{"role": "system", "content": _TZ_LOOKUP_PROMPT},
+                                {"role": "user", "content": text[:200]}])
+    except OllamaError as e:
+        logger.warning("remind: timezone lookup failed for %r (%s)", text[:60], e)
+        return None
+    zone = data.get("timezone")
+    if not isinstance(zone, str) or not zone.strip():
+        return None
+    try:
+        offset = datetime.now(ZoneInfo(zone.strip())).utcoffset()
+    except Exception:
+        logger.warning("remind: model proposed unknown zone %r", zone)
+        return None
+    if offset is None:
+        return None
+    return offset.total_seconds() / 3600, zone.strip()
+
+
+class _PendingTzInputFilter(filters.MessageFilter):
+    """Matches only a chat with a live timezone ask - see _PENDING_TZ_INPUT."""
+
+    def filter(self, message) -> bool:
+        pending = _PENDING_TZ_INPUT.get(message.chat_id)
+        return bool(pending and time.monotonic() < pending[1])
+
+
+_pending_tz_input_filter = _PendingTzInputFilter()
+
+
+def _confirm_keyboard(pending_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Підтвердити", callback_data=f"remindtzok|{pending_id}"),
+        InlineKeyboardButton("❌ Ні, ввести інше", callback_data=f"remindtzno|{pending_id}"),
+    ]])
 
 
 def utc_offset_to_fire_at(target_date: Optional[date], hour: int, minute: int, utc_offset: float) -> datetime:
@@ -108,68 +189,109 @@ def utc_offset_to_fire_at(target_date: Optional[date], hour: int, minute: int, u
 _TZ_PER_ROW = 4
 
 
-def _tz_keyboard(pending_id: str) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(f"{o:+d}", callback_data=f"remindtz|{pending_id}|{o}") for o in _TZ_OFFSETS]
-    rows = [buttons[i:i + _TZ_PER_ROW] for i in range(0, len(buttons), _TZ_PER_ROW)]
-    return InlineKeyboardMarkup(rows)
-
-
 async def request_utc_offset(message, user_id: int, on_offset: Callable[[float], Awaitable[None]]) -> None:
-    """Ask the user (buttons only, never free text - same reasoning as
-    every other "ask" flow in this codebase: a free-text timezone reply
-    is just one more unreliable thing to parse) which UTC offset to use
-    for a specific-clock-time reminder, then resume via on_offset(offset)
-    once picked. Only needed the first time - see usage_stats.get_user_tz/
-    set_user_tz for the persisted answer that skips this on every later
-    specific-time ask."""
+    """Ask the user for their timezone as free text - an offset ("+3") or a
+    place ("Київ", "New York") - then resume via on_offset(offset) once they
+    confirm what we worked out. Only needed the first time; see
+    usage_stats.get_user_tz/set_user_tz for the persisted answer that skips
+    this on every later specific-time ask."""
     if len(_PENDING_TZ) >= _PENDING_TZ_MAX:
         _PENDING_TZ.pop(next(iter(_PENDING_TZ)), None)
     pending_id = uuid.uuid4().hex[:10]
-    _PENDING_TZ[pending_id] = {"user_id": user_id, "on_offset": on_offset}
+    _PENDING_TZ[pending_id] = {"user_id": user_id, "chat_id": message.chat_id,
+                               "on_offset": on_offset, "candidate": None}
+    _PENDING_TZ_INPUT[message.chat_id] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
     await message.reply_text(
-        "Щоб встановити нагадування на конкретний час, оберіть свій зсув від UTC "
-        "(наприклад, Київ влітку — це +3):",
-        reply_markup=_tz_keyboard(pending_id),
+        "Вкажіть свій часовий пояс — напишіть місто чи країну (наприклад «Київ») "
+        "або зсув від UTC (наприклад «+3»):"
     )
 
 
-async def handle_tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_tz_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The typed answer to request_utc_offset. Only ever reached for a chat
+    with a live pending ask (_pending_tz_input_filter), so it can never take
+    text away from the assess/resources conversations."""
+    message = update.effective_message
+    if not message or not message.text:
+        return
+    pending_entry = _PENDING_TZ_INPUT.get(message.chat_id)
+    if pending_entry is None:
+        return  # the filter already checked, but stay defensive
+    pending_id, _expires = pending_entry
+    pending = _PENDING_TZ.get(pending_id)
+    if pending is None:
+        _PENDING_TZ_INPUT.pop(message.chat_id, None)
+        return
+
+    text = message.text.strip()
+    offset = _parse_offset_text(text)
+    if offset is not None:
+        zone, shown = None, f"UTC{offset:+g}"
+    else:
+        resolved = await _resolve_location(text)
+        if resolved is None:
+            await message.reply_text(
+                "Не вдалося визначити часовий пояс. Спробуйте назву міста "
+                "(наприклад «Київ», «Warsaw») або зсув (наприклад «+3»)."
+            )
+            return
+        offset, zone = resolved
+        shown = f"{zone} (зараз UTC{offset:+g})"
+
+    pending["candidate"] = (offset, zone)
+    await message.reply_text(f"Ваш часовий пояс: <b>{shown}</b>. Вірно?",
+                             parse_mode="HTML", reply_markup=_confirm_keyboard(pending_id))
+
+
+async def handle_tz_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """✅/❌ on the resolved timezone. Either way the keyboard goes away, so
+    the message can't be tapped twice and doesn't linger as live UI."""
     query = update.callback_query
     await query.answer()
     parts = (query.data or "").split("|")
-    if len(parts) != 3 or parts[0] != "remindtz":
+    if len(parts) != 2 or parts[0] not in ("remindtzok", "remindtzno"):
         return
-    pending_id, offset_str = parts[1], parts[2]
-    pending = _PENDING_TZ.pop(pending_id, None)
+    pending_id = parts[1]
+    pending = _PENDING_TZ.get(pending_id)
     if pending is None:
-        await query.answer("Ця сесія застаріла — спробуйте ще раз.", show_alert=True)
+        await _drop_keyboard(query, "Ця сесія застаріла — спробуйте ще раз.")
         return
-    try:
-        offset = float(offset_str)
-    except ValueError:
+    user = update.effective_user
+    if not user or user.id != pending["user_id"]:
+        await query.answer("Це чужий вибір.", show_alert=True)
         return
-    usage_stats.set_user_tz(pending["user_id"], offset)
-    try:
-        # State the saved value and leave a way to change it. Until 2026-09-24
-        # a mis-tap (see _tz_keyboard - clipped labels made that easy) was
-        # permanent: nothing else in the bot re-asks, and /remind is gated to
-        # the allowlist while the guild "remind me" buttons that consume this
-        # offset are open to everyone.
-        await query.edit_message_text(
-            f"✅ Часовий пояс UTC{offset:+g} збережено.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Змінити часовий пояс", callback_data=f"remindtzedit|{pending['user_id']}")
-            ]]),
-        )
-    except TelegramError:
-        pass  # e.g. "message not modified" on a double-tap race - harmless
+
+    if parts[0] == "remindtzno":
+        await _drop_keyboard(query, "Гаразд — напишіть місто/країну або зсув від UTC ще раз:")
+        _PENDING_TZ_INPUT[pending["chat_id"]] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
+        return
+
+    candidate = pending.get("candidate")
+    if candidate is None:
+        await _drop_keyboard(query, "Спочатку вкажіть часовий пояс.")
+        return
+    offset, zone = candidate
+    _PENDING_TZ.pop(pending_id, None)
+    _PENDING_TZ_INPUT.pop(pending["chat_id"], None)
+    usage_stats.set_user_tz(pending["user_id"], offset, zone)
+    saved = f"{zone} (UTC{offset:+g})" if zone else f"UTC{offset:+g}"
+    await _drop_keyboard(query, f"✅ Часовий пояс збережено: {saved}")
     await pending["on_offset"](offset)
 
 
+async def _drop_keyboard(query, text: str) -> None:
+    """Replace a prompt with plain text, removing its buttons - "hide the UI
+    after the choice" for every exit from the confirm step."""
+    try:
+        await query.edit_message_text(text)
+    except TelegramError:
+        pass  # e.g. "message not modified" on a double-tap race - harmless
+
+
 async def handle_tz_edit_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Re-open the offset picker for someone who saved the wrong one. The
-    re-pick only updates the stored offset - there is no pending action to
-    resume, unlike the first ask."""
+    """Re-ask for someone who saved the wrong timezone. The re-pick only
+    updates what's stored - there's no pending action to resume, unlike the
+    first ask."""
     query = update.callback_query
     await query.answer()
     parts = (query.data or "").split("|")
@@ -187,11 +309,18 @@ async def handle_tz_edit_button(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 def build_tz_callback_handler() -> CallbackQueryHandler:
-    return CallbackQueryHandler(handle_tz_button, pattern=r"^remindtz\|")
+    return CallbackQueryHandler(handle_tz_confirm, pattern=r"^remindtz(?:ok|no)\|")
 
 
 def build_tz_edit_callback_handler() -> CallbackQueryHandler:
-    return CallbackQueryHandler(handle_tz_edit_button, pattern=r"^remindtzedit\|")
+    return CallbackQueryHandler(handle_tz_edit_button, pattern=r'^remindtzedit\|')
+
+
+def build_tz_input_handler() -> MessageHandler:
+    """Registered BEFORE the assess/resources conversations - the filter makes
+    it a no-op for any chat without a live timezone ask."""
+    return MessageHandler(_pending_tz_input_filter & filters.TEXT & ~filters.COMMAND, handle_tz_input)
+
 
 
 def _load() -> dict:
@@ -286,8 +415,20 @@ async def handle_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not args:
         await message.reply_text(
             "Usage:\n/remind 20m <text>\n/remind 2h <text>\n/remind 18:30 <text>\n"
-            "/remind list\n/remind cancel <id>"
+            "/remind list\n/remind cancel <id>\n/remind tz"
         )
+        return
+
+    if args.lower() == "tz":
+        # An already-saved timezone is otherwise unreachable: the "change"
+        # button only exists on the confirmation message, which scrolls away.
+        current = usage_stats.get_user_zone(user.id) or usage_stats.get_user_tz(user.id)
+        await message.reply_text(f"Поточний часовий пояс: {current if current is not None else 'не вказано'}")
+
+        async def _noop(_offset: float) -> None:
+            return
+
+        await request_utc_offset(message, user.id, _noop)
         return
 
     if args.lower() == "list":
