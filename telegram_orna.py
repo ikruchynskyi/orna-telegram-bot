@@ -47,6 +47,7 @@ import html
 import io
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -107,6 +108,14 @@ MAX_STEPS = 16
 # to 0 to force local-only (that is what the verification harness's
 # FORCE_LOCAL does).
 MAX_CLOUD_CALLS = 20
+# /orna's own cloud model, defaulting to /go's so nothing changes unless it
+# is set. Split out 2026-09-24 so /orna can run a bigger pure-reasoning model
+# (nemotron-3-super, 120B, tools+thinking) while /go keeps a VISION one:
+# /go's "Continue" button attaches photos, nemotron has no vision, and a
+# single shared setting would silently degrade that to text-only (Ollama
+# 400s, ollama_client drops the image and retries - it doesn't crash, it just
+# stops seeing pictures). /orna's loop is text-only, so it loses nothing.
+ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "calculate", "assess",
@@ -1803,7 +1812,12 @@ async def _run_tool(message, action: str, action_input: str, args: dict) -> str:
         if action == "calculate":
             return await _run_calculate_tool(message, action_input)
         if action == "assess":
-            return await _run_assess_tool(message, str(args.get("item") or ""), str(args.get("quality") or ""))
+            # item sometimes arrives in action_input with args empty (live
+            # 2026-09-24) - same wrong-field drift as the nested action_input
+            # above, and it cost a step on "assess needs both an item name
+            # and a quality" before the model retried with proper args.
+            return await _run_assess_tool(message, str(args.get("item") or action_input or ""),
+                                          str(args.get("quality") or ""))
         if action == "compare":
             return await _run_compare_tool(message, args.get("items") or [], str(args.get("quality") or ""))
         if action == "build_optimize":
@@ -1898,8 +1912,9 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
             if session.cloud_calls < MAX_CLOUD_CALLS:
                 session.cloud_calls += 1
                 return await chat_json_with_fallback(
-                    GO_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages, api_key=OLLAMA_API_KEY,
-                    timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS,
+                    ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages,
+                    api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
+                    tools=_STEP_TOOLS,
                 )
             # Only past the runaway guard (or MAX_CLOUD_CALLS=0, i.e. the
             # harness's FORCE_LOCAL): local is all there is.
