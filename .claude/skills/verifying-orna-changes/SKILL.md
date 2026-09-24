@@ -1,19 +1,21 @@
 ---
 name: verifying-orna-changes
 description: >-
-  The no-mocks method for debugging and verifying ANY change to this Orna
-  Telegram bot. Use this WHENEVER a /orna, /go, /need, /res_today, or
-  free-text answer returns wrong/invalid/incomplete results, a class_guide
-  or codex/aussies/knowledge retrieval looks off, the ReAct loop routes to
-  the wrong tool, OCR/offerings parsing misbehaves, or you are about to
-  claim a bot change works. Do not hand-wave a fix: this skill gives an
-  ordered, layered debugging procedure (ground-truth -> deterministic
-  repro -> real-model end-to-end repro -> multi-run verification) plus a
-  ready-to-run harness that drives the real /orna ReAct loop against the
-  live Ollama/codex/sheets with a fake Telegram message. Reach for it even
-  when the user just says "the bot returned wrong items", "why did /orna
-  say X", or "test my fix" - reproduce and verify this way instead of
-  guessing.
+  The no-mocks method for developing, debugging, and verifying ANY change to
+  this Orna Telegram bot. Use this WHENEVER you are writing or modifying bot
+  code, or a /orna, /go, /need, /res_today, or free-text answer returns
+  wrong/invalid/incomplete results, a class_guide or codex/aussies/knowledge
+  retrieval looks off, the ReAct loop routes to the wrong tool, OCR/offerings
+  parsing misbehaves, or you are about to claim a bot change works. Do not
+  hand-wave a fix: this skill gives an ordered, layered debugging procedure
+  (ground-truth -> deterministic repro -> real-model end-to-end repro ->
+  multi-run verification), a ready-to-run harness that drives the real /orna
+  ReAct loop against the live Ollama/codex/sheets with a fake Telegram
+  message, and a catalog of this codebase's recurring bug patterns
+  (references/common-pitfalls.md) to check new code against. Reach for it even
+  when the user just says "the bot returned wrong items", "why did /orna say
+  X", "add a tool to /orna", or "test my fix" - reproduce and verify this way
+  instead of guessing.
 ---
 
 # Verifying & debugging changes to the Orna Telegram bot
@@ -32,6 +34,18 @@ Guessing from the user-facing symptom is the trap. The same wrong answer
 can come from three different layers, and the fix is completely different
 for each. Your whole job is: **reproduce it, find WHICH layer is wrong, fix
 that layer, then prove it over several real runs.**
+
+## Writing or changing code here? Read the pitfalls first.
+
+Before you write a fix or a new feature (a new `/orna` tool, a new parser,
+new math), skim **`references/common-pitfalls.md`** - the recurring bug
+*shapes* in this codebase, each with a real example and the rule that
+prevents it (case-insensitive matching, falsy-value collapse, unvalidated LLM
+args, boundary math, event-loop blocking, lossy-query retrieval, cache
+staleness, double-delivered callbacks, regex ordering, and fixing the shared
+function not the symptom). They recur because this code is glue over fuzzy
+inputs; the "obvious" version is wrong at the fuzzy edge. Then check your diff
+against that list.
 
 ## Follow this procedure in order. Do not skip steps.
 
