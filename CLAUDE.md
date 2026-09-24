@@ -1224,10 +1224,17 @@ fallback when it doesn't have the answer either.
     `search()` through `asyncio.to_thread`
     (`telegram_orna._run_knowledge_tool`), which is what keeps that off the
     event loop - don't add a caller that skips it.
-  These sheets drift independently of any game patch: two rebuilds minutes
-  apart during this work returned 306,425 and 305,263 bytes, i.e. someone
-  was editing a sheet live. That is what the TTL is for, and why
+  The TTL exists because these sheets are hand-maintained and drift
+  independently of any game patch - NOT because drift was measured here.
+  Checked 2026-09-24: a fresh `build_text()` was byte-identical to the
+  committed file, so the corpus was exactly in sync at that point.
   `/update_codex` refreshes this too (its slow leg, so it runs last).
+  **Correction worth keeping, because it nearly became a false "the sheets
+  are drifting" conclusion in this file:** `len(text)` counts CHARACTERS
+  while `os.path.getsize()`/`ls` count BYTES, and this corpus holds ~1,162
+  multi-byte characters (★, emoji, Cyrillic) - so the same content reads as
+  305,263 one way and 306,425 the other. Compare corpora with a real diff
+  (or compare like with like), never a length against a file size.
   `search(query, section="", limit=20)` tries an exact case-insensitive
   substring match first, then retries once with each query word
   fuzzy-corrected against the corpus's own ~3500-word vocabulary
