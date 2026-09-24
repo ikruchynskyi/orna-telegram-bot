@@ -1654,7 +1654,13 @@ set_user_tz` persists the pick and every later reminder reuses it WITHOUT
 asking again, so one clipped mis-tap silently shifted every future reminder
 by hours. Fixed on both axes - the label is the bare offset (`+2`, `-11`,
 ≤3 chars instead of 6) and `_TZ_PER_ROW = 4` instead of 6, so each button
-gets roughly double the width for half the text. Correctness beats
+gets roughly double the width for half the text. The list is also 24 wide
+now (`-11..+12`), not 27: one per hour of the day, which is every distinct
+wall-clock offset. The dropped three are the ones nobody in this guild will
+be in - `-12` is uninhabited, `+13`/`+14` are Kiribati and Samoa - and that
+cut is NOT purely cosmetic, since their wall clock equals `-11`/`-10` on a
+different calendar day, so a date-pinned reminder would be 24h out for
+someone actually there. Restore `range(-12, 15)` if that ever matters. Correctness beats
 compactness for this keyboard: an extra row costs a scroll, a clipped
 timezone is wrong forever. **When adding any inline keyboard, budget the
 label against the row width** - the existing `_bundle_label` 64-char cap

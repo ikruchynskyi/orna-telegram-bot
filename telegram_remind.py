@@ -57,12 +57,19 @@ _UNIT_SECONDS = {
 _DURATION_RE = re.compile(r"^(\d+)\s*([a-z]+)\s+(.+)$", re.IGNORECASE | re.DOTALL)
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)\s+(.+)$", re.DOTALL)
 
-# ponytail: whole-hour offsets only (-12..+14 covers every real UTC offset's
-# hour component) - skips half/quarter-hour zones (India +5:30, Nepal
-# +5:45, ...), which round to the nearest hour. Fine for "remind me around
-# this time"; add real fractional offsets if that precision is ever
-# actually reported as a problem.
-_TZ_OFFSETS = list(range(-12, 15))
+# -11..+12: 24 offsets, one per hour of the day, which is every distinct
+# wall-clock offset there is. The full real-world range is -12..+14 (27), but
+# the three extras are the ones nobody here will ever be in: -12 is
+# uninhabited, and +13/+14 are Kiribati's Line Islands and Samoa.
+# ponytail: dropping +13/+14 is not purely cosmetic - their wall clock equals
+# -11/-10 on a DIFFERENT calendar day, so a date-pinned reminder (the guild
+# restock buttons, which pass target_date) would be 24h out for someone
+# actually there. Restore the -12..15 range if a member ever turns up in the
+# Pacific; nothing else needs to change.
+# Whole hours only - skips half/quarter-hour zones (India +5:30, Nepal +5:45,
+# ...), which round to the nearest hour. Fine for "remind me around this
+# time"; add real fractional offsets if that precision is ever reported.
+_TZ_OFFSETS = list(range(-11, 13))
 _PENDING_TZ: dict = {}  # short id -> {"user_id": int, "on_offset": async fn(float)} - in-memory only, same as _REMINDER_STATE/telegram_go._SESSIONS
 _PENDING_TZ_MAX = 200
 
