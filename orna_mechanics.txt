@@ -14,7 +14,14 @@
 Orna has 10 class tiers, not 11. The character level cap is 250; tier 10
 unlocks at level 225. Players say "tier 11" for the level 225-250 stretch, but
 no new class lives there - the developers added the Ascension system instead of
-an 11th tier. The three starting classes are Warrior, Mage and Thief; the class
+an 11th tier. Nothing in the codex carries a tier above 10, in any category
+(verified directly: items, monsters, bosses, raids, followers, classes and
+spells all top out at 10). But "★11" IS a real distinction for CONTENT rather
+than classes, and it is answerable: ★11 dungeons and towers place Arisen
+Superbosses on floor 16 and floor 25 (★10 puts its 5 superbosses on the final
+floor only), and a character at ★11 / level 250 gets double the Godforging
+chances per run versus ★10. So "there is no tier 11" is right about classes and
+wrong as a flat answer to "should I run T11 dungeons". The three starting classes are Warrior, Mage and Thief; the class
 tree branches as you tier up. The six tier-10 specializations are Gilgamesh,
 Heretic, Realmshifter, Beowulf, Grand Summoner and Deity, each with Celestial
 evolved variants unlocked via the Titans (e.g. Beowulf Auriga/Hydrus, Heretic
@@ -92,8 +99,18 @@ is the key to "how do I beat X" fights.
 
 === Wild Towers of Olympia ===
 Five real-time endgame towers, one per Titan: Selene, Eos, Oceanus, Themis and
-Prometheus (tier 9+). The wild towers auto-climb over time (starting around
-floor 15, capping at 50, resetting weekly on a different day per Titan). Entry
+Prometheus (tier 9+). The wild towers auto-climb over time, starting at floor
+15/16 and gaining about six floors a day across six fixed intraday checkpoints,
+with 50 meaning "cleared, waiting for the reset". All five share ONE 35-day
+cycle, anchored at 2023-12-07 00:00 UTC, and are offset from each other by five
+floors - which at six floors a day is roughly TWENTY HOURS apart, not a week.
+There is NO fixed weekday schedule and no per-Titan reset day: the reset
+instants drift (measured for one real cycle: Thu/Sat/Sun/Sun/Mon at times
+between 01:04 and 20:04 UTC). Do NOT state a weekday for a tower reset. Ask the
+`towers` tool for a live floor or timing - it is a verified port of the game's
+own formula and is authoritative over this paragraph. (Both numbers here were
+checked against it: advancing 35 days reproduces the current floors exactly
+while advancing 7 days does not.) Entry
 costs an Olympian Key; you earn Tower Shards, spent at the Titan Workshop on
 Celestial weapon upgrades, Celestial classes and a personal tower. Added around
 January 2023.

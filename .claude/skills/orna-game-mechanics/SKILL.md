@@ -51,10 +51,19 @@ boundaries below are the standing example).
 
 ## The gotchas that are easy to get wrong (read these before you touch mechanics code)
 
-1. **There is NO Tier 11. There are 10 class tiers; the character level cap
-   is 250.** People say "Tier 11" for the bare level-225→250 bracket, but no
-   new class lives there - the developers shipped **Ascension** instead of an
-   11th tier. `orna_classes.json` correctly tops out at ★10 (82 classes).
+1. **There is NO Tier 11 CLASS - but "★11" is a real CONTENT tier, so don't
+   answer "there is no tier 11" flatly.** There are 10 class tiers and the
+   character level cap is 250; people say "Tier 11" for the bare level-225→250
+   bracket, and no new class lives there - the developers shipped **Ascension**
+   instead. `orna_classes.json` correctly tops out at ★10 (82 classes), and
+   nothing in the codex carries a tier above 10 in ANY category (verified
+   2026-09-25 across items/monsters/bosses/raids/followers/classes/spells).
+   What ★11 *does* mean is harder content, and it has consequences worth
+   answering: ★11 dungeons/towers put Arisen Superbosses on **floor 16 and
+   floor 25** (★10 only on the final floor), and a character at ★11 level 250
+   gets **double the Godforging chances per run**. None of that is in any
+   structured source - it lives in `orna_echo`/`orna_mechanics`, via
+   `knowledge_search`.
 
 2. **"Specialization" is TWO different things - don't conflate them.**
    (a) the six tier-10 CLASS specializations (Gilgamesh, Heretic,

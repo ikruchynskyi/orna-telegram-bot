@@ -200,6 +200,40 @@ def _check_quality_spec_axes() -> None:
     assert T._parse_quality_spec("100") == (100, 1)
 
 
+def _check_corpora_do_not_contradict_towers() -> None:
+    """The hand-maintained mechanics corpus must not claim a WEEKLY tower reset.
+
+    Live 2026-09-25: orna_mechanics.txt said the towers reset "weekly on a
+    different day per Titan". orna_towers - a port of the game's own formula,
+    cross-checked under Node - pins a 35-day cycle (advancing 35 days
+    reproduces the current floors exactly; 7 days does not), with the five
+    towers offset five floors, i.e. about 20 HOURS apart, and no weekday
+    schedule at all. Asked "when do the wild towers reset?", the loop read that
+    prose and answered with an invented weekday table (Eos Monday, Oceanus
+    Tuesday, ...). Note 7-day offsets would put every tower on the SAME weekday
+    anyway, which is how that answer gives itself away.
+
+    Scoped to the `=== Wild Towers of Olympia ===` section of the corpus we
+    maintain. Deliberately NOT applied to orna_echo.txt: that one is scraped
+    from someone else's site, so its wording is not ours to police - a wrong
+    claim there is handled by the `towers` tool description telling the loop
+    the tool outranks guide prose on floors and timing."""
+    path = os.path.join(REPO_ROOT, "orna_mechanics.txt")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fh:
+        body = fh.read()
+    m = re.search(r"=== Wild Towers of Olympia ===(.*?)(?:\n=== |\Z)", body, re.S)
+    assert m, "the Wild Towers section is gone from orna_mechanics.txt"
+    section = " ".join(m.group(1).split())
+    assert "35-day" in section, f"the 35-day cycle must be stated: {section[:160]}"
+    # "Do NOT state a weekday" is the correction itself naming the wrong claim.
+    claim = re.sub(r"There is NO fixed weekday schedule.*?weekday for a tower reset\.", "", section)
+    assert not re.search(r"weekly", claim, re.I), \
+        f"tower reset described as weekly - it is a 35-day cycle: {claim[:200]}"
+    assert orna_towers.CYCLE_DAYS == 35, orna_towers.CYCLE_DAYS
+
+
 def _check_towers_are_self_consistent() -> None:
     """Pure time math with no data source - so the tool and the module must
     agree exactly, at the same instant."""
@@ -281,6 +315,7 @@ TIER0 = [
     ("name-resolution-forms", _check_name_resolution_forms),
     ("quality-vs-level", _check_quality_spec_axes),
     ("towers-consistent", _check_towers_are_self_consistent),
+    ("corpora-vs-towers", _check_corpora_do_not_contradict_towers),
     ("mechanics-wired", _check_mechanics_wired_into_loop),
     ("echo-corpus", lambda: orna_echo._demo()),
     ("ban-guard", _check_ban_guard),

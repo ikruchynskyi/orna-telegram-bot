@@ -1484,6 +1484,59 @@ no answer anywhere in the bot.
   to ask. Verified end to end: "які слоти можуть мати crucible на avidity
   і який максимальний відсоток?" → all five slots, max 10%, cited.
 
+### Prose corpora must not contradict the ported math - the tower-reset case
+
+Two prose corpora landed on 2026-09-25 (`orna_mechanics.txt`, `orna_echo.txt`),
+and auditing them against the repo's own pinned math (the `orna-game-mechanics`
+skill's golden rule: live/verified code wins, and SAY SO rather than silently
+correcting) found exactly the conflict that skill warns about.
+
+**`orna_mechanics.txt` said the wild towers reset "weekly on a different day per
+Titan". They do not.** `orna_towers` is a line-for-line port of OrnaCodex's
+`tower.ts`, cross-checked under Node, and it pins `CYCLE_DAYS = 35`. Measured to
+settle it: advancing the clock 35 days reproduces the current floors EXACTLY
+(selene 19, eos 50, oceanus 44, themis 39, prometheus 34), advancing 7 days does
+not. Live consequence before the fix: "when do the wild towers reset?" answered
+with a fabricated weekday table ("Eos: Monday 00:00 UTC, Oceanus: Tuesday, ...")
+2/2. Note such a table refutes itself - 7-day offsets would put every tower on
+the SAME weekday, not consecutive ones.
+
+**The first correction was itself wrong, which is the more useful lesson.**
+Writing that the towers are "staggered five floors - seven days of phase -
+apart" came from dividing 35/5, which is not how the offset works: the towers
+are offset by `_BASE_FLOORS = [35, 30, 25, 20, 15]`, five floors, and at ~6
+floors/day that is about **20 HOURS** apart, not a week. Measured from the code:
+consecutive resets fall 20h/19h/20h apart, drifting across weekdays
+(Thu/Sat/Sun/Sun/Mon between 01:04 and 20:04 UTC in one real cycle). The model
+then amplified the stray "seven days" into the weekday table again. **Do not
+paraphrase a formula into prose without computing the paraphrase** - derive the
+number from the code and check it.
+
+Three fixes, one per layer:
+- The corpus states the 35-day cycle, the ~20-hour offset, the 2023-12-07 UTC
+  anchor, and explicitly that there is NO weekday schedule.
+- The **`towers` tool description** now says it is AUTHORITATIVE for any tower
+  floor, cycle or reset timing and outranks guide prose - the same "a verified
+  source beats a fan-maintained one" shape as the `releases`-overrides-
+  `knowledge_search` rule. This is the durable half, because `orna_echo.txt` is
+  scraped from someone else's site and its wording is not ours to police.
+- Suite tier-0 `corpora-vs-towers` pins it, scoped to the `=== Wild Towers of
+  Olympia ===` section of the corpus we maintain. A first version scanned both
+  corpora by period-delimited chunk and false-positived on a `## Weekly
+  checklist` bullet list where "weekly reset" belongs to the Astraltree and
+  "Towers" sits in a different bullet - the wrong unit for a checklist.
+
+Measured after: 3/3 runs correct, one of them calling `towers` for live floors
+and computing time-to-reset from them.
+
+**Also refined, in the same audit:** the skill's "there is NO Tier 11" gotcha is
+right about CLASSES (verified: nothing in the codex carries a tier above 10, in
+any of the nine categories) but was wrong as a flat answer. **★11 is a real
+CONTENT tier**: ★11 dungeons/towers place Arisen Superbosses on floor 16 and
+floor 25 (★10 only on the final floor), and a character at ★11 level 250 gets
+DOUBLE the Godforging chances per run. None of that is in any structured source,
+which is precisely why the prose corpora earn their place.
+
 ### The playerecho guide corpus - the only source that states a FORMULA
 
 `orna_echo.py` / `orna_echo.txt` / `orna_scrape_echo.py`, added 2026-09-25 on
