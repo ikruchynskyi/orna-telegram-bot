@@ -1120,15 +1120,21 @@ control flow:
 ### `estimate_stats` - a whole character's projected stats
 
 `estimate_stats(args={items:[{name,quality,level}], specialization, class,
-ascension_level, pvp, amities})` posts a full stat table. The order of
-operations is the part that has to be right, and it is deliberately split
-across two modules so each half is pinned by its own self-check:
-  1. every worn item assessed at ITS OWN quality and level (the same
+ascension_level, pvp, amities})` posts a stat table. It computes BASE stats
+and ITEM stats SEPARATELY (design ask 2026-09-25) and shows each as its own
+block plus a combined total when both are present - so a player can ask for
+just their base stats (class + spec + AL, no gear) OR a full loadout. The
+order of operations is deliberately split across two modules so each half is
+pinned by its own self-check:
+  1. gear: every worn item assessed at ITS OWN quality and level (the same
      `orna_assess.get_assess_result` path `/orna assess` uses) and summed -
      gear stats are ADDITIVE;
-  2. plus the tier-10 specialization's absolute base stats;
-  3. then `orna_classes.scale` applies the class's percent modifiers,
-     Ascension Level (+1%/level) and PVP (HP ×2).
+  2. base: the tier-10 specialization's absolute base stats;
+  3. `orna_classes.scale` applies the class's percent modifiers, Ascension
+     Level (+1%/level) and PVP (HP ×2) to EACH block. `scale` is linear per
+     stat, so `base_scaled + items_scaled` equals scaling the combined block -
+     the total is exact, just broken out, which is what lets the two be shown
+     (and computed) independently.
 
 **`orna_classes.scale` is that third step, and it exists because there were
 TWO copies of it.** `orna_classes.estimate` and this tool each had their own
@@ -1136,16 +1142,22 @@ identical loop over the stat block, so the AL/PVP rules `orna_classes._demo`
 pins were not necessarily the rules the bot ran - the tool's own docstring
 already claimed it delegated, and didn't. Both call `scale` now.
 
-**All five inputs are REQUIRED and the tool refuses a partial call** (design
-ask 2026-09-25, modelled on the `query` condition builder): `items`, `class`,
-`specialization`, `ascension_level`, `pvp`. It posts nothing, and returns an
-observation listing exactly which ones are missing or unresolvable, so the
-model's next move is an `ask` for precisely those. Notes:
+**What's REQUIRED depends on the mode** (revised 2026-09-25 when the tool
+learned to do base stats without gear): `ascension_level`, AND at least one of
+(a real `specialization` -> base stats, or `items` -> gear stats). `items`,
+`pvp` and `class` are OPTIONAL and must NOT be demanded: omit `items` for a
+base-only estimate; `pvp` defaults to PVE (a base-stats ask is "class, spec,
+AL" and shouldn't drag the user through a PVP prompt - the reply states the
+assumption); `class` modifiers apply only when a class is given, so `spec + AL`
+alone still yields base stats. The tool still refuses a call it can't compute
+ANYTHING from and returns an observation listing exactly what's missing, so
+the model's next move is an `ask` for precisely those. Notes:
 - `specialization: "none"` is a valid ANSWER (not every player has a tier-10
-  spec - aussiescodex's own estimator ships a "None" entry for this); leaving
-  it out is a missing input. Same for `ascension_level: 0` and `pvp: false`,
-  which is why those three are read with an explicit `is None` check and not
-  `or` - `or` collapses a real 0/false back into "not given".
+  spec - aussiescodex's own estimator ships a "None" entry for this); with
+  `"none"` AND no items there's nothing to compute, so that's the one case it
+  asks for "a spec or items". `ascension_level` is read with an explicit `is
+  None` check, not `or`, so a real AL of 0 isn't collapsed back into "not
+  given".
 - The refusal observation is prefixed `NEEDS_INPUT:` - see the finish note
   below, which keys off it.
 - The values may come from an earlier TOOL result as well as from the user:
