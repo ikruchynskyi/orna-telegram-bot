@@ -1079,7 +1079,7 @@ _SLOT_CAPACITY = {"head": 1, "torso": 1, "legs": 1, "weapon": 2, "off-hand": 1, 
 def _check_loadout(worn: list) -> tuple:
     """Validate a set of worn items and decide whether it dual-wields.
 
-    `worn` is [{"name", "place", "two_handed"}]; returns (conflicts,
+    `worn` is [{"name", "place", "two_handed", "celestial"}]; returns (conflicts,
     dual_wield). `conflicts` are human-readable reasons the loadout cannot
     exist, so a caller can refuse instead of totalling up a character nobody
     can actually build.
@@ -1108,6 +1108,16 @@ def _check_loadout(worn: list) -> tuple:
     if len(two_handed) > 1:
         conflicts.append("two TWO-HANDED weapons cannot both be worn: "
                          + ", ".join(w["name"] for w in two_handed))
+    # Only ONE celestial weapon per player, whether it is the one-handed or the
+    # two-handed kind (game rule, stated by the guild 2026-09-25). So a
+    # "best of everything" pick cannot dual-wield two celestials - which is
+    # exactly what a naive top-magic-per-slot search produces, since the
+    # celestials top most stat rankings.
+    celestial = [w for w in worn if w.get("celestial")]
+    if len(celestial) > 1:
+        conflicts.append("only ONE celestial weapon can be equipped, and these are both celestial: "
+                         + ", ".join(w["name"] for w in celestial)
+                         + " - keep one and pair it with a non-celestial weapon")
     for slot, cap in _SLOT_CAPACITY.items():
         here = by_slot.get(slot, [])
         if len(here) > cap:
@@ -1957,6 +1967,7 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
             # fall back to its raw stats rather than contributing nothing.
             got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
         worn.append({"name": entry.name, "place": entry.place, "two_handed": entry.is_two_handed,
+                     "celestial": entry.is_celestial_weapon,
                      "got": {k: v for k, v in got.items()
                              if k in _ESTIMATE_STATS and isinstance(v, (int, float))},
                      "q": q, "level": level})
@@ -2444,7 +2455,9 @@ _REASONING_RULE = (
     "build: equipment must be legal (one head/torso/legs, TWO accessory slots, and two hands - so either one "
     "TWO-HANDED weapon alone, or two one-handed weapons, never a two-hander plus an off-hand); two one-handed "
     "weapons DUAL-WIELD at 65% of their combined stats, which can still beat a two-hander, so do not assume the "
-    "two-hander wins; and class/specialization PASSIVES are conditional bonuses a stat total does not include "
+    "two-hander wins; only ONE CELESTIAL weapon can be equipped at a time, so a \"best in every slot\" pick can "
+    "NEVER be two celestials even though celestials top most stat rankings - pair one celestial with the best "
+    "non-celestial; and class/specialization PASSIVES are conditional bonuses a stat total does not include "
     "(Sequencer's Doublecast and Weapon Power both require DUAL STAVES) - name the condition and say whether the "
     "loadout meets it. estimate_stats enforces the legality part and will refuse an impossible loadout: treat that "
     "refusal as a real finding and re-pick, never as a reason to state the numbers anyway."
@@ -3636,6 +3649,15 @@ def _demo() -> None:
     assert _check_loadout([w("H1", "head"), w("H2", "head")])[0], "two helmets must conflict"
     assert _check_loadout([w("X", "weapon", True), w("Y", "weapon", True)])[0]
     assert _check_loadout([]) == ([], False)
+    # Only ONE celestial weapon per player - a top-stat-per-slot search reaches
+    # for two, since celestials head most rankings.
+    cel = lambda n: {"name": n, "place": "weapon", "two_handed": False, "celestial": True}
+    two_cel = _check_loadout([cel("Celestial Staff"), cel("Celestial Quarterstaff")])
+    assert two_cel[0] and "only ONE celestial" in two_cel[0][0], two_cel
+    assert not two_cel[1], "an illegal pair must not also be reported as dual-wielding"
+    assert _check_loadout([cel("Celestial Staff"), w("Fey Macha Pillar", "weapon")]) == ([], True), \
+        "one celestial + one ordinary weapon is a legal dual wield"
+    assert _check_loadout([cel("Celestial Archistaff")]) == ([], False)
     assert _DUAL_WIELD_FACTOR == 0.65
 
     print("telegram_orna: all checks passed")
