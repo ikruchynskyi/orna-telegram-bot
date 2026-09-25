@@ -78,6 +78,55 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
 
 
+# Telegram sends /start when someone opens the bot for the first time (the
+# big "Start" button). Until 2026-09-24 nothing handled it, so a new guild
+# member's very first interaction was SILENCE - the worst possible intro to a
+# bot whose main feature is "just ask in your own words".
+#
+# Deliberately fixed text, not model-generated: it must be identical and
+# correct for every newcomer, and this is the one message where being wrong
+# about what the bot does costs most. It mentions only what a REGULAR member
+# can actually use - /remind is in the command menu but gated to
+# GO_ALLOWED_USER_IDS, so reminders are described via the buttons, which are
+# genuinely open to everyone.
+_WELCOME = (
+    "\U0001F44B <b>Вітаю!</b> Я бот-помічник по грі Orna для нашої гільдії.\n\n"
+    "<b>Головне: команди вчити не треба.</b> Напишіть <code>/orna</code> і своє питання "
+    "звичайною мовою — українською або англійською.\n\n"
+    "<b>Наприклад:</b>\n"
+    "• <code>/orna balor sword</code> — знайти предмет у кодексі\n"
+    "• <code>/orna що сьогодні</code> — які ресурси в гільдіях сьогодні\n"
+    "• <code>/orna коли буде адамантин</code> — коли з'явиться ресурс\n"
+    "• <code>/orna як вбити Лицаря Сіріуса</code> — тактика, імунітети, слабкості\n"
+    "• <code>/orna шоломи для мага з магією понад 250</code> — пошук за характеристиками\n"
+    "• <code>/orna порівняй X і Y</code> — що з двох краще\n"
+    "• <code>/orna білд для heretic</code> — гайди спільноти по класах\n\n"
+    "\U0001F4F8 <b>Можна просто надіслати скриншот:</b>\n"
+    "• екран характеристик предмета — порахую, як він прокачається\n"
+    "• екран «NEEDED OFFERINGS» з вівтаря — покажу, чого не вистачає\n\n"
+    "⚡ <b>Швидкі команди:</b>\n"
+    "• /res_today — ресурси на сьогодні\n"
+    "• /res_next — коли з'явиться потрібний ресурс\n\n"
+    "\U0001F514 У відповідях про ресурси будуть кнопки «нагадати» — натисніть, і я нагадаю "
+    "в потрібний день.\n\n"
+    "\U0001F4A1 <b>Що варто знати:</b>\n"
+    "• Складне питання може оброблятись до хвилини — я показую, що саме зараз роблю.\n"
+    "• Під відповіддю буває кнопка «\U0001F4DA Джерела» — там видно, звідки я взяв інформацію.\n"
+    "• Якщо я перепитаю — можна натиснути кнопку або написати свою відповідь словами.\n\n"
+    "❓ <b>Питайте що завгодно — не соромтесь.</b> Немає «неправильних» питань і не "
+    "треба особливого формату. Якщо я чогось не знаю або не впевнений — так і скажу."
+)
+
+
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start - the first thing a new member ever sees."""
+    message = update.effective_message
+    if not message:
+        return
+    usage_stats.record_command_for(update, "start", "")
+    await message.reply_text(_WELCOME, parse_mode="HTML", disable_web_page_preview=True)
+
+
 async def today_resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Thin wrapper: /res_today and /orna's own today() tool used to
     independently reimplement the exact same sheet-walk - now both call
@@ -226,6 +275,7 @@ async def _post_init(app):
     # specific scopes silently shadow "default" so only the old 2 were
     # ever showing regardless of what "default" had.
     commands = [
+        BotCommand("start", "Що вміє бот і як питати"),
         BotCommand("orna", "Запит про Orna (природною мовою)"),
         BotCommand("res_today", "Ресурси, доступні сьогодні"),
         BotCommand("res_next", "Коли з'явиться ресурс"),
@@ -276,6 +326,10 @@ def main():
     # Registered before the Orna conversations: its filter only matches a
     # chat that just tapped /go's "Continue" button, so it's a no-op (falls
     # through to assess/resources below) for every other chat/message.
+    # /start and /help both land on the welcome text - a newcomer tries
+    # whichever occurs to them, and Telegram itself sends /start on open.
+    app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("help", handle_start))
     app.add_handler(build_go_continue_handler())
     app.add_handler(build_remind_handler())
     # "🔔 remind me" buttons on a resource report - public, not gated like
