@@ -1157,6 +1157,35 @@ model's next move is an `ask` for precisely those. Notes:
   SILENTLY dropped, so Gilgamesh's whole 12,509-hp base never entered the sum
   and the table still looked complete.
 
+**The tool splits the phrase the user actually types; the model kept asking
+instead.** Live 2026-09-25, a request that already contained everything -
+"Im heretic ara, sequencer, 102 AL, PVP. Items: Celestial Staff 20lvl,
+Godforged Heretics Robe 200%, ..." - was answered by asking for the upgrade
+levels, then asking for the quality percentages, then spending eight steps
+on `search_codex`, then finishing with prose that described what the answer
+would be and no table at all. Three causes, all fixed:
+- `_split_item_phrase` reads quality and level out of the NAME
+  ("Godforged Fallen Sky Shoes 195%" -> 195%, level 13; "Celestial Staff
+  20lvl" -> level 20), so the phrase can be handed straight through and
+  there is nothing left to ask about. `_level_in` accepts the marker before
+  or after the number, since people write both.
+- The tool description now says to pass names VERBATIM and never
+  `search_codex` them first - the tool resolves them itself and reports what
+  it can't.
+- The `MAX_ASKS_PER_REQUEST` observation said "...and finish", so the model
+  finished - without ever calling the tool it had just spent two asks
+  collecting inputs for. It now says to re-read what the user already wrote,
+  CALL the tool, and only then finish: "do not describe what the tool would
+  have computed: run it."
+Verified 2/2 end-to-end on that exact request: one `estimate_stats` call, no
+searches, no asks, full table.
+
+**`_name_candidates` also tries the POSSESSIVE forms** - "Cupid Locket" is
+"Cupid's Locket" and "Heretics Robe" is "Heretic's Robe". Dropping the
+trailing word (the existing ladder) doesn't save these: bare "Cupid" matches
+the monster first. Both spellings are tried before the lossier drops, so
+`assess`/`compare`/`build_optimize` gained it too.
+
 **Quality and LEVEL are two independent axes, and treating them as one
 understated every upgraded item.** Orna has 13 levels: 1-10, then
 Masterforged 11 / Demonforged 12 / Godforged 13. `_parse_quality_spec` used

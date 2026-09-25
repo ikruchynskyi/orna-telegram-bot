@@ -935,7 +935,60 @@ _FORGED_LEVELS = {"masterforged": 11, "demonforged": 12, "godforged": 13}
 # quality AND upgraded to 10 - and this parser used to return level 1 for
 # every percentage, so a player's upgraded gear was always projected
 # unupgraded. Only an explicit marker counts: a bare number is the quality.
-_LEVEL_IN_SPEC_RE = re.compile(r"(?:\b(?:lv|lvl|level|рів|рівень|ур)\.?\s*|\+)(\d{1,2})\b")
+_LEVEL_MARKER = r"(?:level|lvl|lv|рівень|рів|ур)"
+_LEVEL_IN_SPEC_RE = re.compile(
+    rf"\b{_LEVEL_MARKER}\.?\s*(\d{{1,2}})\b|\b(\d{{1,2}})\s*{_LEVEL_MARKER}\b|\+(\d{{1,2}})\b")
+# A quality percentage sitting inside an item phrase ("Heretics Robe 200%").
+_PCT_IN_NAME_RE = re.compile(r"(?<![\w.])(\d{1,3})\s*%")
+
+
+def _level_in(text: str) -> Optional[int]:
+    """The upgrade level written in `text`, in whichever of the three forms -
+    "lv10", "20lvl", "+10" - or None. Capped at 20, the real ceiling for a
+    celestial weapon (orna_assess.get_assess_result); the per-item code clamps
+    again to the projection array it actually gets back."""
+    found = _LEVEL_IN_SPEC_RE.search(text)
+    if not found:
+        return None
+    return min(max(int(next(g for g in found.groups() if g)), 1), 20)
+
+
+def _split_item_phrase(text: str) -> tuple:
+    """(name, quality%, level) from an item phrase as a player actually types
+    it: "Godforged Heretics Robe 200%" -> ("Heretics Robe", 200, 13),
+    "Celestial Staff 20lvl" -> ("Celestial Staff", None, 20).
+
+    Live 2026-09-25: the user gave every quality and forge tier in their
+    request ("Godforged Fallen Sky Shoes 195%") and the bot asked for both
+    anyway, twice, because splitting the phrase was left to the model. The
+    tool does it now, so handing the phrase straight through is correct.
+    A forge word is never part of a codex name so it is removed; a quality
+    NAME might be ("Ornate ..."), so it is only READ, never removed -
+    _resolve_aussies_entry's own candidate ladder strips it if it has to."""
+    quality = level = None
+    rest = text
+    found = _LEVEL_IN_SPEC_RE.search(rest)
+    if found:
+        level = _level_in(rest)
+        rest = rest[:found.start()] + " " + rest[found.end():]
+    found = _PCT_IN_NAME_RE.search(rest)
+    if found:
+        quality = int(found.group(1))
+        rest = rest[:found.start()] + " " + rest[found.end():]
+    kept = []
+    for word in rest.split():
+        key = word.lower().strip(",.")
+        if key in _FORGED_LEVELS:
+            level = level if level is not None else _FORGED_LEVELS[key]
+            continue
+        kept.append(word)
+    if quality is None and kept:
+        for edge in (kept[0], kept[-1]):
+            key = edge.lower().strip(",.")
+            if key in _QUALITY_NAME_TO_PERCENT:
+                quality = _QUALITY_NAME_TO_PERCENT[key]
+                break
+    return " ".join(kept).strip(" ,-"), quality, level
 
 
 def _parse_quality_spec(spec: str) -> Optional[tuple]:
@@ -957,13 +1010,9 @@ def _parse_quality_spec(spec: str) -> Optional[tuple]:
     silent. Level defaults to 1 and quality to 100% when only the other one
     is given. None if the spec isn't parseable at all."""
     text = spec.strip().lower()
-    level = None
-    found = _LEVEL_IN_SPEC_RE.search(text)
-    if found:
-        # 20 rather than 13: a celestial weapon really does go to 20
-        # (orna_assess.get_assess_result), and the per-item code clamps to
-        # the projection array it actually gets back.
-        level = min(max(int(found.group(1)), 1), 20)
+    level = _level_in(text)
+    if level is not None:
+        found = _LEVEL_IN_SPEC_RE.search(text)
         text = (text[:found.start()] + " " + text[found.end():])
     text = text.strip().rstrip("%").strip()
     if not text:
@@ -1072,10 +1121,22 @@ def _name_candidates(item_name: str) -> list:
     Dropping trailing words covers both, and only ever runs after an exact
     lookup already came back empty, so it can only turn a dead end into a
     hit. Capped at 3 drops and never down to a bare single word, since a
-    one-word remainder of a longer name matches far too loosely."""
+    one-word remainder of a longer name matches far too loosely.
+
+    A third shape, live 2026-09-25: the codex spells the FIRST word
+    possessively and the user doesn't - "Cupid Locket" is "Cupid's Locket",
+    "Heretics Robe" is "Heretic's Robe". Dropping the trailing word doesn't
+    save these (bare "Cupid" matches the monster first), so the possessive
+    forms are tried directly, before the lossier drops."""
     base = _strip_quality_words(item_name) or item_name
     out = [base] if base != item_name else []
     words = base.split()
+    if len(words) > 1:
+        head = words[0]
+        # "Cupid Locket" -> "Cupid's Locket"; "Heretics Robe" -> "Heretic's Robe"
+        for possessive in (head + "'s", head[:-1] + "'s" if head.lower().endswith("s") else ""):
+            if possessive and possessive != head:
+                out.append(" ".join([possessive] + words[1:]))
     for n in range(1, 4):
         if len(words) - n < 2:
             break
@@ -1702,10 +1763,22 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         # plus masterforged/demonforged/godforged, which ARE levels 11/12/13).
         # The old default was 200%/level 13, a fully forged item, so anything
         # the user didn't spell out came back silently inflated.
+        # Either may also be written into the NAME itself, which is how people
+        # actually type a loadout ("Godforged Fallen Sky Shoes 195%") - read
+        # them out rather than making the model split the phrase, which it
+        # answered by asking the user for both all over again.
+        name, phrase_q, phrase_level = _split_item_phrase(name)
         parsed = _parse_quality_spec(quality) if quality else None
         if quality and parsed is None:
             skipped.append(f"{name}: якість {quality[:15]!r} не розібрано — рахую 100%")
-        q, level = parsed or (100, 1)
+        if parsed is not None:
+            q, spec_level = parsed
+            # _parse_quality_spec always returns a level, defaulting to 1, so
+            # only a level it really found beats one written in the name.
+            level = spec_level if spec_level != 1 else (phrase_level or 1)
+        else:
+            q = phrase_q if phrase_q is not None else 100
+            level = phrase_level or 1
         if level_raw is not None:
             try:
                 level = min(max(int(float(str(level_raw).strip())), 1), 20)
@@ -1935,6 +2008,12 @@ _TOOLS_TEXT = (
     "leaving it out is not, and neither is guessing one. NEVER guess any of the five - a guessed loadout, a "
     "guessed AL or a guessed PVP flag comes back as a confident WRONG number (live failures: a total built "
     "from three items the user never mentioned; a lone class that rendered an empty table). Ask instead. "
+    "Pass the item names STRAIGHT THROUGH, exactly as the user wrote them - this tool resolves them "
+    "itself and reports any it cannot, so do NOT search_codex them first (live failure: eight searches "
+    "in a row, then it ran out of patience before ever calling this). An item's quality and level are "
+    "PER-ITEM and OPTIONAL - never ask for them. \"Godforged Fallen Sky Shoes 195%\" already says "
+    "level 13 and quality 195%, and \"Celestial Staff 20lvl\" already says level 20; hand the whole "
+    "phrase over as the name and it is read out for you. "
     "The values can come from EARLIER TOOL RESULTS as well as from the user: if they name a BUILD rather "
     "than items (\"the omniflask raid build\", \"my Gilgamesh set\"), call class_guide or knowledge_search "
     "FIRST and pass the item names it lists. The two lists above are the ONLY valid class/specialization "
@@ -2649,8 +2728,10 @@ async def _advance_inner(sid: str, message) -> None:
                 session.messages.append({
                     "role": "user",
                     "content": f"Observation: you have already asked {session.asks_made} times and must not "
-                               "ask again. Work with what the user has already told you, state any remaining "
-                               "assumption explicitly, and finish.",
+                               "ask again. Use what the user has ALREADY told you - re-read their messages, "
+                               "the answer is usually there - CALL the tool you were collecting inputs for, "
+                               "and only then finish, stating any remaining assumption explicitly. Do not "
+                               "describe what the tool would have computed: run it.",
                 })
                 continue
             if not session.allow_ask:
