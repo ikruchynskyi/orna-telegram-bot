@@ -85,11 +85,28 @@ confirm from a primary source this pass.
   Off-hand / Accessory (any class), + material / armor_(for_adornments) /
   augment_(for_celestial_weapons). (still true; matches aussies' `place` enum.)
 - **Adornment slots** (new since 2020): socketable gems with on-hit/passive
-  procs (e.g. Ashen Ruby = lifesteal). **Max slot count is driven by FORGE
-  LEVEL, not raw quality** — Masterforging unlocks an item's max slots
-  regardless of quality (≈ its Ornate slot count + 1). Real max is >4
-  (a Celestial example has 4; community builds show up to ~8) — exact per-slot
-  chart unverified.
+  procs (e.g. Ashen Ruby = lifesteal). **Slots added are driven by FORGE LEVEL,
+  not raw quality** — the repo's authoritative rule is
+  `orna_assess.get_additional_slots`: godforged (lv13) +4, master/demonforged
+  (lv11-12) +3, Ornate (quality ≥170) +2, quality >100 +1, else +0. So
+  Masterforging = Ornate + 1, as the guides say. Verified live 2026-09-25
+  against `codex.json` + `get_assess_result`: **base** slots run 1-12 (517
+  items have 2, 456 have 4; 12 is the max, on Brilliant Feathers / Ymir
+  Brilliant Feathers, T9-10 famed polearms), so the real **projected** max is
+  **16** (12 base + 4 godforged) — not ~8. Only weapons exceed 9 base; 1509 of
+  2764 items carry the stat at all, and an item without it (e.g. Lost Helmet)
+  projects a flat 0 at every level. Celestial weapons ignore all of this: they
+  use the fixed 20-level `CELESTIAL_WEAPON_SLOTS` ladder (1→5, +1 if
+  boss-scaled).
+- **Adornments themselves** are a real `place`/`item_type` in the data: 51
+  items with `place: armor_(for_adornments)`, `item_type: adornment` (+47
+  `augment_(for_celestial_weapons)`), each carrying tier, rarity, `useable_by`,
+  `exotic`, `dropped_by`, and a stats dict that reaches stats ordinary gear
+  doesn't (`ward_power`, `collateral_chance`, `avidity_chance`,
+  `follower_stats`, `manaflask_charge`, `status_protection`). Query them with
+  `/orna`'s `query` tool on `place`/`item_type` — no dedicated tool needed.
+  NOTE `name` is `None` inside `codex.json`; names live in
+  `translations.en.json` and `orna_aussies` merges them.
 - **Celestial gear** (new since 2020): the top rarity, Tier 10, "refined
   Skyshards", Titan-augmented via **Celestial Augments** at the Titan Workshop
   (augments are scoped to celestial weapons). Repo: `is_celestial_weapon`, the
@@ -183,7 +200,7 @@ confirm from a primary source this pass.
 Verified early 2026 against the sources named at top. Highest confidence:
 playorna.com codex/blog (primary) and this repo's own ported math
 (`orna_assess`, `orna_classes`, `orna_towers`). Lower confidence / re-check if
-it matters: exact adornment-slot maxima, Arena/Colosseum reward tables, whether
+it matters: Arena/Colosseum reward tables, whether
 "Settlements" == classic Dukedoms, and any specific quality-boundary % (the
 repo's `get_quality_code` and community guides differ by a few points). For the
 current value of ANY number, prefer live data + `releases()`.
