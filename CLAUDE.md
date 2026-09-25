@@ -1108,6 +1108,28 @@ Running out of either still SUMMARISES rather than failing - `_close_out`
 already covered both endings, and there is now a stub check that 35 steps
 followed by exhaustion produces an answer built from what was gathered.
 
+**Four things went wrong the first time this ran live, all fixed, and
+three of them produced a confident WRONG answer rather than an error:**
+- **A name must be resolved in its OWN pool.** "Heretic Ara Sequencer" was
+  passed as `specialization="Heretic Ara"`, `class="Heretic"`, and
+  `find_class("Heretic")` returned the tier-10 SPECIALIZATION (searched
+  first by default) whose `stat_modifiers` are empty - so Sequencer's real
+  -5/+15/-5 were silently dropped. `find_class(name, kind=...)` now forces
+  the pool, and the tool says so when a `class` value isn't a class.
+- **The model invented a loadout.** Given only a class it produced a total
+  built from three items the user never mentioned. The prompt now forbids
+  putting anything in `items` the user didn't name, and calling the tool
+  with no items makes it print "спорядження не вказано" outright - the tool
+  cannot otherwise distinguish "no gear" from "the model forgot the gear",
+  and a silent omission reads as a complete answer.
+- **`ask` offered invented pairings** ("Маг(Gilgamesh)", "Ловець(deity)" -
+  not real class/spec pairs), and added its own "Своя відповідь" on top of
+  the one the loop always appends, so the user saw two near-identical
+  buttons. Options matching `_OTHER_OPTION_RE` are now filtered out, and
+  the prompt requires real concrete choices.
+- **Unknowns were silently defaulted** (AL 0). The prompt now requires
+  every still-unknown input to be stated as an assumption in `finish()`.
+
 **Clarification vs inline, the two halves of "ask when something is
 missing":**
 - In a CHAT, a request missing something that would change the answer (for

@@ -84,26 +84,46 @@ def _resolve(name: str, pool: dict) -> Optional[str]:
     return low[close[0]] if close else None
 
 
-def find_class(name: str) -> Optional[dict]:
+def find_class(name: str, kind: str = "") -> Optional[dict]:
     """{"name", "kind", ...} for a class or specialization, or None.
-    Specializations are checked first: several names appear in both pools
-    conceptually, and the tier-10 spec is what someone naming it means."""
+
+    `kind` ("class" or "specialization") forces which pool is searched
+    FIRST, and matters more than it looks. Live bug 2026-09-24: a caller
+    passing class="Heretic" got the tier-10 SPECIALIZATION back, because
+    specializations are searched first by default - so its (nonexistent)
+    stat_modifiers were applied, silently dropping the real class's
+    modifiers from the estimate. With kind="class" the same string resolves
+    inside the class pool instead, or returns None rather than quietly
+    handing back the wrong kind of thing."""
     data = _load()
-    key = _resolve(name, data.get("spec_stats") or {})
-    if key:
+    pools = [("specialization", "spec_stats"), ("class", "classes")]
+    if kind == "class":
+        pools.reverse()
+    if kind in ("class", "specialization"):
+        pools = [pl for pl in pools if pl[0] == kind]
+    for want, pool_key in pools:
+        found = _find_in(data, want, pool_key, name)
+        if found:
+            return found
+    return None
+
+
+def _find_in(data: dict, want: str, pool_key: str, name: str) -> Optional[dict]:
+    key = _resolve(name, data.get(pool_key) or {})
+    if not key:
+        return None
+    if want == "specialization":
         extras = (data.get("spec_extras") or {}).get(key) or {}
         return {"name": key, "kind": "specialization", "tier": 10,
-                "base_stats": (data["spec_stats"][key]),
+                "base_stats": data["spec_stats"][key],
+                "stat_modifiers": {},
                 "bonus_stats": extras.get("bonusStats") or {},
                 "passives": extras.get("passiveEffects") or []}
-    key = _resolve(name, data.get("classes") or {})
-    if key:
-        entry = data["classes"][key]
-        return {"name": key, "kind": "class", "tier": entry.get("tier"),
-                "stat_modifiers": entry.get("statModifiers") or {},
-                "bonus_stats": entry.get("bonusStats") or {},
-                "passives": entry.get("passiveEffects") or []}
-    return None
+    entry = data["classes"][key]
+    return {"name": key, "kind": "class", "tier": entry.get("tier"),
+            "stat_modifiers": entry.get("statModifiers") or {},
+            "bonus_stats": entry.get("bonusStats") or {},
+            "passives": entry.get("passiveEffects") or []}
 
 
 def estimate(name: str, ascension_level: int = 0, pvp: bool = False,
@@ -233,6 +253,15 @@ def _demo() -> None:
 
     text = format_entry("Duelist")
     assert "dexterity +25%" in text and "Duelist Weapon Power" in text, text
+
+    # kind= forces the pool. "Heretic" is BOTH a specialization name and a
+    # class-ish word; a caller saying class= must not get the spec back with
+    # its empty modifiers, which silently dropped the real class's numbers.
+    assert find_class("Heretic")["kind"] == "specialization"
+    assert find_class("Heretic", kind="class") is None, find_class("Heretic", kind="class")
+    seq = find_class("Sequencer", kind="class")
+    assert seq["kind"] == "class" and seq["stat_modifiers"]["dexterity"] == 15, seq
+    assert find_class("Gilgamesh", kind="specialization")["base_stats"]["hp"] == 12509
 
     # search() by name, by a bonus-stat key, and a miss. Pinned because the
     # first version sliced a dict and raised TypeError on every single call.

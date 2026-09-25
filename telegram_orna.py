@@ -1591,29 +1591,49 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         lines.append(f"{entry.name} @ {q}% lv{level}: " +
                      ", ".join(f"{k} {v:g}" for k, v in sorted(got.items()) if k in _ESTIMATE_STATS))
 
-    # The class layer. A specialization contributes its own base stats too.
-    spec_entry = orna_classes.find_class(spec) if spec else None
+    # Resolve each name in ITS OWN pool. Live bug: "Heretic Ara Sequencer"
+    # was passed as specialization="Heretic Ara", class="Heretic", and the
+    # class lookup returned the tier-10 SPECIALIZATION (searched first by
+    # default), whose modifiers are empty - so Sequencer's real -5/+15/-5 were
+    # silently dropped and the estimate looked fine.
+    spec_entry = orna_classes.find_class(spec, kind="specialization") if spec else None
+    class_entry = orna_classes.find_class(klass, kind="class") if klass else None
+    if klass and class_entry is None:
+        # e.g. the model put the specialization in `class` too - don't apply
+        # it twice, and say so rather than pretending it counted.
+        missing.append(f"клас {klass!r} не розпізнано як клас")
     if spec_entry and spec_entry.get("base_stats"):
         for stat, value in spec_entry["base_stats"].items():
             if stat in _ESTIMATE_STATS and isinstance(value, (int, float)) and value:
                 totals[stat] = totals.get(stat, 0) + value
 
-    applied = orna_classes.estimate(klass or spec, ascension_level=al, pvp=pvp, base_stats=totals or None)
-    final = (applied or {}).get("stats") or {k: round(v, 1) for k, v in totals.items()}
+    mods = (class_entry or {}).get("stat_modifiers") or {}
+    al_mult = 1 + max(0, al) / 100.0
+    final = {}
+    for stat, value in totals.items():
+        scaled = value * (1 + mods.get(stat, 0) / 100.0) * al_mult
+        if stat == "hp" and pvp:
+            scaled *= 2
+        final[stat] = round(scaled, 1)
 
     head = ["🧮 <b>Оцінка характеристик</b>"]
     detail = []
     if spec_entry:
         detail.append(f"спеціалізація: {spec_entry['name']}")
-    if klass and orna_classes.find_class(klass):
-        detail.append(f"клас: {orna_classes.find_class(klass)['name']}")
+    if class_entry:
+        detail.append(f"клас: {class_entry['name']}")
     detail.append(f"AL {al}")
-    if pvp:
-        detail.append("PVP (HP ×2)")
+    detail.append("PVP (HP ×2)" if pvp else "PVE")
     head.append(" · ".join(detail))
     if lines:
         head.append("")
         head.append("\n".join(f"• {html.escape(l)}" for l in lines))
+    else:
+        # Say it outright. The tool cannot tell an "estimate without gear"
+        # apart from "the model forgot the gear", and a silent omission reads
+        # as a complete answer.
+        head.append("")
+        head.append("<i>Спорядження не вказано — рахую лише клас/спеціалізацію.</i>")
     if amities:
         head.append("")
         head.append("Аміті/бонуси: " + html.escape(", ".join(
@@ -1628,10 +1648,12 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     await message.reply_text("\n".join(head), parse_mode="HTML", disable_web_page_preview=True)
 
     summary = ", ".join(f"{k}={final[k]:g}" for k in _ESTIMATE_STATS if final.get(k))
-    note = f" Не знайдено: {'; '.join(missing)}." if missing else ""
-    return (f"posted a stats estimate ({len(lines)} item(s), spec={spec or '-'}, class={klass or '-'}, "
-            f"AL={al}, pvp={pvp}). Totals [{summary}].{note} The table is already shown to the user - "
-            f"finish() just needs a short closing line.")
+    note = f" Проблеми: {'; '.join(missing)}." if missing else ""
+    gear = f"{len(lines)} item(s)" if lines else "NO items were provided, so gear is not included"
+    return (f"posted a stats estimate ({gear}; spec={spec_entry['name'] if spec_entry else '-'}, "
+            f"class={class_entry['name'] if class_entry else '-'}, AL={al}, pvp={pvp}). "
+            f"Totals [{summary}].{note} The table is already shown to the user - finish() just needs a short "
+            f"closing line that repeats WHICH inputs were used, so the user can spot a wrong assumption.")
 
 
 async def _run_releases_tool(message, query: str, sources: Optional[list] = None) -> str:
@@ -1769,7 +1791,13 @@ _TOOLS_TEXT = (
     "quality, adds the specialization's base stats, then applies the class's percent modifiers, Ascension "
     "Level (+1% per level, AL 100 doubles) and PVP (doubles HP only). Use this for \"which stats will I "
     "have\"/\"порахуй мої стати\" questions. POSTS the full table - finish() just needs a short closing line. "
-    "See the CLARIFICATION rule below: it needs the gear, the spec/class, AL and PVP to be right.\n"
+    "NEVER put an item in `items` that the user did not actually name - inventing a plausible loadout "
+    "produces a confident, completely fictional answer (live failure: a user gave only their class and got "
+    "back a total built from three items they never mentioned). If they gave no gear, either ask, or call it "
+    "with no `items` at all - the tool then says outright that gear is excluded. Likewise pass the "
+    "specialization in `specialization` and the CLASS in `class`; putting a specialization in `class` drops "
+    "the real class's modifiers. \"Heretic Ara Sequencer\" means specialization=\"Heretic Ara\", "
+    "class=\"Sequencer\". Never invent a quality either - if they did not say, ask or state the assumption.\n"
     "- towers(): no input. Current floor (15-50, 50=cleared/at the top awaiting reset) of all 5 real-time \"Wild "
     "Towers of Olympia\" (Selene/Eos/Oceanus/Themis/Prometheus) - pure deterministic math from the current time, "
     "always available, never a dead end. Use for \"how tall is tower X now\"/\"which tower is at max\" etc. For "
@@ -2055,8 +2083,13 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         "CLARIFICATION - when a request is missing something that would CHANGE the answer, ask instead of "
     "guessing. The clearest case is estimate_stats: a stat estimate needs the ITEMS the player wears and each "
     "one's QUALITY, their SPECIALIZATION and/or CLASS, their ASCENSION LEVEL, and whether it is PVP - if any "
-    "of those is absent and the user hasn't said to assume, call ask() for the missing one (most important "
-    "first; ask once, and a \"Своя відповідь\" button is added automatically so they can type a list). The "
+    "of those is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
+    "question text (e.g. \"вкажіть: спорядження та якість, спеціалізацію/клас, AL, PVP чи ні\") - a "
+    "\"Своя відповідь\" button is added automatically, so they can type all of it in one message, and you "
+    "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. Your own options must be REAL, concrete "
+    "choices, never invented pairings (live failure: offering \"Маг(Gilgamesh)\" and \"Ловець(deity)\", "
+    "which are not real class/specialization pairs). Whatever is still unknown after the answer must be "
+    "stated as an assumption in finish(), never silently defaulted. The "
     "same applies anywhere else a missing detail materially changes the result. Do NOT ask about something "
     "you can look up yourself, and do NOT ask when the user has already given a reasonable default.\n\n"
     "OUTPUT FORMAT: send that single JSON object as ordinary message content - that is the preferred "
@@ -2437,7 +2470,8 @@ async def _advance_inner(sid: str, message) -> None:
                                "which detail would change the answer.",
                 })
                 continue
-            options = _normalize_options(step.get("options"))[:4]
+            options = [o for o in _normalize_options(step.get("options"))
+                       if not _OTHER_OPTION_RE.search(o)][:4]
             if not options:
                 session.messages.append({
                     "role": "user",
