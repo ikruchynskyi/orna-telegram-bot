@@ -1127,16 +1127,29 @@ def _name_candidates(item_name: str) -> list:
     possessively and the user doesn't - "Cupid Locket" is "Cupid's Locket",
     "Heretics Robe" is "Heretic's Robe". Dropping the trailing word doesn't
     save these (bare "Cupid" matches the monster first), so the possessive
-    forms are tried directly, before the lossier drops."""
+    forms are tried directly, before the lossier drops.
+
+    It runs the OTHER WAY too, live 2026-09-25: the user writes a possessive
+    the codex doesn't have - "Ymir's Brilliant Feathers" is really "Ymir
+    Brilliant Feathers". Before this, the add-a-possessive branch fired on a
+    head that already had one and produced only garbage ("Ymir's's ...",
+    "Ymir''s ..."), so every caller dead-ended. Apostrophes are normalized to
+    the straight one first, since a phone keyboard types the curly U+2019 and
+    the codex uses the straight form throughout."""
+    raw, item_name = item_name, item_name.replace("\u2019", "'")
     base = _strip_quality_words(item_name) or item_name
-    out = [base] if base != item_name else []
+    out = [base] if base != raw else []
     words = base.split()
     if len(words) > 1:
         head = words[0]
-        # "Cupid Locket" -> "Cupid's Locket"; "Heretics Robe" -> "Heretic's Robe"
-        for possessive in (head + "'s", head[:-1] + "'s" if head.lower().endswith("s") else ""):
-            if possessive and possessive != head:
-                out.append(" ".join([possessive] + words[1:]))
+        if "'" in head:
+            # "Ymir's Brilliant Feathers" -> "Ymir Brilliant Feathers"
+            out.append(" ".join([head.split("'")[0]] + words[1:]))
+        else:
+            # "Cupid Locket" -> "Cupid's Locket"; "Heretics Robe" -> "Heretic's Robe"
+            for possessive in (head + "'s", head[:-1] + "'s" if head.lower().endswith("s") else ""):
+                if possessive and possessive != head:
+                    out.append(" ".join([possessive] + words[1:]))
     for n in range(1, 4):
         if len(words) - n < 2:
             break
@@ -3274,15 +3287,45 @@ def _demo() -> None:
         async def reply_text(self, *a, **k):
             raise AssertionError("estimate_stats must post NOTHING on a partial call")
 
+    class _Collect:
+        chat_id = 0
+
+        def __init__(self):
+            self.posted = []
+
+        async def reply_text(self, text, *a, **k):
+            self.posted.append(text)
+
+    # What is REQUIRED is `ascension_level` AND at least one of (a real
+    # specialization -> base stats | items -> gear stats). `class`, `pvp` and
+    # `items` are OPTIONAL and must NOT be demanded (relaxed 2026-09-25 when
+    # the tool learned to do base stats without gear). These asserts drifted
+    # from the code once already - the old version looped over all five fields
+    # expecting a refusal for each, which made the whole module's self-check
+    # unrunnable rather than catching anything.
     full = {"items": [{"name": "Lost Helmet"}], "class": "Duelist",
-            "specialization": "none", "ascension_level": 0, "pvp": False}
-    for field in ("items", "class", "specialization", "ascension_level", "pvp"):
-        partial = {k: v for k, v in full.items() if k != field}
+            "specialization": "Gilgamesh", "ascension_level": 0, "pvp": False}
+    for field in ("items", "class", "pvp"):
+        sink = _Collect()
+        out = asyncio.run(_run_estimate_stats_tool(sink, {k: v for k, v in full.items() if k != field}))
+        assert not out.startswith(_NEEDS_INPUT), f"{field} is OPTIONAL: {out[:120]}"
+        assert len(sink.posted) == 1, (field, sink.posted)
+    # ...and dropping the SPEC is fine too, as long as items remain
+    sink = _Collect()
+    assert not asyncio.run(_run_estimate_stats_tool(
+        sink, {k: v for k, v in full.items() if k != "specialization"})).startswith(_NEEDS_INPUT)
+
+    # the two genuine refusals. The marker matters as much as the text:
+    # _advance_inner keys the keep-listening-after-finish behaviour off it
+    for label, partial, want in (
+        ("no AL", {k: v for k, v in full.items() if k != "ascension_level"}, "- ascension_level:"),
+        ("nothing to compute", {"class": "Duelist", "specialization": "none",
+                                "ascension_level": 0, "pvp": False}, "and/or items"),
+        ("empty args", {}, "- ascension_level:"),
+    ):
         out = asyncio.run(_run_estimate_stats_tool(_Silent(), partial))
-        # the marker matters as much as the text: _advance_inner keys the
-        # keep-listening-after-finish behaviour off it
-        assert out.startswith(_NEEDS_INPUT), (field, out[:80])
-        assert f"- {field}:" in out, (field, out)
+        assert out.startswith(_NEEDS_INPUT), (label, out[:80])
+        assert want in out, (label, out[:200])
     # ...and a name that is not in the real pool is missing, not a warning
     for field, bad in (("class", "Маг"), ("specialization", "Гільгармос")):
         out = asyncio.run(_run_estimate_stats_tool(_Silent(), {**full, field: bad}))
@@ -3300,6 +3343,16 @@ def _demo() -> None:
     assert _parse_quality_spec("godforged") == (100, 13)   # a forge name IS a level
     assert _parse_quality_spec("godforged lv12") == (100, 12), "an explicit level wins"
     assert _parse_quality_spec("185") == (185, 1) and _parse_quality_spec("zzz") is None
+
+    # _name_candidates: the possessive goes BOTH ways. The codex spells some
+    # names possessively and some not, and before 2026-09-25 a head that
+    # already carried an apostrophe only produced garbage variants.
+    assert "Ymir Brilliant Feathers" in _name_candidates("Ymir's Brilliant Feathers")
+    assert not [c for c in _name_candidates("Ymir's Brilliant Feathers") if "''" in c or "'s's" in c]
+    assert "Cupid's Locket" in _name_candidates("Cupid Locket")
+    assert "Heretic's Robe" in _name_candidates("Heretics Robe")
+    # a curly apostrophe (what a phone types) must reach the straight-quote codex name
+    assert "Cupid's Locket" in _name_candidates("Cupid\u2019s Locket")
 
     print("telegram_orna: all checks passed")
 
