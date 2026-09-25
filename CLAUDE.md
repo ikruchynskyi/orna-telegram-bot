@@ -1082,15 +1082,33 @@ Orna's devs answer mechanics questions on Reddit in detail that exists in no
 codex page, community sheet or patch note. `orna_scrape_reddit.py` pulls
 u/OrnaOdie's submissions + comments and u/Widogeist's comments into
 `orna_reddit.txt`; `orna_reddit.py` reads it. Added 2026-09-24 on ask.
-- **Reddit requires credentials now - there is no anonymous path.** Verified
-  2026-09-24: `/user/<name>/submitted.json` returns **403** for any
-  User-Agent (browser strings included), `old.reddit.com` **302s to a login
-  page**, and `api.reddit.com` 403s too. The scraper uses read-only
-  application-only OAuth (`grant_type=client_credentials`), which needs a
-  *script* app from https://www.reddit.com/prefs/apps and no password or
-  account link. Reddit also caps any listing at ~1000 items, so a prolific
-  account's oldest history is simply unreachable - `_MIN_BODY_CHARS` drops
-  the "Fixed!"/"thanks" one-liners that dominate that tail anyway.
+- **Reddit allows no anonymous access.** Verified 2026-09-24:
+  `/user/<name>/submitted.json` returns **403** for any User-Agent (browser
+  strings included), `old.reddit.com` **302s to a login page**, and
+  `api.reddit.com` 403s too. Two routes, and the parser doesn't care which:
+  read-only application-only OAuth (`grant_type=client_credentials` from a
+  *script* app), or **`--from-dir`**, which builds from listing JSON already
+  saved by a logged-in browser. `--from-dir` exists because app registration
+  turns out to be gated behind Reddit's API-terms sign-up for some accounts,
+  and it is how the committed corpus was actually built (a browser session's
+  cookies paging `?limit=100&after=...`).
+- **The widely-repeated ~1000-item listing cap does NOT apply to these user
+  listings** - measured, both comment listings were still returning a fresh
+  `after` cursor at 1200 and ran to 1330 / 1968. `MAX_PAGES` is a runaway
+  guard, not a target; paging stops when the cursor goes null.
+- **Real corpus shape** (2026-09-24): 3,416 items fetched -> **2,514 entries
+  kept**, 1.5MB, spanning 2018-2026 (the bulk 2022-2024), median entry 254
+  characters. Parses in ~11ms and searches in ~4ms, so no caching is needed
+  beyond the module-level list.
+- Two filters, both tuned against the real data rather than guessed:
+  `_MIN_BODY_CHARS = 80` (was 120 - that discarded "Ward absorbs magic
+  damage before HP does... That is intentional." at 105 chars, exactly the
+  kind of statement this corpus exists for; losing signal beats keeping
+  noise, since search ranks by word overlap and an acknowledgement never
+  outranks an explanation), and `_SUBREDDIT_RE` (these devs also post in
+  r/buildinpublic, r/SipsTea etc. - only ~1% of entries, but pure noise
+  here; "aethric" is kept deliberately, as Hero of Aethric is the same
+  studio and the mechanics discussions cross over).
 - **Committed and re-run BY HAND, unlike the weekly sheets.** Reddit history
   is append-only and years old; re-crawling it weekly would spend a
   rate-limited budget re-fetching thousands of unchanged comments to learn

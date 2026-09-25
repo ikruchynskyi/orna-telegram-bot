@@ -37,17 +37,18 @@ ways to get the bytes, and the parser doesn't care which:
    username and the listing kind (`OrnaOdie-comments-1.json`). See
    _items_from_dir.
 
-Listing limits worth knowing: Reddit caps any listing at ~1000 items, so
-a very prolific account's oldest history simply isn't reachable this way.
-That is fine here - the goal is the substantive explanations, and
-`_MIN_BODY_CHARS` drops the one-liners ("Fixed!", "thanks") that make up
-most of the tail anyway.
+Listing depth: the widely-repeated ~1000-item cap did not apply here -
+measured 2026-09-24, both comment listings were still paging past 1200.
+`MAX_PAGES` is a runaway guard, not a target; paging stops when Reddit
+stops returning an `after` cursor. `_MIN_BODY_CHARS` then drops the
+one-liners ("Fixed!", "thanks") that make up much of any dev's history.
 """
 from __future__ import annotations
 
 import html
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -61,7 +62,12 @@ API_BASE = "https://oauth.reddit.com"
 USER_AGENT = "macos:orna-telegram-bot:1.0 (knowledge-base builder)"
 HTTP_TIMEOUT = 30.0
 PAGE_LIMIT = 100          # Reddit's per-request maximum
-MAX_PAGES = 12            # ~1200 items, past Reddit's own ~1000 listing cap
+# No, Reddit's oft-cited ~1000-item listing cap does NOT apply to these user
+# listings - measured 2026-09-24: both comment listings were still returning
+# a fresh `after` cursor at 1200 items. Set high enough to reach the end of a
+# decade of developer comments; the loop stops on its own when `after` is
+# null, so this is a runaway guard rather than a target.
+MAX_PAGES = 60
 SLEEP_BETWEEN = 1.0       # be polite; the OAuth limit is 100 req/min
 
 # (username, listing) - listing is "submitted" or "comments".
@@ -80,6 +86,13 @@ _AUTHORS = [
 # Losing signal costs more than keeping some noise here, because search ranks
 # by word overlap and an acknowledgement will never outrank an explanation.
 _MIN_BODY_CHARS = 80
+
+# These devs also post outside the game's subs (r/buildinpublic, r/SipsTea,
+# ...). Measured on the real crawl that is only ~1% of entries, but it is
+# pure noise in a game knowledge base, so drop it. "aethric" is kept
+# deliberately: Hero of Aethric is the same studio's other game and the
+# mechanics discussions cross over constantly.
+_SUBREDDIT_RE = re.compile(r"orna|aethric", re.IGNORECASE)
 
 
 def _token(client_id: str, client_secret: str) -> str:
@@ -156,8 +169,10 @@ def format_entries(user: str, kind: str, items: list) -> list:
         text = _entry_text(item)
         if len(text) < _MIN_BODY_CHARS:
             continue
-        when = time.strftime("%Y-%m-%d", time.gmtime(item.get("created_utc") or 0))
         where = item.get("subreddit") or "?"
+        if not _SUBREDDIT_RE.search(where):
+            continue
+        when = time.strftime("%Y-%m-%d", time.gmtime(item.get("created_utc") or 0))
         # link_title is the post a comment sits under - real context for a
         # bare reply like "it's capped at 30%".
         context = (item.get("link_title") or item.get("title") or "").strip()
