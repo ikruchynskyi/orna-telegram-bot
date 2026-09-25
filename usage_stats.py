@@ -178,6 +178,40 @@ def all_reports() -> list:
     return out
 
 
+def reset(include_reports: bool = False) -> dict:
+    """Wipe the usage statistics and start counting from now.
+
+    Deliberately does NOT touch two things that live in the same store but
+    are not statistics:
+      * saved timezones (_user_tz/_user_zone) - clearing them would silently
+        make every member re-pick their zone before their next reminder
+        could be scheduled, which is a worse outcome than stale counters;
+      * bug reports, unless `include_reports` - an unread report is work
+        waiting to be done, not a number.
+    Returns what was cleared, so the caller can say so rather than just
+    claiming success."""
+    global _since
+    cleared = {
+        "commands": sum(_commands.values()),
+        "llm_calls": sum(_llm_calls.values()),
+        "orna_tools": sum(_orna_tools.values()),
+        "users": len(_user_commands),
+        "reports": sum(len(v) for v in _user_reports.values()) if include_reports else 0,
+    }
+    _commands.clear()
+    _llm_calls.clear()
+    _orna_tools.clear()
+    _user_commands.clear()
+    _user_log.clear()
+    if include_reports:
+        _user_reports.clear()
+    # Keep _user_names: it is the id -> display-name map that makes a future
+    # /stats users readable, and it is not a counter.
+    _since = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _save()
+    return cleared
+
+
 def record_llm_call(model: str, backend: str) -> None:
     """Call once per LLM API call actually made. `backend` is "local" or
     "cloud" - the two are meaningfully different (cost, latency,

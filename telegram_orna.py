@@ -1521,6 +1521,24 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
 # head - see orna_classes.estimate for the second half.
 _ESTIMATE_STATS = ("hp", "mana", "attack", "defense", "magic", "resistance",
                    "dexterity", "foresight", "crit", "ward", "view_distance")
+# A RUNAWAY GUARD, not a game rule. The game has no ceiling anyone has
+# documented - players above AL 500 are real (reported 2026-09-24), and an
+# earlier version of this capped at a made-up 200, which would have silently
+# clamped such a player's estimate to a far-too-low number. It exists only
+# because AL multiplies EVERY stat, so a model typo like 1000000 renders an
+# astronomically wrong table that still looks well-formed. Set far above any
+# plausible real value; raise it freely if players ever get near it.
+ASCENSION_LEVEL_SANITY_CAP = 10_000
+
+
+def _as_bool(value) -> bool:
+    """A tool argument as a bool, tolerating the string forms the model
+    actually sends. `bool("false")` is True, so a plain bool() silently
+    turned pvp="false" into PVP mode and doubled the user's HP - the exact
+    "unvalidated LLM tool argument" shape the pitfalls list warns about."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "none", "ні", "нi", "нет")
+    return bool(value)
 
 
 async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
@@ -1538,16 +1556,21 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     Steps 2-5 are orna_classes.estimate, so the AL/PVP rules live in exactly
     one place and are pinned by that module's self-check."""
     items = args.get("items") or []
-    if isinstance(items, str):
-        items = [items]                 # a lone string would iterate characters
+    if isinstance(items, (str, dict)):
+        # a lone string would iterate characters; a lone dict is unsliceable
+        # (live probe: TypeError "unhashable type: 'slice'")
+        items = [items]
+    if not isinstance(items, (list, tuple)):
+        items = []
     spec = str(args.get("specialization") or "").strip()
     klass = str(args.get("class") or args.get("klass") or "").strip()
     al = args.get("ascension_level") or args.get("al") or 0
     try:
-        al = int(al)
+        al = int(float(str(al).strip().rstrip("%")))
     except (TypeError, ValueError):
         al = 0
-    pvp = bool(args.get("pvp"))
+    al = min(max(al, 0), ASCENSION_LEVEL_SANITY_CAP)
+    pvp = _as_bool(args.get("pvp"))
     amities = args.get("amities") or {}
 
     totals, lines, missing = {}, [], []
@@ -1786,7 +1809,7 @@ _TOOLS_TEXT = (
     "breakdown - finish() just needs a short closing line.\n"
     "- estimate_stats(args={\"items\":[{\"name\":\"<item>\",\"quality\":\"<quality or %>\"}, ...],"
     "\"specialization\":\"<tier-10 spec, e.g. Gilgamesh/Heretic/Realmshifter/Beowulf/Grand Summoner/Deity>\","
-    "\"class\":\"<class, e.g. Duelist/Magus/Warden>\",\"ascension_level\":<0-200>,\"pvp\":true|false,"
+    "\"class\":\"<class, e.g. Duelist/Magus/Warden>\",\"ascension_level\":<the player's AL, any number>,\"pvp\":true|false,"
     "\"amities\":{\"<bonus>\":\"<value>\"}}): a FULL character stat estimate. Sums every worn item at its own "
     "quality, adds the specialization's base stats, then applies the class's percent modifiers, Ascension "
     "Level (+1% per level, AL 100 doubles) and PVP (doubles HP only). Use this for \"which stats will I "
@@ -2906,3 +2929,45 @@ def build_orna_callback_handler() -> CallbackQueryHandler:
 
 def build_update_codex_handler() -> CommandHandler:
     return CommandHandler("update_codex", handle_update_codex)
+
+
+def _demo() -> None:
+    """Assert-checks for this module's PURE helpers - the ones with a bug
+    history. Everything else here needs Telegram/Ollama/the codex, which is
+    what the verifying-orna-changes harness is for. Run:
+    `set -a && source .env && set +a && python3 telegram_orna.py`."""
+    # _as_bool: bool("false") is True, which silently put a PVP request into
+    # PVP mode and doubled the user's HP (live probe 2026-09-24).
+    for value, want in ((True, True), (False, False), ("true", True), ("false", False),
+                        ("False", False), ("0", False), ("no", False), ("ні", False),
+                        ("", False), (None, False), (1, True), ("yes", True)):
+        assert _as_bool(value) is want, (value, _as_bool(value), want)
+
+    # _normalize_options: the model packs the whole list into one string, or
+    # sends a bare string that would otherwise become one button per CHARACTER.
+    assert _normalize_options(["['Клас', 'Тільки клас']"]) == ["Клас", "Тільки клас"]
+    assert _normalize_options("Mage") == ["Mage"]
+    assert _normalize_options(["Mage", "Thief"]) == ["Mage", "Thief"]
+    assert _normalize_options(None) == [] and _normalize_options([]) == []
+    assert _normalize_options(["  ", "Mage"]) == ["Mage"]
+    assert _normalize_options(["plain, with a comma"]) == ["plain, with a comma"]
+
+    # the always-appended escape hatch must not be duplicated by the model's
+    # own "Інше"/"Своя відповідь" option (live: two near-identical buttons).
+    kept = [o for o in _normalize_options(["['Клас', 'Своя відповідь', 'Інше']"])
+            if not _OTHER_OPTION_RE.search(o)]
+    assert kept == ["Клас"], kept
+
+    # _add_source: dedupe by URL, and reject anything that isn't http(s).
+    src: list = []
+    _add_source(src, "a", "https://example.com/x")
+    _add_source(src, "same url", "https://example.com/x")
+    _add_source(src, "bad scheme", "javascript:alert(1)")
+    _add_source(src, "b", "https://example.com/y")
+    assert [u for _l, u in src] == ["https://example.com/x", "https://example.com/y"], src
+
+    print("telegram_orna: all checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

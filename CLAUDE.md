@@ -1016,6 +1016,19 @@ timestamps have second resolution, so several reports in the same second
 compare equal and a stable sort would otherwise leave them oldest-first
 inside a newest-first list.
 
+**`/stats reset` needs a second word, not a button.** It is destructive and
+irreversible, and this chat is full of keyboards from earlier messages - a
+mis-tap must not be able to wipe the counters, so it takes
+`/stats reset confirm` (or `/stats reset all`) and a bare `/stats reset`
+only shows what would be cleared. `usage_stats.reset()` deliberately keeps
+two things that live in the same store but are NOT statistics: **saved
+timezones** (clearing them would silently force every member to re-pick
+their zone before their next reminder could be scheduled) and **bug
+reports** unless `all` is given (an unread report is work waiting, not a
+number). It also keeps `_user_names`, the id → display-name map that makes
+a later `/stats users` readable. It returns what it cleared so the reply
+states it rather than just claiming success.
+
 **Usage counters (`usage_stats.py`)** — `record_command_for(update, name,
 text)` at the top of every slash-command handler (a thin wrapper around
 `record_command` that pulls `user_id`/`username`/`first_name` straight

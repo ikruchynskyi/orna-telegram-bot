@@ -272,6 +272,34 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     args = context.args or []
 
+    if args and args[0].lower() == "reset":
+        # Destructive and irreversible, so it takes an explicit second word
+        # rather than a button: a mis-tap on a keyboard that is still on
+        # screen from an earlier message should not be able to wipe the
+        # counters. "all" additionally drops stored bug reports.
+        mode = args[1].lower() if len(args) > 1 else ""
+        if mode not in ("confirm", "all"):
+            snap = usage_stats.snapshot()
+            await message.reply_text(
+                f"⚠️ Це очистить статистику (зараз: {sum(snap['commands'].values())} команд, "
+                f"{snap['user_count']} користувачів) і почне відлік заново.\n\n"
+                "Часові пояси та звіти про помилки НЕ чіпаються.\n\n"
+                "Підтвердіть: /stats reset confirm\n"
+                "Разом зі звітами про помилки: /stats reset all"
+            )
+            return
+        cleared = usage_stats.reset(include_reports=(mode == "all"))
+        await message.reply_text(
+            "🧹 Статистику очищено.\n"
+            f"  команд: {cleared['commands']}\n"
+            f"  викликів LLM: {cleared['llm_calls']}\n"
+            f"  дій /orna: {cleared['orna_tools']}\n"
+            f"  користувачів: {cleared['users']}\n"
+            + (f"  звітів: {cleared['reports']}\n" if mode == "all" else "  звіти збережено\n")
+            + "  часові пояси збережено"
+        )
+        return
+
     if args and args[0].lower() == "reports":
         reports = usage_stats.all_reports()
         if not reports:
@@ -348,7 +376,7 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append("  (ще немає даних)")
     lines.append("")
     lines.append("/stats users — список користувачів, /stats user <id> — деталі, "
-                 "/stats reports — звіти про помилки")
+                 "/stats reports — звіти про помилки, /stats reset — очистити статистику")
     await _send_lines(message, lines)
 
 
