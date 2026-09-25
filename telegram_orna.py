@@ -221,6 +221,13 @@ _STATE_MAX = 200
 # this fixes. Tapping "I want to type" is the unambiguous signal.
 _PENDING_ASK_TEXT: dict = {}  # chat_id -> (sid, expires_monotonic)
 ASK_TEXT_TTL_SECONDS = 600
+# Steps handed to a session resumed by a typed answer - enough to run the
+# tool the answer unblocks and finish, without restarting the whole budget.
+_RESUME_STEPS = 8
+# A shorter fuse for the INFERRED wait after a finish that looks like a
+# question (see the finish branch) - it is a guess, so it should not sit on
+# the chat for the full ten minutes a real ask() gets.
+_FOLLOWUP_TTL_SECONDS = 180
 # Live 2026-09-24: the loop asked three times in a row. The user tapped
 # "I'll provide details", then "Specialization/Class" - options that name
 # WHAT to supply rather than answering anything - so each tap resumed the
@@ -923,26 +930,50 @@ _QUALITY_NAME_TO_PERCENT = {
 _FORGED_LEVELS = {"masterforged": 11, "demonforged": 12, "godforged": 13}
 
 
+# An UPGRADE LEVEL written into a quality spec ("185% lv10", "legendary +10",
+# "рівень 10"). Quality and level are two independent axes - an item is 185%
+# quality AND upgraded to 10 - and this parser used to return level 1 for
+# every percentage, so a player's upgraded gear was always projected
+# unupgraded. Only an explicit marker counts: a bare number is the quality.
+_LEVEL_IN_SPEC_RE = re.compile(r"(?:\b(?:lv|lvl|level|рів|рівень|ур)\.?\s*|\+)(\d{1,2})\b")
+
+
 def _parse_quality_spec(spec: str) -> Optional[tuple]:
     """<quality%, level> from a free-text quality spec - a percentage
-    ("185", "185%") or a named tier. Masterforged/Demonforged/Godforged
-    are really upgrade LEVELS 11/12/13 in Orna's own mechanics (past
+    ("185", "185%"), a named tier, an explicit upgrade level ("lv10",
+    "+10", "рівень 10"), or any combination ("185% lv10").
+
+    Orna has 13 levels: 1-10 plus Masterforged/Demonforged/Godforged, which
+    are really upgrade LEVELS 11/12/13 in the game's own mechanics (past
     level 10, orna_assess.get_quality_code derives the quality bucket from
     LEVEL, not quality% - see that function), not a quality percentage, so
     those map to a level instead; quality defaults to 100% for them (a
     forged item assumed pushed to the tier's floor, not some arbitrary
-    higher %). The 7 percentage-tier names (Broken..Ornate) use that
-    tier's own LOWER bound as a representative % (see get_quality_code's
-    own thresholds) since there's no single canonical "the" percentage for
-    a bare name - the caller notes this assumption in the reply rather
-    than leaving it silent. None if the spec isn't parseable at all."""
-    text = spec.strip().lower().rstrip("%").strip()
+    higher %). An explicit level wins over one implied by a forge name.
+    The 7 percentage-tier names (Broken..Ornate) use that tier's own LOWER
+    bound as a representative % (see get_quality_code's own thresholds)
+    since there's no single canonical "the" percentage for a bare name -
+    the caller notes this assumption in the reply rather than leaving it
+    silent. Level defaults to 1 and quality to 100% when only the other one
+    is given. None if the spec isn't parseable at all."""
+    text = spec.strip().lower()
+    level = None
+    found = _LEVEL_IN_SPEC_RE.search(text)
+    if found:
+        # 20 rather than 13: a celestial weapon really does go to 20
+        # (orna_assess.get_assess_result), and the per-item code clamps to
+        # the projection array it actually gets back.
+        level = min(max(int(found.group(1)), 1), 20)
+        text = (text[:found.start()] + " " + text[found.end():])
+    text = text.strip().rstrip("%").strip()
+    if not text:
+        return (100, level) if level is not None else None
     if text in _FORGED_LEVELS:
-        return 100, _FORGED_LEVELS[text]
+        return 100, level if level is not None else _FORGED_LEVELS[text]
     if text in _QUALITY_NAME_TO_PERCENT:
-        return _QUALITY_NAME_TO_PERCENT[text], 1
+        return _QUALITY_NAME_TO_PERCENT[text], level or 1
     try:
-        return int(round(float(text))), 1
+        return int(round(float(text))), level or 1
     except ValueError:
         return None
 
@@ -1547,6 +1578,19 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
+# Explicit "I have none" - an ANSWER, not a missing input. Not every player
+# has a tier-10 specialization (aussiescodex's own estimator ships a "None"
+# entry for exactly this), so "none" has to be distinguishable from silence.
+_NO_VALUE_WORDS = {"none", "no", "n/a", "-", "немає", "нема", "ні", "нi", "нет", "без"}
+
+# A tool prefixes its observation with this when it could not run because the
+# USER still has to supply something. The loop watches for it: the model is
+# told to ask(), but it sometimes states the same thing in finish() instead,
+# which ENDS the request - and then the user's typed answer has nothing
+# listening for it ("Bot ignored my answer", live 2026-09-25).
+_NEEDS_INPUT = "NEEDS_INPUT:"
+
+
 async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
     """Project a full character's stats from worn items + specialization +
     class + Ascension Level + PVP, and any amity/bonus values given.
@@ -1559,8 +1603,18 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
       3. times the class's percent stat modifiers;
       4. times Ascension Level (+1%/level, AL 100 doubles);
       5. HP doubled if PVP.
-    Steps 2-5 are orna_classes.estimate, so the AL/PVP rules live in exactly
-    one place and are pinned by that module's self-check."""
+    Steps 3-5 are orna_classes.scale, so the AL/PVP rules live in exactly one
+    place and are pinned by that module's self-check. They were a second copy
+    of that arithmetic here until 2026-09-25, which is how the docstring came
+    to describe code this function wasn't actually running.
+
+    This tool VALIDATES ITS INPUTS FIRST and refuses to run on a partial set
+    (per explicit design ask 2026-09-25). Class, specialization, Ascension
+    Level, PVP and the item list are all REQUIRED; the only thing defaulted
+    is an item's quality (100%, exactly as if the user had typed "100%").
+    Everything else missing means ask the user - every wrong answer this tool
+    has produced came from quietly assuming one of them."""
+    max_items = 12
     items = args.get("items") or []
     if isinstance(items, (str, dict)):
         # a lone string would iterate characters; a lone dict is unsliceable
@@ -1570,44 +1624,96 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         items = []
     spec = str(args.get("specialization") or "").strip()
     klass = str(args.get("class") or args.get("klass") or "").strip()
-    al = args.get("ascension_level") or args.get("al") or 0
-    try:
-        al = int(float(str(al).strip().rstrip("%")))
-    except (TypeError, ValueError):
-        al = 0
-    al = min(max(al, 0), ASCENSION_LEVEL_SANITY_CAP)
-    pvp = _as_bool(args.get("pvp"))
     amities = args.get("amities") or {}
 
-    spec_probe = orna_classes.find_class(spec, kind="specialization") if spec else None
-    class_probe = orna_classes.find_class(klass, kind="class") if klass else None
-    if not items and not spec_probe and not class_probe:
-        # Refuse rather than render an empty table. Live 2026-09-24: "/orna
-        # calculate my stats" produced a header, "спорядження не вказано" and
-        # an EMPTY stat table - a confident-looking answer containing nothing.
-        # The prompt's CLARIFICATION rule alone did not hold (the tool
-        # description even used to say "or call it with no items at all"), so
-        # the impossible case is closed here where it cannot be argued with.
-        return ("estimate_stats has nothing to work from - no items, no specialization and no class were "
-                "given, so there is nothing to compute and NOTHING was shown to the user. Do not call this "
-                "again with empty arguments. Call ask() for what you still need: the items they wear and each "
-                "one's quality, their specialization and/or class, their Ascension Level, and whether it is "
-                "PVP. If you cannot ask (inline mode), say plainly that you need those details.")
+    # Resolve each name in ITS OWN pool. Live bug: "Heretic Ara Sequencer"
+    # was passed as specialization="Heretic Ara", class="Heretic", and the
+    # class lookup returned the tier-10 SPECIALIZATION (searched first by
+    # default), whose modifiers are empty - so Sequencer's real -5/+15/-5 were
+    # silently dropped and the estimate looked fine.
+    spec_none = spec.lower() in _NO_VALUE_WORDS
+    spec_entry = orna_classes.find_class(spec, kind="specialization") if spec and not spec_none else None
+    class_entry = orna_classes.find_class(klass, kind="class") if klass else None
 
-    totals, lines, missing = {}, [], []
-    for raw in items[:12]:
+    # `or` would collapse a legitimate AL of 0 into "absent"; these three have
+    # to tell "the user said 0/false" apart from "nobody has said yet".
+    al_raw = next((args[k] for k in ("ascension_level", "al")
+                   if args.get(k) is not None and str(args[k]).strip() != ""), None)
+    al = None
+    if al_raw is not None:
+        try:
+            al = min(max(int(float(str(al_raw).strip().rstrip("%"))), 0), ASCENSION_LEVEL_SANITY_CAP)
+        except (TypeError, ValueError):
+            al = None                      # "AL 100" - report it, never silently 0
+    pvp_raw = args.get("pvp")
+    pvp = _as_bool(pvp_raw) if pvp_raw is not None and str(pvp_raw).strip() != "" else None
+
+    classes_list = "/".join(orna_classes.all_names("class"))
+    specs_list = "/".join(orna_classes.all_names("specialization"))
+    need = []
+    if not items:
+        need.append('items: every piece of gear they wear, as [{"name":"<item>","quality":"<quality or %>"}] '
+                    '- if they named a BUILD rather than items ("the omniflask raid build"), call '
+                    'class_guide or knowledge_search FIRST and pass the item names it lists')
+    if not klass:
+        need.append("class: their class - one of " + classes_list)
+    elif class_entry is None:
+        need.append(f"class: {klass!r} is not a class. It must be one of " + classes_list)
+    if not spec:
+        need.append('specialization: their tier-10 specialization - one of ' + specs_list
+                    + ' - or "none" if they do not have one')
+    elif not spec_none and spec_entry is None:
+        need.append(f"specialization: {spec!r} is not a specialization. It must be one of " + specs_list
+                    + ', or "none"')
+    if al is None:
+        need.append("ascension_level: their AL as a plain number"
+                    + (f" - {str(al_raw)[:20]!r} is not one" if al_raw is not None else ""))
+    if pvp is None:
+        need.append("pvp: true if they want the PVP figures (HP is doubled), false for PVE")
+    if need:
+        # Refuse the partial call in the TOOL, not in the prompt. Both live
+        # failures of this tool were a guessed input rendered as fact: a
+        # loadout the user never mentioned, and (2026-09-25) a lone class
+        # button that produced a header plus an entirely empty stat table.
+        return (_NEEDS_INPUT + " estimate_stats did NOT run, and showed the user NOTHING - these required "
+                "inputs are "
+                "missing or unusable:\n- " + "\n- ".join(need)
+                + "\nDo NOT guess any of them, and do NOT call this again with the same arguments. Call "
+                "ask() ONCE for exactly the items above, all in one question - the user can type the whole "
+                "lot in a single message. If the question is really about a specialization's own base stats "
+                "with no gear involved, use knowledge_search instead; it answers that without any of this. "
+                "If you cannot ask (inline mode), say plainly which of these you still need.")
+
+    totals, lines, skipped = {}, [], []
+    if len(items) > max_items:
+        skipped.append(f"передано {len(items)} предметів — враховано перші {max_items}")
+    for raw in items[:max_items]:
         if isinstance(raw, dict):
             name = str(raw.get("name") or raw.get("item") or "").strip()
             quality = str(raw.get("quality") or "").strip()
+            level_raw = next((raw[k] for k in ("level", "upgrade_level", "lvl")
+                              if raw.get(k) is not None and str(raw[k]).strip() != ""), None)
         else:
-            name, quality = str(raw).strip(), ""
+            name, quality, level_raw = str(raw).strip(), "", None
         if not name:
             continue
+        # Quality and LEVEL are two independent axes and both default here:
+        # quality to 100% and level to 1 (per the game's own 13 levels - 1-10
+        # plus masterforged/demonforged/godforged, which ARE levels 11/12/13).
+        # The old default was 200%/level 13, a fully forged item, so anything
+        # the user didn't spell out came back silently inflated.
         parsed = _parse_quality_spec(quality) if quality else None
-        q, level = parsed if parsed else (200, 13)   # default: fully forged
+        if quality and parsed is None:
+            skipped.append(f"{name}: якість {quality[:15]!r} не розібрано — рахую 100%")
+        q, level = parsed or (100, 1)
+        if level_raw is not None:
+            try:
+                level = min(max(int(float(str(level_raw).strip())), 1), 20)
+            except (TypeError, ValueError):
+                skipped.append(f"{name}: рівень {str(level_raw)[:10]!r} не розібрано — рахую {level}")
         entry, err = await _resolve_aussies_entry(name)
         if entry is None:
-            missing.append(f"{name} ({err})")
+            skipped.append(f"{name} ({err})")
             continue
         inp = AssessInput(entry=entry, level=level if entry.is_upgradable else 1,
                           boss_scaling=entry.boss_scaling, quality=q, stats={})
@@ -1635,29 +1741,19 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         lines.append(f"{entry.name} @ {q}% lv{level}: " +
                      ", ".join(f"{k} {v:g}" for k, v in sorted(got.items()) if k in _ESTIMATE_STATS))
 
-    # Resolve each name in ITS OWN pool. Live bug: "Heretic Ara Sequencer"
-    # was passed as specialization="Heretic Ara", class="Heretic", and the
-    # class lookup returned the tier-10 SPECIALIZATION (searched first by
-    # default), whose modifiers are empty - so Sequencer's real -5/+15/-5 were
-    # silently dropped and the estimate looked fine.
-    spec_entry, class_entry = spec_probe, class_probe
-    if klass and class_entry is None:
-        # e.g. the model put the specialization in `class` too - don't apply
-        # it twice, and say so rather than pretending it counted.
-        missing.append(f"клас {klass!r} не розпізнано як клас")
     if spec_entry and spec_entry.get("base_stats"):
         for stat, value in spec_entry["base_stats"].items():
             if stat in _ESTIMATE_STATS and isinstance(value, (int, float)) and value:
                 totals[stat] = totals.get(stat, 0) + value
 
-    mods = (class_entry or {}).get("stat_modifiers") or {}
-    al_mult = 1 + max(0, al) / 100.0
-    final = {}
-    for stat, value in totals.items():
-        scaled = value * (1 + mods.get(stat, 0) / 100.0) * al_mult
-        if stat == "hp" and pvp:
-            scaled *= 2
-        final[stat] = round(scaled, 1)
+    final = orna_classes.scale(totals, (class_entry or {}).get("stat_modifiers"), al, pvp)
+    if not final:
+        # The required-input check above cannot catch this one: every input
+        # was supplied and valid, but not one item name resolved, so there is
+        # still nothing to show. Never post a stat table with no stats in it.
+        return ("estimate_stats computed NOTHING, so the user was shown NOTHING: none of the item names "
+                f"resolved ({'; '.join(skipped)}). Re-check the spelling with search_codex and call this "
+                "again with names the codex actually has, or ask the user to spell them.")
 
     head = ["🧮 <b>Оцінка характеристик</b>"]
     detail = []
@@ -1668,22 +1764,15 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     detail.append(f"AL {al}")
     detail.append("PVP (HP ×2)" if pvp else "PVE")
     head.append(" · ".join(detail))
-    if lines:
-        head.append("")
-        head.append("\n".join(f"• {html.escape(l)}" for l in lines))
-    else:
-        # Say it outright. The tool cannot tell an "estimate without gear"
-        # apart from "the model forgot the gear", and a silent omission reads
-        # as a complete answer.
-        head.append("")
-        head.append("<i>Спорядження не вказано — рахую лише клас/спеціалізацію.</i>")
+    head.append("")
+    head.append("\n".join(f"• {html.escape(l)}" for l in lines))
     if amities:
         head.append("")
         head.append("Аміті/бонуси: " + html.escape(", ".join(
             f"{k} {v}" for k, v in amities.items()) if isinstance(amities, dict) else str(amities)))
-    if missing:
+    if skipped:
         head.append("")
-        head.append("⚠️ не знайдено: " + html.escape("; ".join(missing)))
+        head.append("⚠️ не враховано: " + html.escape("; ".join(skipped)))
     head.append("")
     head.append("<b>Разом:</b>")
     head.append(pre_table([["Стат", "Значення"]] +
@@ -1691,9 +1780,8 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     await message.reply_text("\n".join(head), parse_mode="HTML", disable_web_page_preview=True)
 
     summary = ", ".join(f"{k}={final[k]:g}" for k in _ESTIMATE_STATS if final.get(k))
-    note = f" Проблеми: {'; '.join(missing)}." if missing else ""
-    gear = f"{len(lines)} item(s)" if lines else "NO items were provided, so gear is not included"
-    return (f"posted a stats estimate ({gear}; spec={spec_entry['name'] if spec_entry else '-'}, "
+    note = f" NOT counted: {'; '.join(skipped)} - say so in your answer." if skipped else ""
+    return (f"posted a stats estimate ({len(lines)} item(s); spec={spec_entry['name'] if spec_entry else 'none'}, "
             f"class={class_entry['name'] if class_entry else '-'}, AL={al}, pvp={pvp}). "
             f"Totals [{summary}].{note} The table is already shown to the user - finish() just needs a short "
             f"closing line that repeats WHICH inputs were used, so the user can spot a wrong assumption.")
@@ -1827,20 +1915,34 @@ _TOOLS_TEXT = (
     "gold/luck bonus and similar %-bonus stats) - for a single raw combat stat like magic/attack, use query's "
     "sort_by instead (that's a \"pick the best one\" ask, not a \"stack across slots\" ask). POSTS the full "
     "breakdown - finish() just needs a short closing line.\n"
-    "- estimate_stats(args={\"items\":[{\"name\":\"<item>\",\"quality\":\"<quality or %>\"}, ...],"
-    "\"specialization\":\"<tier-10 spec, e.g. Gilgamesh/Heretic/Realmshifter/Beowulf/Grand Summoner/Deity>\","
-    "\"class\":\"<class, e.g. Duelist/Magus/Warden>\",\"ascension_level\":<the player's AL, any number>,\"pvp\":true|false,"
+    "- estimate_stats(args={\"items\":[{\"name\":\"<item>\",\"quality\":\"<quality name or %>\","
+    "\"level\":<upgrade level 1-13>}, ...],"
+    "\"specialization\":\"<one of: " + "/".join(orna_classes.all_names("specialization")) + ">\","
+    "\"class\":\"<one of: " + "/".join(orna_classes.all_names("class")) + ">\","
+    "\"ascension_level\":<the player's AL, any number>,\"pvp\":true|false,"
     "\"amities\":{\"<bonus>\":\"<value>\"}}): a FULL character stat estimate. Sums every worn item at its own "
     "quality, adds the specialization's base stats, then applies the class's percent modifiers, Ascension "
     "Level (+1% per level, AL 100 doubles) and PVP (doubles HP only). Use this for \"which stats will I "
     "have\"/\"порахуй мої стати\" questions. POSTS the full table - finish() just needs a short closing line. "
-    "NEVER put an item in `items` that the user did not actually name - inventing a plausible loadout "
-    "produces a confident, completely fictional answer (live failure: a user gave only their class and got "
-    "back a total built from three items they never mentioned). If they gave no gear, ASK for it - calling this "
-    "with nothing at all is refused outright and shows the user nothing. Likewise pass the "
-    "specialization in `specialization` and the CLASS in `class`; putting a specialization in `class` drops "
-    "the real class's modifiers. \"Heretic Ara Sequencer\" means specialization=\"Heretic Ara\", "
-    "class=\"Sequencer\". Never invent a quality either - if they did not say, ask or state the assumption.\n"
+    "ALL FIVE INPUTS ARE REQUIRED: items, class, specialization, ascension_level, pvp. The tool REFUSES a "
+    "partial call - it posts nothing and hands you back the exact list of what is still missing, so there is "
+    "no point calling it to see what happens. The ONLY default is an item's quality (100% when the user did "
+    "not say) and an item's level (1). QUALITY AND LEVEL ARE TWO DIFFERENT THINGS: quality is the % roll "
+    "(100%, 185%, or a tier name like legendary), level is how far it is upgraded - 1 to 10, then 11 "
+    "masterforged, 12 demonforged, 13 godforged. \"godforged\" therefore means level 13, NOT a "
+    "quality; an item can be 185% quality AND level 10. specialization=\"none\" is a valid ANSWER "
+    "for a player who has no tier-10 specialization; "
+    "leaving it out is not, and neither is guessing one. NEVER guess any of the five - a guessed loadout, a "
+    "guessed AL or a guessed PVP flag comes back as a confident WRONG number (live failures: a total built "
+    "from three items the user never mentioned; a lone class that rendered an empty table). Ask instead. "
+    "The values can come from EARLIER TOOL RESULTS as well as from the user: if they name a BUILD rather "
+    "than items (\"the omniflask raid build\", \"my Gilgamesh set\"), call class_guide or knowledge_search "
+    "FIRST and pass the item names it lists. The two lists above are the ONLY valid class/specialization "
+    "values: never translate one, never invent one, and never offer a name outside them as an ask() option - "
+    "live failure 2026-09-25, a class question rendered the buttons \"Дудар\", \"Орdinator\" and "
+    "\"Гільгармос\", none of which exist, so tapping one contributed nothing. Pass the specialization in "
+    "`specialization` and the CLASS in `class`; putting a specialization in `class` drops the real class's "
+    "modifiers. \"Heretic Ara Sequencer\" means specialization=\"Heretic Ara\", class=\"Sequencer\".\n"
     "- towers(): no input. Current floor (15-50, 50=cleared/at the top awaiting reset) of all 5 real-time \"Wild "
     "Towers of Olympia\" (Selene/Eos/Oceanus/Themis/Prometheus) - pure deterministic math from the current time, "
     "always available, never a dead end. Use for \"how tall is tower X now\"/\"which tower is at max\" etc. For "
@@ -2077,14 +2179,26 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     # the script the user actually wrote in (this guild writes English or
     # Ukrainian) and stating the required language up front, per request, is
     # far more reliable than making the model infer it.
+    req_lang = "Ukrainian" if user_text and _CYRILLIC_RE.search(user_text) else "English"
     lang_lock = ""
     if user_text:
-        req_lang = "Ukrainian" if _CYRILLIC_RE.search(user_text) else "English"
         lang_lock = (
             f"CRITICAL LANGUAGE LOCK: the user's current request is written in {req_lang}. Every ask/finish "
             f"reply you send for THIS request MUST be written in {req_lang} - never another language, no matter "
-            f"what language the guide/codex text you read is in or what language the examples below happen to use.\n\n"
+            f"what language the guide/codex text you read is in or what language the examples below happen to use. "
+            "PROPER NAMES ARE NOT TRANSLATED: items, classes, specializations, monsters and spells keep their "
+            "English spelling inside a reply in any language - they are identifiers, and a translated name "
+            "matches nothing in the data (live failure: a class question offered \"Дудар\" and "
+            "\"Гільгармос\", which resolve to nothing at all).\n\n"
         )
+    # The clarification example below is the ask text the model is most likely
+    # to imitate, so it is written in the language the lock just demanded. A
+    # fixed Ukrainian example sitting next to the instruction to answer in
+    # English is the same fight _CLASS_GUIDE_RULE already lost - live
+    # 2026-09-25, "/orna calculate my stats" came back in Ukrainian.
+    ask_example = ("вкажіть: спорядження та якість, спеціалізацію/клас, AL, PVP чи ні"
+                   if req_lang == "Ukrainian" else
+                   "tell me: your gear and each item's quality, your specialization/class, your AL, and PVP or not")
     no_ask = "" if allow_ask else (
         "INLINE MODE: this request has NO reply channel - there are no buttons and the user cannot answer "
         "you. NEVER call ask here. If something is missing, pick the most reasonable assumption, ANSWER "
@@ -2127,11 +2241,11 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     "guessing. The clearest case is estimate_stats: a stat estimate needs the ITEMS the player wears and each "
     "one's QUALITY, their SPECIALIZATION and/or CLASS, their ASCENSION LEVEL, and whether it is PVP - if any "
     "of those is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
-    "question text (e.g. \"вкажіть: спорядження та якість, спеціалізацію/клас, AL, PVP чи ні\") - a "
+    f"question text (e.g. \"{ask_example}\") - a "
     "\"Своя відповідь\" button is added automatically, so they can type all of it in one message, and you "
     "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. **The user can also simply TYPE their "
     "answer to any question you ask - say so in the question when what you need is a list.** Every option you "
-    "give must be a possible ANSWER, not a category of answer: \"Mage\", \"Godforged\", \"PVP\" are "
+    "give must be a possible ANSWER, not a category of answer: \"Magus\", \"Godforged\", \"PVP\" are "
     "answers; \"I'll provide details\", \"Specialization/Class\", \"Equipment and quality\" are NOT - "
     "tapping one of those tells you nothing and you will just have to ask again (live failure: three asks in a "
     "row, each answered by a tap that carried no information). When what you need is several details at once, "
@@ -2168,6 +2282,10 @@ class OrnaSession:
     # order it was consulted - surfaced as a "Джерела" button on finish().
     sources: list = field(default_factory=list)
     status: object = None  # the ephemeral _Status message, owned by _advance
+    # Set when a tool refused for want of a USER-supplied input (see
+    # _NEEDS_INPUT). A finish() while this is set is really a question, so the
+    # typed-answer wait stays armed past it.
+    needs_input: bool = False
     # INLINE mode can show no buttons and receive no reply - the answer is one
     # edited message in a chat the bot isn't in - so "ask" is turned off there
     # and the model is told to answer from what it has, stating assumptions,
@@ -2507,6 +2625,22 @@ async def _advance_inner(sid: str, message) -> None:
                     InlineKeyboardButton(f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")
                 ]])
             await _reply_markdown(message, action_input or "Не вдалося сформувати відповідь.", reply_markup=markup)
+            # The model often states what it still needs as an ANSWER rather
+            # than as an ask(), which ENDS the request - and the user's reply
+            # then falls through to the other handlers and vanishes ("Bot
+            # ignored my answer", live 2026-09-25; measured 2 of 3 runs of
+            # "порахуй мої стати"). Two narrow signals that a finish is really
+            # a question: a tool refused for want of a user-supplied input
+            # (_NEEDS_INPUT), or the loop called no tool at all, which for
+            # /orna means it produced no data and can only have been asking.
+            # Counted as an ask so the same cap bounds it, and given a shorter
+            # fuse than a real ask, since this one is inferred.
+            speculative = not session.seen_calls
+            if (session.needs_input or speculative) and session.allow_ask \
+                    and session.asks_made < MAX_ASKS_PER_REQUEST:
+                session.asks_made += 1
+                _PENDING_ASK_TEXT[message.chat_id] = (
+                    sid, time.monotonic() + (_FOLLOWUP_TTL_SECONDS if speculative else ASK_TEXT_TTL_SECONDS))
             return
 
         if action == "ask":
@@ -2571,6 +2705,7 @@ async def _advance_inner(sid: str, message) -> None:
         else:
             observation = await _run_tool(message, action, action_input, args, session.sources)
             session.seen_calls[sig] = observation
+        session.needs_input = observation.startswith(_NEEDS_INPUT)
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
     usage_stats.record_tool_call("_step_budget_exhausted")
@@ -2782,6 +2917,14 @@ async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "content": f"Observation: the user answered the clarifying question in their own words: "
                    f"{message.text.strip()[:500]!r}. Use this and continue.",
     })
+    # The user has now supplied something, so the flag that kept us listening
+    # is stale - leaving it set re-arms the wait on the next finish even if no
+    # tool asked for anything, which would swallow unrelated messages.
+    session.needs_input = False
+    # The answer may arrive after the loop already spent its budget (it can
+    # come in after a finish - see _NEEDS_INPUT), so top it up enough to act
+    # on what was just supplied rather than closing out immediately.
+    session.steps_left = max(session.steps_left, _RESUME_STEPS)
     await _advance(sid, message)
 
 
@@ -3012,6 +3155,43 @@ def _demo() -> None:
     _add_source(src, "bad scheme", "javascript:alert(1)")
     _add_source(src, "b", "https://example.com/y")
     assert [u for _l, u in src] == ["https://example.com/x", "https://example.com/y"], src
+
+    # estimate_stats refuses a PARTIAL call. Every one of its wrong answers
+    # came from quietly defaulting an input, so "missing" must survive as
+    # missing - including the two that look falsy: AL 0 and pvp False are
+    # real ANSWERS, and `or` would have collapsed both back into "not given".
+    class _Silent:
+        chat_id = 0
+
+        async def reply_text(self, *a, **k):
+            raise AssertionError("estimate_stats must post NOTHING on a partial call")
+
+    full = {"items": [{"name": "Lost Helmet"}], "class": "Duelist",
+            "specialization": "none", "ascension_level": 0, "pvp": False}
+    for field in ("items", "class", "specialization", "ascension_level", "pvp"):
+        partial = {k: v for k, v in full.items() if k != field}
+        out = asyncio.run(_run_estimate_stats_tool(_Silent(), partial))
+        # the marker matters as much as the text: _advance_inner keys the
+        # keep-listening-after-finish behaviour off it
+        assert out.startswith(_NEEDS_INPUT), (field, out[:80])
+        assert f"- {field}:" in out, (field, out)
+    # ...and a name that is not in the real pool is missing, not a warning
+    for field, bad in (("class", "Маг"), ("specialization", "Гільгармос")):
+        out = asyncio.run(_run_estimate_stats_tool(_Silent(), {**full, field: bad}))
+        assert f"- {field}: {bad!r} is not" in out, out[:200]
+    # an unparseable AL is reported, never silently 0
+    out = asyncio.run(_run_estimate_stats_tool(_Silent(), {**full, "ascension_level": "AL 100"}))
+    assert "- ascension_level:" in out and "'AL 100' is not one" in out, out[:200]
+    # the ONE default: no quality means exactly "100%", not a forged item
+    # quality and level are independent axes: every percentage used to come
+    # back as level 1, so a player's upgraded gear was projected unupgraded.
+    assert _parse_quality_spec("100") == (100, 1)          # the tool's default pair
+    assert _parse_quality_spec("185% lv10") == (185, 10)
+    assert _parse_quality_spec("legendary +10") == (140, 10)
+    assert _parse_quality_spec("lv10") == (100, 10)        # level alone -> quality 100%
+    assert _parse_quality_spec("godforged") == (100, 13)   # a forge name IS a level
+    assert _parse_quality_spec("godforged lv12") == (100, 12), "an explicit level wins"
+    assert _parse_quality_spec("185") == (185, 1) and _parse_quality_spec("zzz") is None
 
     print("telegram_orna: all checks passed")
 

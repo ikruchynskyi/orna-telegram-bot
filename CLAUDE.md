@@ -1119,16 +1119,57 @@ control flow:
 
 ### `estimate_stats` - a whole character's projected stats
 
-`estimate_stats(args={items:[{name,quality}], specialization, class,
+`estimate_stats(args={items:[{name,quality,level}], specialization, class,
 ascension_level, pvp, amities})` posts a full stat table. The order of
 operations is the part that has to be right, and it is deliberately split
 across two modules so each half is pinned by its own self-check:
-  1. every worn item assessed at ITS OWN quality (the same
+  1. every worn item assessed at ITS OWN quality and level (the same
      `orna_assess.get_assess_result` path `/orna assess` uses) and summed -
      gear stats are ADDITIVE;
   2. plus the tier-10 specialization's absolute base stats;
-  3. then `orna_classes.estimate` applies the class's percent modifiers,
+  3. then `orna_classes.scale` applies the class's percent modifiers,
      Ascension Level (+1%/level) and PVP (HP ×2).
+
+**`orna_classes.scale` is that third step, and it exists because there were
+TWO copies of it.** `orna_classes.estimate` and this tool each had their own
+identical loop over the stat block, so the AL/PVP rules `orna_classes._demo`
+pins were not necessarily the rules the bot ran - the tool's own docstring
+already claimed it delegated, and didn't. Both call `scale` now.
+
+**All five inputs are REQUIRED and the tool refuses a partial call** (design
+ask 2026-09-25, modelled on the `query` condition builder): `items`, `class`,
+`specialization`, `ascension_level`, `pvp`. It posts nothing, and returns an
+observation listing exactly which ones are missing or unresolvable, so the
+model's next move is an `ask` for precisely those. Notes:
+- `specialization: "none"` is a valid ANSWER (not every player has a tier-10
+  spec - aussiescodex's own estimator ships a "None" entry for this); leaving
+  it out is a missing input. Same for `ascension_level: 0` and `pvp: false`,
+  which is why those three are read with an explicit `is None` check and not
+  `or` - `or` collapses a real 0/false back into "not given".
+- The refusal observation is prefixed `NEEDS_INPUT:` - see the finish note
+  below, which keys off it.
+- The values may come from an earlier TOOL result as well as from the user:
+  the tool description tells the model that a named BUILD ("the omniflask
+  raid build") means calling `class_guide`/`knowledge_search` first and
+  passing the item names it lists.
+- A name that isn't in the real pool is a MISSING input, not a warning. Live
+  2026-09-25: `specialization="Гільгармос"` resolved to nothing and was
+  SILENTLY dropped, so Gilgamesh's whole 12,509-hp base never entered the sum
+  and the table still looked complete.
+
+**Quality and LEVEL are two independent axes, and treating them as one
+understated every upgraded item.** Orna has 13 levels: 1-10, then
+Masterforged 11 / Demonforged 12 / Godforged 13. `_parse_quality_spec` used
+to return level 1 for every percentage, so "my 185% Lost Helmet" was
+projected UNUPGRADED (318 defense instead of 726 at lv10) and the only way to
+reach a high level was to name a forge tier, which also forced quality to
+100%. It now reads an explicit level out of the same free text (`lv10`,
+`+10`, `рівень 10`, `185% lv10`), and `estimate_stats` also accepts a
+separate `level` key per item. An explicit level beats one implied by a forge
+name. Defaults, per explicit ask: **quality 100%, level 1** - the old default
+was 200%/level 13, i.e. every unstated piece came back silently forged.
+Fixing this in the shared parser means `assess`, `compare` and
+`build_optimize` all gained it too, since all four route through it.
 **Read the projection, not `entry.stats`** - `AssessResult.stats` is
 `{stat: StatRow}` where `StatRow.values` holds one value per upgrade level.
 A first version summed `entry.stats`, which is the item's UNUPGRADED base,
@@ -1209,6 +1250,34 @@ missing":**
   carries no information, which is what produced the three-ask loop. The
   prompt says this with both the good and the bad examples, and tells the
   model to say outright that the user may just type the whole list.
+- **A finish() that is really a question keeps listening.** The model often
+  states what it still needs as an ANSWER instead of calling `ask`, which ENDS
+  the request - and the user's typed reply then falls through to the assess/
+  resources handlers and vanishes ("Bot ignored my answer", live 2026-09-25;
+  measured 2 of 3 runs of "порахуй мої стати" finished in prose without ever
+  calling a tool). Two narrow signals that a finish is a question, both
+  checked in the finish branch: a tool refused for want of a user input (the
+  `NEEDS_INPUT:` prefix), or the loop made NO tool call at all, which for
+  `/orna` means it produced no data and can only have been asking. Either arms
+  the same one-shot typed-answer wait an `ask` would have, counts as an ask so
+  `MAX_ASKS_PER_REQUEST` bounds it, and is skipped entirely inline. The
+  inferred case gets a shorter fuse (`_FOLLOWUP_TTL_SECONDS`, 180s) than a
+  real ask (600s), because it is a guess. `handle_ask_text` clears the flag
+  and tops `steps_left` up to `_RESUME_STEPS` - the answer can arrive after
+  the budget was already spent, and resuming into an immediate close-out would
+  waste it.
+- **Class and specialization names are a CLOSED SET, so the prompt carries
+  the whole set rather than three examples.** The `estimate_stats` tool
+  description interpolates `orna_classes.all_names("class")` and
+  `all_names("specialization")` - 40 + 19 real names, built from the data so
+  they cannot drift. Live 2026-09-25 the model invented Ukrainian class
+  buttons ("Маг", "Дудар", "Зник", "Орdinator", "Гільгармос"), none of which
+  `find_class` resolves; with the real list in the prompt, 7 of 7 runs offered
+  real names. Note this is DATA, not another rule - the guarantee is the
+  tool's refusal above, which is what stops a bad name becoming a wrong
+  number. Also fixed: the prompt's own "good option" example was `"Mage"`,
+  which is not an Orna class (`find_class` resolves it to *Time Mage*), so the
+  prompt was teaching the exact invention it warns about.
 - **`ask` options get normalised** (`_normalize_options`): the model
   sometimes packs the whole list into ONE string
   (`["['Клас та одяг', 'Тільки класс', 'Інше']"]`), which rendered as a
@@ -1787,6 +1856,19 @@ those two) and prepends a per-request "CRITICAL LANGUAGE LOCK: ... MUST be
 in <lang>" line, so the required language is stated as fact rather than
 inferred from examples. `handle_orna` passes the request text in (the loop
 harness does too); the prompt-guidance changes stay as reinforcement.
+
+**The lock has to cover the prompt's own EXAMPLES, or it loses to them -
+again.** Live 2026-09-25: `/orna calculate my stats` (English) came back in
+Ukrainian, with every class name mistranslated into words that resolve to
+nothing. The CLARIFICATION rule's example ask text was a hardcoded Ukrainian
+string sitting exactly where the model composes its question - the same fight
+`_CLASS_GUIDE_RULE` already lost. `_orna_system_prompt` now builds that
+example in the language the lock just demanded, so imitation helps instead of
+hurting. The lock also states that PROPER NAMES ARE NOT TRANSLATED: items,
+classes, specializations and spells keep their English spelling inside a reply
+in any language, because they are identifiers and a translated one matches
+nothing in the data. Verified 3/3 English answers English and 3/3 Ukrainian
+answers Ukrainian with the class names left in English.
 Verified: English build questions answer in English, Ukrainian ones stay
 Ukrainian.
 

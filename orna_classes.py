@@ -126,6 +126,43 @@ def _find_in(data: dict, want: str, pool_key: str, name: str) -> Optional[dict]:
             "passives": entry.get("passiveEffects") or []}
 
 
+def scale(base: dict, modifiers: Optional[dict] = None,
+          ascension_level: int = 0, pvp: bool = False) -> dict:
+    """Apply a class's percent modifiers, then Ascension Level (+1% per
+    level), then PVP (HP x2) to a base stat block.
+
+    The two game rules live HERE and nowhere else. estimate() and
+    telegram_orna's estimate_stats tool both go through this function, which
+    is the point: they used to be two separate copies of the same arithmetic,
+    so the version _demo pins was not necessarily the version the bot ran."""
+    mods = modifiers or {}
+    al_mult = 1 + max(0, int(ascension_level or 0)) / 100.0
+    out = {}
+    for stat, value in (base or {}).items():
+        if not isinstance(value, (int, float)):
+            continue
+        scaled = value * (1 + mods.get(stat, 0) / 100.0) * al_mult
+        if stat == "hp" and pvp:
+            scaled *= 2                  # PVP doubles HP only
+        out[stat] = round(scaled, 1)
+    return out
+
+
+def all_names(kind: str = "") -> list:
+    """Every real class / specialization name, minus aussiescodex's all-zero
+    "None" placeholder. Callers that OFFER a name to the user or the model
+    build their list from here, so they cannot offer one find_class() will
+    then fail to resolve - live 2026-09-25 the model invented "Дудар",
+    "Орdinator" and "Гільгармос" as class buttons, none of which resolve."""
+    data = _load()
+    keys = []
+    if kind != "class":
+        keys += list(data.get("spec_stats") or {})
+    if kind != "specialization":
+        keys += list(data.get("classes") or {})
+    return sorted(k for k in keys if k != "None")
+
+
 def estimate(name: str, ascension_level: int = 0, pvp: bool = False,
              base_stats: Optional[dict] = None) -> Optional[dict]:
     """Projected stats for a class/specialization.
@@ -139,19 +176,9 @@ def estimate(name: str, ascension_level: int = 0, pvp: bool = False,
         return None
 
     al = max(0, int(ascension_level or 0))
-    al_mult = 1 + al / 100.0                 # AL 100 => x2 on every stat
     base = dict(base_stats or entry.get("base_stats") or {})
     mods = entry.get("stat_modifiers") or {}
-
-    stats = {}
-    if base:
-        for stat, value in base.items():
-            if not isinstance(value, (int, float)):
-                continue
-            scaled = value * (1 + mods.get(stat, 0) / 100.0) * al_mult
-            if stat == "hp" and pvp:
-                scaled *= 2              # PVP doubles HP only
-            stats[stat] = round(scaled, 1)
+    stats = scale(base, mods, al, pvp)
 
     return {
         "name": entry["name"], "kind": entry["kind"], "tier": entry.get("tier"),
@@ -270,6 +297,24 @@ def _demo() -> None:
     by_bonus = search("weapon_power")
     assert "Duelist" in by_bonus, by_bonus[:200]
     assert search("zzz no such thing") == ""
+
+    # scale() is the ONE copy of the AL/PVP rules - telegram_orna's
+    # estimate_stats tool calls it with the summed gear as the base, so these
+    # asserts pin the arithmetic for the tool too, not just for estimate().
+    assert scale({"hp": 1000, "attack": 100}, {"hp": 5}, 100, False) == {"hp": 2100.0, "attack": 200.0}
+    assert scale({"hp": 1000}, None, 0, True) == {"hp": 2000.0}, "PVP doubles HP"
+    assert scale({"attack": 100}, None, 0, True) == {"attack": 100.0}, "PVP must not touch attack"
+    assert scale({}, {"hp": 5}, 100, True) == {}, "no base means no numbers to invent"
+    assert scale({"hp": "?"}, None, 50) == {}, "a non-numeric stat is dropped, not crashed on"
+
+    # every offered name must be one find_class() can resolve, and the all-zero
+    # "None" placeholder must never be offered as a real answer
+    names = all_names()
+    assert len(names) == 57, len(names)          # 40 classes + 19 specs - two "None"
+    assert "None" not in names
+    assert all(find_class(n) for n in names), [n for n in names if not find_class(n)]
+    assert "Duelist" in all_names("class") and "Gilgamesh" not in all_names("class")
+    assert "Gilgamesh" in all_names("specialization") and "Duelist" not in all_names("specialization")
     print("orna_classes: all checks passed")
 
 
