@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
 .env
+# Any .env variant - NOT just ".env". A `cp .env .env.bak-151721`
+# safety copy made before editing was matched by none of these rules,
+# got swept up by `git add -A`, and was pushed to GitHub with every
+# secret in it (2026-09-24 - the bot token was stolen and used within
+# hours). The negation keeps the committed template tracked.
+.env.*
+!.env.dist
 *.log
 .venv/
 venv/

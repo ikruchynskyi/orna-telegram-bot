@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 
 from dotenv import load_dotenv
 load_dotenv()  # must run before importing modules that read env vars at import time (orna_sheets)
@@ -28,6 +29,48 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+
+# Secrets that libraries put in URLs, which httpx then logs in full at INFO.
+# Live incident 2026-09-24: the bot token was stolen and a third party polled
+# getUpdates with it, answering this bot's users with a "join our channel"
+# ad. python-telegram-bot puts the token in the PATH of every API call
+# ("api.telegram.org/bot<token>/getUpdates"), so telegrambot_error.log held
+# thousands of plaintext copies of it; orna_sheets does the same with
+# ?key=<google api key>. The log is gitignored, so it never reached GitHub -
+# but it is a 4MB plaintext credential file that anything reading the log
+# (a paste, a screen share, a support request) hands over completely.
+_SECRET_PATTERNS = [
+    re.compile(r"(bot)\d{5,}:[A-Za-z0-9_-]{20,}"),                      # telegram bot token
+    re.compile(r"((?:[?&])(?:key|api_key|apikey|access_token|token|auth)=)[^&\s\"']+", re.IGNORECASE),
+]
+
+
+class _RedactSecrets(logging.Filter):
+    """Strip credentials out of every record before a handler writes it.
+
+    Attached to the HANDLER rather than a logger, so it applies to records
+    from every library (httpx is the one that matters) instead of only this
+    module's. Rendering the message here and clearing args is deliberate:
+    httpx logs "HTTP Request: %s %s" with the URL in `args`, so redacting
+    `record.msg` alone would miss it entirely."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            text = record.getMessage()
+        except Exception:
+            return True
+        redacted = text
+        for pattern in _SECRET_PATTERNS:
+            redacted = pattern.sub(lambda m: m.group(1) + "<redacted>", redacted)
+        if redacted != text:
+            record.msg, record.args = redacted, ()
+        return True
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_RedactSecrets())
+
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
