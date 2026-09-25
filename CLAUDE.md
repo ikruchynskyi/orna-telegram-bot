@@ -1325,6 +1325,59 @@ three of them produced a confident WRONG answer rather than an error:**
 - **Unknowns were silently defaulted** (AL 0). The prompt now requires
   every still-unknown input to be stated as an assumption in `finish()`.
 
+**An impossible LOADOUT was totalled up as if it were a character, and the
+fix was data the repo already had.** Live 2026-09-25: "find all best magic
+items for head, torso, hands, legs, accessories ... heretic ara sequencer with
+102 AL" produced a full stat table for a Celestial Archistaff (TWO-HANDED)
+worn together with an Arisen North Star (off-hand). Three separate defects:
+- **`is_two_handed` was hardcoded `False`**, on a note in this very file saying
+  aussies "doesn't expose as a flat field at all". It does - as a **tag**,
+  `"two_handed"`, on **106 items**. So the flag is now derived from the record,
+  which also fixes the adornment-slot count `orna_assess` keys off it (the
+  narrow consequence the old `ponytail:` note predicted) and was the real cause
+  of the impossible loadout. **The weapon SUBTYPE is not a substitute:
+  archistaffs are 20 two-handed and 67 one-handed**, so "it's an archistaff"
+  says nothing. `CodexEntry` gained a `place` field for the same reason - the
+  slot is needed to validate a loadout at all.
+- **`_check_loadout`** (pure, unit-tested) validates the real slot capacities -
+  one head/torso/legs, **two** accessories, and two HANDS: either one
+  two-hander alone, or two one-handed weapons, never a two-hander plus an
+  off-hand. `estimate_stats` REFUSES an illegal loadout, posts nothing, and
+  returns the conflict so the loop re-picks. Deliberately NOT the
+  `NEEDS_INPUT:` prefix - that arms the wait-for-a-typed-answer path, and this
+  needs the MODEL to choose legal gear, not the user to supply anything.
+  Verified: the exact reported loadout is refused with 0 messages posted, and
+  the loop then re-queries for one-handed weapons and finishes with a legal
+  weapon + off-hand.
+- **Dual wielding two one-handed weapons counts 65% of their COMBINED stats**
+  (`_DUAL_WIELD_FACTOR`) - the guild's statement of game behaviour, not
+  derivable from any source in the repo (the guides describe dual-wielding but
+  never the factor), so it is implemented as given and pinned in `_demo`,
+  exactly like `orna_classes`' AL/PVP rules. **It genuinely beats the
+  two-hander**, measured on this very request: two one-handed staves total
+  13,467 magic against the Celestial Archistaff's 12,445, so "the two-hander
+  is obviously better" is wrong and the prompt says so.
+- **Class/spec PASSIVES are conditional and the stat table cannot express
+  them** - `orna_classes.json` has carried `"Sequencer Doublecast (Dual
+  Staffs)"` / `"Sequencer Weapon Power (Dual Staffs)"` all along and nothing
+  surfaced them, so an estimate silently ignored the nuance that decides
+  whether the loadout is any good. They are now listed in the reply AND in the
+  observation (the model cannot read what was only sent to Telegram), with an
+  explicit line saying whether a "dual" condition is met.
+
+**`_REASONING_RULE` - reason twice, once before the tools and once before
+finish.** Added 2026-09-25 on ask, after the above. The `"thought"` field must
+first state the goal and enumerate EVERY explicit constraint the user gave
+(slots, quality, level, class, spec, AL, PVE/PVP, quantities, game mode,
+language), then plan the tools; and before `finish()` it must walk that list
+again and confirm each constraint is satisfied by an OBSERVATION rather than an
+assumption, that every number came back from a tool, and that nothing a tool
+warned about (a refusal, a PARTIAL list, a conditional passive, an assumption)
+was dropped. It also carries the GAME-RULE SANITY paragraph above, since a stat
+table can be arithmetically perfect and still describe a character nobody can
+build. Prompt-only, so it is a reduction and not a guarantee - the guarantees
+for this class are `estimate_stats`' refusal and the derived `is_two_handed`.
+
 **A prompt rule could not make the model ask - the TOOL had to refuse.**
 Live: "/orna calculate my stats" called `estimate_stats` with empty args and
 posted a header, "спорядження не вказано" and an EMPTY stat table: a

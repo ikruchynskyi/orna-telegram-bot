@@ -85,6 +85,7 @@ def get_quality_name(code: int) -> Optional[str]:
 class CodexEntry:
     name: str = ""
     stats: Dict[str, Any] = field(default_factory=dict)
+    place: str = ""          # body slot: head/torso/legs/weapon/off-hand/accessory
     is_adornment: bool = False
     is_accessory: bool = False
     is_celestial_weapon: bool = False

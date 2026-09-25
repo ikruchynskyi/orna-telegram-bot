@@ -177,6 +177,32 @@ def _check_set_membership_is_complete() -> None:
     assert scroll["useable_by"] == "all_classes" and "scroll-of-the-judges-trifecta" not in drops
 
 
+def _check_two_handed_comes_from_data() -> None:
+    """is_two_handed must be DERIVED, not hardcoded. It was `False` for every
+    item on the assumption aussies did not expose it - it does, as a tag on 106
+    items - which let estimate_stats total a two-handed weapon together with an
+    off-hand (live 2026-09-25). The weapon SUBTYPE is not a substitute:
+    archistaffs are both."""
+    import asyncio as _asyncio
+
+    codex = orna_aussies._codex()["main"]["items"]
+    tagged = {rid for rid, r in codex.items() if "two_handed" in (r.get("tags") or [])}
+    assert len(tagged) > 50, f"only {len(tagged)} two_handed items - has the tag been renamed?"
+    subtypes = {codex[rid].get("type") for rid in tagged}
+    one_handed_same_subtype = {rid for rid, r in codex.items()
+                              if r.get("place") == "weapon" and r.get("type") in subtypes
+                              and "two_handed" not in (r.get("tags") or [])}
+    assert one_handed_same_subtype, "subtype would suffice - the tag check is then pointless"
+
+    async def _probe():
+        for name, want in (("Celestial Archistaff", True), ("Celestial Staff", False)):
+            entry, _ = await T._resolve_aussies_entry(name)
+            assert entry is not None, name
+            assert entry.is_two_handed is want, (name, entry.is_two_handed, want)
+            assert entry.place == "weapon", (name, entry.place)
+    _asyncio.run(_probe())
+
+
 def _check_quality_boundaries() -> None:
     """get_quality_code's boundaries, incl. the exactly-170 case that used to
     return Broken because in_range was [lo, hi)."""
@@ -311,6 +337,7 @@ TIER0 = [
     ("bogus-field-reported", _check_bogus_field_is_reported),
     ("observation-honesty", _check_observation_is_honest),
     ("set-membership-complete", _check_set_membership_is_complete),
+    ("two-handed-from-data", _check_two_handed_comes_from_data),
     ("quality-boundaries", _check_quality_boundaries),
     ("name-resolution-forms", _check_name_resolution_forms),
     ("quality-vs-level", _check_quality_spec_axes),

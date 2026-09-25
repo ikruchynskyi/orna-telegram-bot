@@ -1066,6 +1066,59 @@ def _parse_quality_spec(spec: str) -> Optional[tuple]:
         return None
 
 
+# Dual wielding two one-handed weapons sums both and scales the pair. This is
+# the guild's statement of game behaviour, not derivable from the codex (no
+# other source in the repo states it) - treated exactly like the Ascension/PVP
+# rules in orna_classes: implemented as given, and pinned in _demo.
+_DUAL_WIELD_FACTOR = 0.65
+# Orna's real slot capacities: two accessory slots, one of everything else,
+# and two hands (so two one-handed weapons, or one two-hander).
+_SLOT_CAPACITY = {"head": 1, "torso": 1, "legs": 1, "weapon": 2, "off-hand": 1, "accessory": 2}
+
+
+def _check_loadout(worn: list) -> tuple:
+    """Validate a set of worn items and decide whether it dual-wields.
+
+    `worn` is [{"name", "place", "two_handed"}]; returns (conflicts,
+    dual_wield). `conflicts` are human-readable reasons the loadout cannot
+    exist, so a caller can refuse instead of totalling up a character nobody
+    can actually build.
+
+    Live 2026-09-25: asked for "best magic items for head, torso, hands, legs,
+    accessories", the loop chose the Celestial Archistaff (two_handed) AND the
+    Arisen North Star (off-hand) and summed both. A two-handed weapon occupies
+    BOTH hands - there is no off-hand and no second weapon beside it."""
+    by_slot: dict = {}
+    for item in worn:
+        by_slot.setdefault(item.get("place") or "", []).append(item)
+    weapons = by_slot.get("weapon", [])
+    offhands = by_slot.get("off-hand", [])
+    two_handed = [w for w in weapons if w.get("two_handed")]
+
+    conflicts = []
+    if two_handed:
+        blockers = [w["name"] for w in weapons if w is not two_handed[0]]
+        blockers += [o["name"] for o in offhands]
+        if blockers:
+            conflicts.append(
+                f"{two_handed[0]['name']} is TWO-HANDED and fills both hands, so it cannot be worn with "
+                f"{', '.join(blockers)}. Either drop the off-hand/second weapon, or use a one-handed weapon "
+                f"instead - two one-handed weapons dual-wield at {int(_DUAL_WIELD_FACTOR * 100)}% of their "
+                "COMBINED stats, which can beat a two-hander")
+    if len(two_handed) > 1:
+        conflicts.append("two TWO-HANDED weapons cannot both be worn: "
+                         + ", ".join(w["name"] for w in two_handed))
+    for slot, cap in _SLOT_CAPACITY.items():
+        here = by_slot.get(slot, [])
+        if len(here) > cap:
+            conflicts.append(f"{len(here)} items in the {slot} slot but only {cap} fit: "
+                             + ", ".join(w["name"] for w in here))
+    # Dual wield is two ONE-handed weapons in hand. An off-hand item is a
+    # shield/orb, not a second weapon, so it does not trigger the factor.
+    dual_wield = len(weapons) == 2 and not two_handed and not conflicts
+    return conflicts, dual_wield
+
+
 def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
     """Build a CodexEntry (orna_assess's input shape) directly from an
     aussiescodex.com codex.json record, rather than from
@@ -1080,13 +1133,14 @@ def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
 
     Flags are derived the same way orna_codex.parse_codex_html derives
     them, just from aussies' own clean enum-like place/item_type/rarity
-    fields instead of regex-matching scraped page text - more reliable
-    for everything except is_two_handed, which aussies doesn't expose as
-    a flat field at all.
-    ponytail: is_two_handed always False here - only affects a celestial
-    TWO-HANDED weapon's adornment-slot count (a narrow case), not any
-    stat projection. Add a real check (e.g. via fetch_codex_json's page
-    facts) if that specific gap is ever reported.
+    fields instead of regex-matching scraped page text - including
+    is_two_handed, which this file long assumed aussies did not expose: it
+    does, as a TAG ("two_handed", on 106 items). While it was hardcoded False
+    it both understated a celestial two-hander's adornment slots (orna_assess
+    keys its slot base off this flag) and let estimate_stats total a two-handed
+    weapon TOGETHER WITH an off-hand - an impossible loadout, reported live
+    2026-09-25. The weapon SUBTYPE is not a substitute: archistaffs are 20
+    two-handed and 67 one-handed.
     """
     stats: Dict[str, float] = {}
     for key, raw in (record.get("stats") or {}).items():
@@ -1118,8 +1172,9 @@ def _aussies_record_to_codex_entry(record: dict) -> CodexEntry:
         stats=stats,
         is_adornment=is_adornment,
         is_accessory=is_accessory,
+        place=place,
         is_celestial_weapon=is_celestial_weapon,
-        is_two_handed=False,
+        is_two_handed="two_handed" in (record.get("tags") or []),
         is_upgradable=is_upgradable,
         has_scaling_slots=has_scaling_slots,
         boss_scaling=boss_scaling,
@@ -1840,6 +1895,7 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     gear_raw, lines, skipped = {}, [], []
     if len(items) > max_items:
         skipped.append(f"передано {len(items)} предметів — враховано перші {max_items}")
+    worn: list = []
     for raw in items[:max_items]:
         if isinstance(raw, dict):
             name = str(raw.get("name") or raw.get("item") or "").strip()
@@ -1900,11 +1956,34 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
             # A non-scaling item (material, flat accessory) has no projection -
             # fall back to its raw stats rather than contributing nothing.
             got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
-        for stat, value in got.items():
-            if stat in _ESTIMATE_STATS and isinstance(value, (int, float)):
-                gear_raw[stat] = gear_raw.get(stat, 0) + value
-        lines.append(f"{entry.name} @ {q}% lv{level}: " +
-                     ", ".join(f"{k} {v:g}" for k, v in sorted(got.items()) if k in _ESTIMATE_STATS))
+        worn.append({"name": entry.name, "place": entry.place, "two_handed": entry.is_two_handed,
+                     "got": {k: v for k, v in got.items()
+                             if k in _ESTIMATE_STATS and isinstance(v, (int, float))},
+                     "q": q, "level": level})
+
+    # An impossible loadout must not be totalled up: a two-handed weapon with
+    # an off-hand is not a character anyone can build, and a stat block for one
+    # is confidently wrong rather than approximate (live 2026-09-25). Refuse and
+    # say why, so the loop re-picks - deliberately NOT the NEEDS_INPUT prefix,
+    # which arms the wait-for-a-typed-answer path: this needs the MODEL to
+    # choose a legal loadout, not the user to supply anything.
+    conflicts, dual_wield = _check_loadout(worn)
+    if conflicts:
+        return ("estimate_stats did NOT run and showed the user NOTHING - that loadout cannot be worn:\n"
+                + "\n".join(f"- {c}" for c in conflicts)
+                + "\nPick a legal loadout and call estimate_stats again. Do not present stats for the "
+                  "impossible one, and do not tell the user it works.")
+
+    for item in worn:
+        # Two one-handed weapons: the pair contributes 65% of its COMBINED
+        # stats (see _DUAL_WIELD_FACTOR), which is why dual-wielding can still
+        # beat a two-hander despite the penalty.
+        factor = _DUAL_WIELD_FACTOR if (dual_wield and item["place"] == "weapon") else 1.0
+        for stat, value in item["got"].items():
+            gear_raw[stat] = gear_raw.get(stat, 0) + value * factor
+        note = f" ×{_DUAL_WIELD_FACTOR} (dual wield)" if factor != 1.0 else ""
+        lines.append(f"{item['name']} @ {item['q']}% lv{item['level']}{note}: " +
+                     ", ".join(f"{k} {v:g}" for k, v in sorted(item["got"].items())))
 
     # BASE (specialization's absolute stats) and GEAR each go through the SAME
     # class-modifier + AL + PVP layer (orna_classes.scale), but stay separate
@@ -1954,6 +2033,24 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     if amities:
         head += ["", "Аміті/бонуси: " + html.escape(", ".join(
             f"{k} {v}" for k, v in amities.items()) if isinstance(amities, dict) else str(amities))]
+    # Class and specialization PASSIVES are conditional bonuses the stat table
+    # cannot express - Sequencer's are literally "Sequencer Doublecast (Dual
+    # Staffs)" and "Sequencer Weapon Power (Dual Staffs)", i.e. they only apply
+    # when dual-wielding staves. orna_classes.json has carried them all along
+    # and nothing surfaced them, so an estimate silently ignored exactly the
+    # nuance that decides whether a loadout is good (reported live 2026-09-25).
+    passives = [str(x) for x in ((class_entry or {}).get("passives") or [])]
+    passives += [str(x) for x in ((spec_entry or {}).get("passives") or [])]
+    hand_note = ""
+    if passives:
+        head += ["", "<b>Пасивки класу/спеціалізації</b> (умовні — таблиця їх НЕ враховує):",
+                 "\n".join(f"• {html.escape(x)}" for x in passives)]
+        if any("dual" in x.lower() for x in passives):
+            hand_note = ("виконано: дві одноручні зброї" if dual_wield
+                         else "НЕ виконано: немає двох одноручних зброй")
+            head += [f"<i>умова «dual» — {hand_note}</i>"]
+    if dual_wield:
+        head += [f"<i>дві одноручні зброї: їхні стати враховані як ×{_DUAL_WIELD_FACTOR} від суми</i>"]
     if skipped:
         head += ["", "⚠️ не враховано: " + html.escape("; ".join(skipped))]
     await message.reply_text("\n".join(head), parse_mode="HTML", disable_web_page_preview=True)
@@ -1962,10 +2059,21 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     summary = ", ".join(f"{k}={total[k]:g}" for k in _ESTIMATE_STATS if total.get(k))
     note = f" NOT counted: {'; '.join(skipped)} - say so in your answer." if skipped else ""
     pvp_note = " Assumed PVE (user didn't say - mention it)." if not pvp_given else ""
+    # The passives and the dual-wield state go in the OBSERVATION, not only in
+    # the posted table: the model cannot read what was only sent to Telegram,
+    # and these are exactly the facts it must reason with when saying whether a
+    # loadout is a good one.
+    passive_note = ""
+    if passives:
+        passive_note = (f" [conditional passives NOT in the table: {'; '.join(passives)}]"
+                        + (f" [dual-wield condition {hand_note}]" if hand_note else ""))
+    dual_note = (f" [dual wield: two one-handed weapons, their stats counted at "
+                 f"x{_DUAL_WIELD_FACTOR} of the combined total]" if dual_wield else "")
     return (f"posted a stats estimate [{shown}] ({len(lines)} item(s); "
             f"spec={spec_entry['name'] if spec_entry else 'none'}, class={class_entry['name'] if class_entry else '-'}, "
-            f"AL={al}, pvp={pvp}). Totals [{summary}].{note}{pvp_note} The table is already shown - finish() just "
-            "needs a short closing line repeating WHICH inputs were used (class, spec, AL, PVE/PVP) so the user can "
+            f"AL={al}, pvp={pvp}). Totals [{summary}].{note}{pvp_note}{dual_note}{passive_note} The table is already "
+            "shown - finish() just needs a short closing line repeating WHICH inputs were used (class, spec, AL, "
+            "PVE/PVP), plus any conditional passive above that the loadout does or does not satisfy, so the user can "
             "spot a wrong assumption.")
 
 
@@ -2319,6 +2427,29 @@ _STRATEGY_RULE = (
     "immune to every element except one - confidently wrong instead of checking."
 )
 
+_REASONING_RULE = (
+    "REASON TWICE - ONCE BEFORE THE TOOLS, ONCE BEFORE finish(). This is mandatory, and the place to do it is the "
+    "\"thought\" field.\n"
+    "1. BEFORE your first tool call, work out what the user actually WANTS and write it in \"thought\": the goal, "
+    "and then EVERY explicit constraint they stated, listed one by one - slots, quality, upgrade level, class, "
+    "specialization, Ascension Level, PVE/PVP, quantities, a game mode, a language. Constraints are the things you "
+    "will be judged on, and they are easy to read past when the request is one long sentence. Then plan which tools "
+    "answer it. A request that names several things at once is several tool calls, not one.\n"
+    "2. BEFORE finish(), reason again over what the tools actually returned: walk your constraint list and check "
+    "each one is satisfied by an OBSERVATION, not by your own assumption; check the numbers you are about to state "
+    "came back from a tool rather than from memory; check nothing a tool warned about was dropped (a refusal, a "
+    "PARTIAL list, a conditional passive, an assumption you had to make). If a constraint is unmet, fix it with "
+    "another tool call instead of writing it up as if it were met. If it cannot be met, SAY so in the answer.\n"
+    "GAME-RULE SANITY, because a stat table can be arithmetically perfect and still describe a character nobody can "
+    "build: equipment must be legal (one head/torso/legs, TWO accessory slots, and two hands - so either one "
+    "TWO-HANDED weapon alone, or two one-handed weapons, never a two-hander plus an off-hand); two one-handed "
+    "weapons DUAL-WIELD at 65% of their combined stats, which can still beat a two-hander, so do not assume the "
+    "two-hander wins; and class/specialization PASSIVES are conditional bonuses a stat total does not include "
+    "(Sequencer's Doublecast and Weapon Power both require DUAL STAVES) - name the condition and say whether the "
+    "loadout meets it. estimate_stats enforces the legality part and will refuse an impossible loadout: treat that "
+    "refusal as a real finding and re-pick, never as a reason to state the numbers anyway."
+)
+
 _COMPLETENESS_RULE = (
     "MANDATORY RULE - NEVER GENERALISE FROM A SAMPLE. If your answer would make a claim about a WHOLE group - "
     "\"all/none/only/every/no X\", \"the set is for these classes\", \"there is nothing that...\", a count, a "
@@ -2442,6 +2573,7 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_CLASS_GUIDE_RULE}\n\n"
         f"{_AGGREGATE_RULE}\n\n"
         f"{_COMPLETENESS_RULE}\n\n"
+        f"{_REASONING_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
@@ -3487,6 +3619,24 @@ def _demo() -> None:
         # e.g. `for r in results[:5]` / `for e in entries[:10]` feeding a join
         bad = _re.findall(r"for \w+ in (?:results|entries|matches|desc_entries)\[:\d+\]", src)
         assert not bad, (fn.__name__, bad, "truncate inside _names_observation, not here")
+
+    # _check_loadout: a stat total for a character nobody can build is worse
+    # than no answer. Live 2026-09-25: a two-handed archistaff was summed
+    # together with an off-hand. The 0.65 dual-wield factor is the guild's
+    # statement of game behaviour, not derivable from the codex - pinned here
+    # for the same reason orna_classes pins the AL/PVP rules.
+    w = lambda n, place, th=False: {"name": n, "place": place, "two_handed": th}
+    conflicts, dual = _check_loadout([w("Celestial Archistaff", "weapon", True), w("North Star", "off-hand")])
+    assert conflicts and not dual and "TWO-HANDED" in conflicts[0], conflicts
+    assert _check_loadout([w("A", "weapon"), w("B", "weapon")]) == ([], True), "two 1H weapons dual-wield"
+    assert _check_loadout([w("Celestial Archistaff", "weapon", True)]) == ([], False), "a 2H alone is legal"
+    assert _check_loadout([w("A", "weapon"), w("S", "off-hand")]) == ([], False), "1H + off-hand is legal"
+    over = _check_loadout([w("R1", "accessory"), w("R2", "accessory"), w("R3", "accessory")])[0]
+    assert over and "only 2 fit" in over[0], over
+    assert _check_loadout([w("H1", "head"), w("H2", "head")])[0], "two helmets must conflict"
+    assert _check_loadout([w("X", "weapon", True), w("Y", "weapon", True)])[0]
+    assert _check_loadout([]) == ([], False)
+    assert _DUAL_WIELD_FACTOR == 0.65
 
     print("telegram_orna: all checks passed")
 
