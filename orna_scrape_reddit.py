@@ -19,14 +19,23 @@ hand, the same pattern as orna_scrape_material_names.py. Run:
 
     REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 orna_scrape_reddit.py
 
-CREDENTIALS ARE REQUIRED - there is no anonymous path any more. Verified
-2026-09-24: `/user/<name>/submitted.json` returns 403 for any User-Agent,
-`old.reddit.com` 302s to a login page, and `api.reddit.com` 403s too.
-Reddit's read-only "application-only" OAuth is enough (no password, no
-account link): create a **script** app at
-https://www.reddit.com/prefs/apps, then pass its id/secret above. The
-token this requests is client-credentials only, so it can read public
-listings and nothing else.
+There is no ANONYMOUS path any more. Verified 2026-09-24:
+`/user/<name>/submitted.json` returns 403 for any User-Agent,
+`old.reddit.com` 302s to a login page, and `api.reddit.com` 403s too. Two
+ways to get the bytes, and the parser doesn't care which:
+
+1. OAuth, as above - read-only "application-only"
+   (`grant_type=client_credentials`) from a **script** app at
+   https://www.reddit.com/prefs/apps. No password, no account link. Note
+   registering one is gated behind Reddit's API terms sign-up for some
+   accounts, which is why (2) exists.
+2. `--from-dir <dir>` - build from listing JSON already saved from a
+   LOGGED-IN browser, no credentials and no network. Visit
+   `https://www.reddit.com/user/<name>/<comments|submitted>.json?limit=100&raw_json=1`
+   while signed in, save the response, repeat with `&after=<the "after"
+   value from the last page>`, and name the files so each contains the
+   username and the listing kind (`OrnaOdie-comments-1.json`). See
+   _items_from_dir.
 
 Listing limits worth knowing: Reddit caps any listing at ~1000 items, so
 a very prolific account's oldest history simply isn't reachable this way.
@@ -42,6 +51,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import httpx
 
@@ -61,10 +71,15 @@ _AUTHORS = [
     ("Widogeist", "comments"),
 ]
 
-# Below this, a comment is almost always "Fixed!", "Thanks for the report",
-# or a one-word answer - noise that would bloat the corpus and dilute a
-# fuzzy search over it. The substantive explanations are much longer.
-_MIN_BODY_CHARS = 120
+# Below this, a comment is almost always "Fixed!", "Thanks for the report" or
+# a one-word answer - noise that bloats the corpus and dilutes a fuzzy search
+# over it. Tuned DOWN from 120 after a fixture run showed 120 discarding a
+# real one: "Ward absorbs magic damage before HP does, and it does not
+# regenerate outside of town. That is intentional." is 105 characters and is
+# exactly the kind of hidden-mechanic statement this corpus exists for.
+# Losing signal costs more than keeping some noise here, because search ranks
+# by word overlap and an acknowledgement will never outrank an explanation.
+_MIN_BODY_CHARS = 80
 
 
 def _token(client_id: str, client_secret: str) -> str:
@@ -155,11 +170,44 @@ def format_entries(user: str, kind: str, items: list) -> list:
     return out
 
 
-def build_text(client_id: str, client_secret: str, progress=None) -> str:
-    token = _token(client_id, client_secret)
+def _items_from_dir(directory: Path, user: str, kind: str) -> list:
+    """Items for one user+listing out of locally saved Reddit JSON pages.
+
+    Reddit's API access keeps moving (app registration is gated behind terms
+    sign-up for some accounts), so HOW the JSON is obtained is deliberately
+    not this module's problem: OAuth, a logged-in browser saving
+    `/user/<name>/<kind>.json?limit=100&after=...`, or anything else all
+    produce the same payload. Files are matched by name containing
+    "<user>" and "<kind>" (case-insensitive), so `OrnaOdie-comments-1.json`
+    and `ornaodie_comments_page2.json` both work, and are read in sorted
+    order so `after` paging stays chronological.
+
+    Accepts either a full listing response ({"data": {"children": [...]}})
+    or a bare list of items, since hand-saved pages arrive in both shapes."""
+    items = []
+    for path in sorted(directory.glob("*.json")):
+        name = path.name.lower()
+        if user.lower() not in name or kind.lower() not in name:
+            continue
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as e:
+            print(f"  skipping {path.name}: {e}")
+            continue
+        if isinstance(blob, dict):
+            children = (blob.get("data") or {}).get("children") or []
+            items.extend(c.get("data") or {} for c in children if isinstance(c, dict))
+        elif isinstance(blob, list):
+            items.extend(x.get("data", x) if isinstance(x, dict) else {} for x in blob)
+    return items
+
+
+def build_text(client_id: str = "", client_secret: str = "", progress=None,
+               from_dir: Optional[Path] = None) -> str:
+    token = _token(client_id, client_secret) if from_dir is None else ""
     sections, seen = [], set()
     for user, kind in _AUTHORS:
-        items = _listing(token, user, kind)
+        items = _items_from_dir(from_dir, user, kind) if from_dir is not None else _listing(token, user, kind)
         entries = []
         for entry in format_entries(user, kind, items):
             key = entry.split("\n", 2)[-1][:200]   # dedupe on the text itself
@@ -185,6 +233,17 @@ def build_text(client_id: str, client_secret: str, progress=None) -> str:
 
 
 def main() -> None:
+    # --from-dir <path>: build from JSON pages already saved locally, no
+    # credentials and no network. See _items_from_dir.
+    if "--from-dir" in sys.argv:
+        directory = Path(sys.argv[sys.argv.index("--from-dir") + 1]).expanduser()
+        if not directory.is_dir():
+            sys.exit(f"{directory} is not a directory")
+        text = build_text(progress=print, from_dir=directory)
+        OUTPUT_PATH.write_text(text, encoding="utf-8")
+        print(f"Wrote {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size} bytes)")
+        return
+
     client_id = os.environ.get("REDDIT_CLIENT_ID")
     client_secret = os.environ.get("REDDIT_CLIENT_SECRET")
     if not client_id or not client_secret:
@@ -192,7 +251,10 @@ def main() -> None:
             "REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET are required - Reddit blocks anonymous\n"
             "listing reads (verified: 403 on www and api, login redirect on old.reddit).\n"
             "Create a 'script' app at https://www.reddit.com/prefs/apps and re-run with:\n"
-            "  REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 orna_scrape_reddit.py"
+            "  REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 orna_scrape_reddit.py\n"
+            "\nOr, if app registration is gated for your account, save the listing JSON from a\n"
+            "logged-in browser and build from that instead - no credentials needed:\n"
+            "  python3 orna_scrape_reddit.py --from-dir ~/reddit_json"
         )
     text = build_text(client_id, client_secret, progress=print)
     OUTPUT_PATH.write_text(text, encoding="utf-8")
