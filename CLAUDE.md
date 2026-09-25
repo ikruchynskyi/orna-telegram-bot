@@ -73,6 +73,11 @@ glue around three live, unmocked external services.
   `tower.ts` (pinned commit) and cross-checked against that original
   TypeScript's actual output under Node before deploying — see the `/orna`
   section. Pure time-based math, no external data source at all.
+- `orna_classes.py` / `orna_classes.json` / `orna_scrape_classes.py` — the
+  per-class and per-specialization stat modifiers, bonus stats and passive
+  effects behind aussiescodex's stats estimator, plus the estimator math
+  (Ascension Level, PVP). Committed, NOT crawlable — see the `/orna`
+  section.
 - `orna_bonuses.py` — Amities and Crucibles scraped from aussiescodex's
   two HTML pages, disk-cached a week like `orna_releases.py`. See the
   `/orna` section for why these needed a source of their own.
@@ -1078,6 +1083,47 @@ control flow:
   to a known Material Forecast material at all, it falls through to
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
+
+### Class / specialization stats (`orna_classes.py`) - the player stats estimator
+
+The data behind aussiescodex's own stats estimator, extracted from the
+Next.js chunk that feeds their UI. **Committed, and deliberately not on a
+TTL like every other scraped source**, because there is no stable address
+to poll: the chunk's filename carries a content hash
+(`218-cb72350c16e02252.js`) that changes on every one of their deploys, so
+yesterday's URL 404s. `orna_scrape_classes.py` takes the URL as an
+argument and prints where to find the current one. Same
+committed-and-manual treatment as `orna_reddit.txt`, for a different
+reason — that one is append-only history, this one has no fetchable URL.
+
+- No JS engine needed: the payload is three `JSON.parse('{...}')` literals,
+  pulled out as text. The extractor scans for the closing quote rather than
+  regexing, because the payload contains escaped quotes a non-greedy regex
+  would stop on.
+- **The blobs are classified by SHAPE, not position.** A rebuild could
+  reorder them, and mislabelling the absolute stat table as percent
+  modifiers would poison every estimate while still looking plausible.
+- **Two kinds of entry, and confusing them gives wrong-but-believable
+  numbers:** 19 tier-10 SPECIALIZATIONS carry ABSOLUTE stats (Gilgamesh =
+  hp 12509, attack 1304); 40 CLASSES carry PERCENT `statModifiers`
+  (Brawler = hp +5%). A class therefore returns modifiers only and an
+  empty stat block unless the caller supplies a base — it must never
+  invent one.
+- Estimator rules, which are the guild's statement of game behaviour and
+  are NOT derivable from the data, so they are pinned in `_demo()`:
+  **Ascension Level is +1% per level on every stat (AL 100 doubles), PVP
+  doubles HP only.** Both compose multiplicatively with the class modifier.
+- Two name-matching traps, both found by the self-check: aussiescodex
+  spells it **"Diety"** while players type "deity" (fuzzy match handles
+  it), and their **"None"** placeholder entry is all zeros — leaving it in
+  the pool made any string containing "none" (e.g. "nonexistent") resolve
+  to a class of zeros, so it is filtered out. Substring matching is also
+  one-directional on purpose: the typed name may be part of a real name
+  ("summoner" → "Grand Summoner"), never the reverse, or any sentence
+  mentioning a short class name resolves to it.
+- Surfaced through `knowledge_search` like the other non-codex sources.
+  Verified end to end: "що дає клас Duelist і скільки HP у Gilgamesh на
+  AL 100 в PVP?" returned the modifiers, the passive, and the scaled HP.
 
 ### Amities and Crucibles (`orna_bonuses.py`)
 

@@ -75,6 +75,7 @@ from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
+import orna_classes
 import orna_guides
 import orna_knowledge
 import orna_reddit
@@ -1488,6 +1489,20 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
         if sources is not None:
             _add_source(sources, "Amities / Crucibles (aussiescodex)", orna_bonuses.AMITIES_URL)
         blocks.append("AMITY / CRUCIBLE DATA (aussiescodex):\n" + bonuses[:2000])
+
+    # Class/specialization stat modifiers, bonus stats and passives. Not in
+    # the codex either - see orna_classes.
+    try:
+        classes = await asyncio.to_thread(orna_classes.search, query)
+    except Exception as e:
+        logger.warning("orna: class lookup failed for %r (%s)", query[:60], e)
+        classes = ""
+    if classes:
+        blocks.append(
+            "CLASS / SPECIALIZATION DATA (aussiescodex stats estimator). Stat modifiers are PERCENTAGES "
+            "applied to your gear-derived stats; a tier-10 specialization also has absolute base stats. "
+            "Ascension Level adds +1% per level to every stat (AL 100 doubles them), and PVP doubles HP "
+            "only:\n" + classes[:2000])
     if reddit_hits:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
@@ -1647,7 +1662,10 @@ _TOOLS_TEXT = (
     "knowledge_search/web_search, read this as source material and write the real answer in finish().\n"
     "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets, "
     "AMITY and CRUCIBLE tables (the gear-bonus affixes: their tiers, roll ranges and which equipment slots each "
-    "can appear on - in no codex page, so this tool is the only way to answer them), "
+    "can appear on), CLASS and SPECIALIZATION data (each one's stat modifiers, bonus stats and passive "
+    "effects, plus tier-10 base stats - use it for \"what does class X give\" and stat-estimate questions; "
+    "Ascension Level is +1%/level on every stat and PVP doubles HP) - none of that is in any codex page, so "
+    "this tool is the only way to answer those, "
     "PLUS what Orna's own developers (u/OrnaOdie, u/Widogeist) have explained on reddit, which is where hidden "
     "mechanics, exact formulas and \"why it actually works like that\" answers live. A DEVELOPER COMMENTS block "
     "in the result outranks the sheets above it, but can be years old - check releases() before quoting a number "

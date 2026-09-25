@@ -1,0 +1,889 @@
+{
+ "_source": "https://www.aussiescodex.com/_next/static/chunks/218-cb72350c16e02252.js",
+ "classes": {
+  "Apprentice": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "magic": 2,
+    "mana": 5
+   },
+   "tier": 3
+  },
+  "Assassin": {
+   "bonusStats": {
+    "damage_to_ward": 10,
+    "healing": 100,
+    "status_effect_chance": 100,
+    "status_effect_duration": 1
+   },
+   "passiveEffects": [
+    "T. Def ↓↓↓: 12%",
+    "Bleeding: 5%"
+   ],
+   "statModifiers": {
+    "attack": 3,
+    "dexterity": 25
+   },
+   "tier": 9
+  },
+  "Bard": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Lulled: 4%"
+   ],
+   "statModifiers": {
+    "mana": 20
+   },
+   "tier": 7
+  },
+  "Beastmaster": {
+   "bonusStats": {
+    "bestial_bond": 1,
+    "follower_act": 5,
+    "follower_stats": 50
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 7
+  },
+  "Benefactor": {
+   "bonusStats": {
+    "summon_pacts": -50,
+    "summon_stats": 130,
+    "summon_turns": -1
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": -30,
+    "hp": -25,
+    "resistance": -30
+   },
+   "tier": 9
+  },
+  "Berserker": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 5,
+    "hp": -10
+   },
+   "tier": 5
+  },
+  "Blade of Finesse": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Blade of Finess Swash"
+   ],
+   "statModifiers": {
+    "attack": 5,
+    "defense": -8,
+    "magic": 3,
+    "resistance": -8
+   },
+   "tier": 9
+  },
+  "Brawler": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 2,
+    "hp": 5
+   },
+   "tier": 3
+  },
+  "Cataphract": {
+   "bonusStats": {
+    "ward_recovery": 3,
+    "ward_start": 3
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 10,
+    "hp": 12,
+    "resistance": 10
+   },
+   "tier": 9
+  },
+  "Charmer": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Lulled: 5%"
+   ],
+   "statModifiers": {
+    "mana": 30
+   },
+   "tier": 9
+  },
+  "Chronomancer": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Stasis: 4%"
+   ],
+   "statModifiers": {
+    "foresight": 7,
+    "magic": 10
+   },
+   "tier": 9
+  },
+  "Cleric": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 2,
+    "hp": 10,
+    "resistance": 2
+   },
+   "tier": 5
+  },
+  "Conqueror": {
+   "bonusStats": {
+    "settlement_area_defence": 25
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "Disciple of Finesse": {
+   "bonusStats": {
+    "parting_remarks": 40
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 3,
+    "magic": 3
+   },
+   "tier": 5
+  },
+  "Duelist": {
+   "bonusStats": {
+    "weapon_power": 15
+   },
+   "passiveEffects": [
+    "Duelist Weapon Power (Dual Wield)"
+   ],
+   "statModifiers": {
+    "defense": -5,
+    "dexterity": 25,
+    "resistance": -5
+   },
+   "tier": 5
+  },
+  "Great Oracle": {
+   "bonusStats": {
+    "additional_amity_slots": 1,
+    "memory_hunting": 15
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "Guardian": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "hp": 10,
+    "resistance": 5
+   },
+   "tier": 5
+  },
+  "High Cleric": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 2,
+    "hp": 10,
+    "resistance": 2
+   },
+   "tier": 9
+  },
+  "Hunter": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 5,
+    "hp": 10
+   },
+   "tier": 5
+  },
+  "Inquisitor": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 5,
+    "hp": 10,
+    "mana": -10,
+    "resistance": 5
+   },
+   "tier": 7
+  },
+  "Magus": {
+   "bonusStats": {
+    "mana_reduction": 25
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "magic": 5,
+    "resistance": 5
+   },
+   "tier": 7
+  },
+  "Maji": {
+   "bonusStats": {
+    "low_mana_stats": 25,
+    "mana_reduction": 50
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": -10,
+    "magic": 10,
+    "resistance": 10
+   },
+   "tier": 9
+  },
+  "Merchant": {
+   "bonusStats": {
+    "exp_bonus": -25,
+    "gold_bonus": 20,
+    "luck_bonus": 20
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "None": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 0
+  },
+  "Oracle": {
+   "bonusStats": {
+    "additional_amity_slots": 1
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "Pikeman": {
+   "bonusStats": {
+    "ward_start": 2
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 3
+   },
+   "tier": 5
+  },
+  "Raider": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 20,
+    "defense": 2,
+    "hp": -20,
+    "resistance": 2
+   },
+   "tier": 9
+  },
+  "Ranger": {
+   "bonusStats": {
+    "accuracy": 30
+   },
+   "passiveEffects": [],
+   "statModifiers": {
+    "attack": 5,
+    "hp": 10
+   },
+   "tier": 7
+  },
+  "Scholar": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "defense": 3,
+    "mana": 10
+   },
+   "tier": 5
+  },
+  "Seeker": {
+   "bonusStats": {
+    "view_distance": 20
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "Sequencer": {
+   "bonusStats": {
+    "turn_reduction": 25,
+    "weapon_power": 15
+   },
+   "passiveEffects": [
+    "Sequencer Doublecast (Dual Staffs)",
+    "Sequencer Weapon Power (Dual Staffs)"
+   ],
+   "statModifiers": {
+    "defense": -5,
+    "dexterity": 15,
+    "resistance": -5
+   },
+   "tier": 9
+  },
+  "Stargazer": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "magic": 5
+   },
+   "tier": 5
+  },
+  "Swashbuckler": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Blade of Finess Swash"
+   ],
+   "statModifiers": {
+    "attack": 5,
+    "defense": -5,
+    "magic": 3,
+    "resistance": -3
+   },
+   "tier": 7
+  },
+  "Tamer": {
+   "bonusStats": {
+    "bestial_bond": 1,
+    "follower_act": 8,
+    "follower_stats": 55
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 9
+  },
+  "The Traveler": {
+   "bonusStats": {
+    "aspect_charging": 100
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 5
+  },
+  "Time Mage": {
+   "bonusStats": {},
+   "passiveEffects": [
+    "Stasis: 3%"
+   ],
+   "statModifiers": {
+    "foresight": 5,
+    "magic": 7
+   },
+   "tier": 7
+  },
+  "Titanfelled": {
+   "bonusStats": {
+    "tower_shards": 10
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 9
+  },
+  "Trickster": {
+   "bonusStats": {},
+   "passiveEffects": [],
+   "statModifiers": {
+    "dexterity": 5
+   },
+   "tier": 3
+  },
+  "Warden": {
+   "bonusStats": {
+    "settlement_area_defence": 15,
+    "ward_start": 2
+   },
+   "passiveEffects": [],
+   "statModifiers": {},
+   "tier": 7
+  },
+  "Zwei-fencer": {
+   "bonusStats": {
+    "two_handed_power": 12
+   },
+   "passiveEffects": [
+    "Stunned: 5%"
+   ],
+   "statModifiers": {
+    "dexterity": 15,
+    "ward": 7
+   },
+   "tier": 7
+  }
+ },
+ "spec_extras": {
+  "Beowulf": {
+   "bonusStats": {
+    "Follower/Summon AI": 5,
+    "bestial_bond": 3,
+    "follower_act": 12,
+    "follower_protect": 12,
+    "follower_stats": 110,
+    "hybrid_damage": 25,
+    "low_hp_stats": 50,
+    "mana_siphon": 25,
+    "valhallan_power": 110
+   }
+  },
+  "Beowulf Auriga": {
+   "bonusStats": {
+    "Follower/Summon AI": 20,
+    "follower_act": 15,
+    "follower_protect": 12,
+    "follower_stats": 130,
+    "follower_turn_chance": 30,
+    "low_hp_stats": 50,
+    "mana_siphon": 25,
+    "valhallan_power": 120
+   }
+  },
+  "Beowulf Hydrus": {
+   "bonusStats": {
+    "bestial_bond": 2,
+    "crit_chance": 7,
+    "follower_act": 7,
+    "follower_stats": 75,
+    "hybrid_damage": 40,
+    "recharge_hp_on_crit": 25,
+    "second_chance": 50
+   },
+   "passiveEffects": [
+    "Blight: 5%"
+   ]
+  },
+  "Diety": {
+   "bonusStats": {
+    "apex_rate": 65,
+    "apex_start": 25,
+    "buff_duration": 40,
+    "debuff_fade": 40,
+    "low_hp_stats": 60,
+    "low_mana_stats": 60,
+    "second_chance": 50,
+    "status_protection": 35
+   }
+  },
+  "Diety Ara": {
+   "bonusStats": {
+    "apex_effect": 10,
+    "apex_rate": 50,
+    "apex_start": 50,
+    "apex_used_stats": 20,
+    "buff_duration": 40,
+    "debuff_fade": 40,
+    "second_chance": 50,
+    "status_protection": 35
+   }
+  },
+  "Diety Ursa": {
+   "bonusStats": {
+    "apex": -50,
+    "apex_rate": 90,
+    "buff_duration": 40,
+    "debuff_fade": 40,
+    "low_hp_stats": 80,
+    "low_mana_stats": 50,
+    "second_chance": 50,
+    "status_protection": 35,
+    "turn_chance": 100
+   }
+  },
+  "Gilgamesh": {
+   "bonusStats": {
+    "bastille": 100,
+    "collateral_chance": 15,
+    "collateral_damage": 40,
+    "mana-ward_recovery": 50,
+    "second_chance": 50,
+    "settlement_area_defence": 10,
+    "status_protection": 60,
+    "ward_power": 50,
+    "ward_recovery": 5,
+    "ward_start": 10
+   }
+  },
+  "Gilgamesh Hercules": {
+   "bonusStats": {
+    "bastille": 120,
+    "collateral_chance": 15,
+    "collateral_damage": 30,
+    "off_hands": 15,
+    "second_chance": 50,
+    "settlement_area_defence": 10,
+    "status_protection": 50,
+    "ward_power": 100,
+    "ward_recovery": 7,
+    "ward_start": 12
+   }
+  },
+  "Gilgamesh Ursa": {
+   "bonusStats": {
+    "collateral_chance": 20,
+    "collateral_damage": 50,
+    "collateral_damage_hp_recovery": 10,
+    "counter_chance_pve": 20,
+    "counter_damage": 75,
+    "mana-ward_recovery": 50,
+    "second_chance": 50,
+    "status_protection": 50,
+    "two_handed_power": 20,
+    "ward": 30
+   }
+  },
+  "Grand Summoner": {
+   "bonusStats": {
+    "dark_damage": 50,
+    "holy_damage": 50,
+    "quick_summons": 2,
+    "summon_protection": 25,
+    "summon_stats": 200
+   }
+  },
+  "Grand Summoner Auriga": {
+   "bonusStats": {
+    "Follower/Summon AI": 20,
+    "debuff_fade": 50,
+    "quick_summons": 2,
+    "summon_pacts": -30,
+    "summon_protection": 25,
+    "summon_stats": 220
+   }
+  },
+  "Grand Summoner Hydrus": {
+   "bonusStats": {
+    "auto_summon": 40,
+    "quick_summons": 2,
+    "sacrifice_effects": 10,
+    "second_chance": 50,
+    "souls_collected_stats": 10,
+    "summon_pacts": 60,
+    "summon_stats": 80
+   }
+  },
+  "Heretic": {
+   "bonusStats": {
+    "bloodflasks": 2,
+    "elemental_immunity_damage": 25,
+    "elemental_weakness": 12,
+    "life_siphon": 10,
+    "low_mana_stats": 100,
+    "mana_rush": 50,
+    "manaflasks": 3,
+    "second_chance": 50,
+    "spell_casting_damage": -40,
+    "status_protection": 50
+   }
+  },
+  "Heretic Ara": {
+   "bonusStats": {
+    "bloodflasks": 1,
+    "damage_limit_break": 400,
+    "elemental_immunity_damage": 25,
+    "elemental_weakness": 12,
+    "low_mana_stats": 100,
+    "mana_reduction": -25,
+    "mana_rush": 50,
+    "manaflasks": 4,
+    "second_chance": 50,
+    "sigils": 15,
+    "spell_casting_damage": -40,
+    "status_protection": 50
+   }
+  },
+  "Heretic Corvus": {
+   "bonusStats": {
+    "bloodflasks": 2,
+    "crit_status_fade_chance": 3,
+    "elemental_immunity_damage": 25,
+    "elemental_weakness": 12,
+    "low_mana_stats": 100,
+    "manaflasks": 3,
+    "max_dodge_chance": 60,
+    "spell_casting_damage": -40,
+    "status_protection": 35
+   }
+  },
+  "None": {
+   "bonusStats": {},
+   "passiveEffects": []
+  },
+  "Realmshifter": {
+   "bonusStats": {
+    "avidity": 15,
+    "damage_to_ward": 125,
+    "low_hp_stats": 100,
+    "max_dodge_chance": 60,
+    "recharge_hp_on_crit": 25,
+    "self_damage_reduction": 100,
+    "view_distance": 20
+   },
+   "passiveEffects": [
+    "T. Def ↓: 12%",
+    "T. Def ↓↓: 4%",
+    "Blind: 5%"
+   ]
+  },
+  "Realmshifter Corvus": {
+   "bonusStats": {
+    "avidity": 15,
+    "crit_damage": -10,
+    "crit_status_fade_chance": 3,
+    "critical_chain": 10,
+    "low_hp_stats": 100,
+    "max_dodge_chance": 60,
+    "self_damage_reduction": 100
+   }
+  },
+  "Realmshifter Dorado": {
+   "bonusStats": {
+    "avidity": 20,
+    "dorado": 3000,
+    "low_hp_stats": 125,
+    "view_distance": 20,
+    "ward_recovery": 3,
+    "ward_start": 6
+   },
+   "passiveEffects": [
+    "Blind: 5%"
+   ]
+  }
+ },
+ "spec_stats": {
+  "Beowulf": {
+   "attack": 1005,
+   "crit": 0,
+   "defense": 279,
+   "dexterity": 135,
+   "foresight": 500,
+   "hp": 11430,
+   "magic": 1005,
+   "mana": 1822,
+   "resistance": 920,
+   "view_distance": 0
+  },
+  "Beowulf Auriga": {
+   "attack": 704,
+   "crit": 0,
+   "defense": 279,
+   "dexterity": 135,
+   "foresight": 500,
+   "hp": 10287,
+   "magic": 704,
+   "mana": 1822,
+   "resistance": 920,
+   "view_distance": 0
+  },
+  "Beowulf Hydrus": {
+   "attack": 1608,
+   "crit": 0,
+   "defense": 279,
+   "dexterity": 310,
+   "foresight": 500,
+   "hp": 14859,
+   "magic": 1608,
+   "mana": 2363,
+   "resistance": 920,
+   "view_distance": 0
+  },
+  "Diety": {
+   "attack": 1270,
+   "crit": 0,
+   "defense": 1058,
+   "dexterity": 1058,
+   "foresight": 500,
+   "hp": 12740,
+   "magic": 1270,
+   "mana": 2499,
+   "resistance": 1058,
+   "view_distance": 0
+  },
+  "Diety Ara": {
+   "attack": 1143,
+   "crit": 0,
+   "defense": 952,
+   "dexterity": 1058,
+   "foresight": 500,
+   "hp": 11466,
+   "magic": 1397,
+   "mana": 2499,
+   "resistance": 1163,
+   "view_distance": 0
+  },
+  "Diety Ursa": {
+   "attack": 1397,
+   "crit": 0,
+   "defense": 1164,
+   "dexterity": 1058,
+   "foresight": 500,
+   "hp": 12740,
+   "magic": 1143,
+   "mana": 2249,
+   "resistance": 952,
+   "view_distance": 0
+  },
+  "Gilgamesh": {
+   "attack": 1304,
+   "crit": 0,
+   "defense": 674,
+   "dexterity": 162,
+   "foresight": 500,
+   "hp": 12509,
+   "magic": 675,
+   "mana": 823,
+   "resistance": 674,
+   "view_distance": 0
+  },
+  "Gilgamesh Hercules": {
+   "attack": 1043,
+   "crit": 0,
+   "defense": 808,
+   "dexterity": 129,
+   "foresight": 500,
+   "hp": 12509,
+   "magic": 675,
+   "mana": 743,
+   "resistance": 808,
+   "view_distance": 0
+  },
+  "Gilgamesh Ursa": {
+   "attack": 1304,
+   "crit": 0,
+   "defense": 674,
+   "dexterity": 567,
+   "foresight": 500,
+   "hp": 22516,
+   "magic": 675,
+   "mana": 826,
+   "resistance": 674,
+   "view_distance": 0
+  },
+  "Grand Summoner": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 141,
+   "dexterity": 213,
+   "foresight": 1000,
+   "hp": 6459,
+   "magic": 845,
+   "mana": 2134,
+   "resistance": 465,
+   "view_distance": 0
+  },
+  "Grand Summoner Auriga": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 141,
+   "dexterity": 213,
+   "foresight": 1000,
+   "hp": 6459,
+   "magic": 676,
+   "mana": 2561,
+   "resistance": 465,
+   "view_distance": 0
+  },
+  "Grand Summoner Hydrus": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 141,
+   "dexterity": 213,
+   "foresight": 500,
+   "hp": 7750,
+   "magic": 1014,
+   "mana": 1707,
+   "resistance": 465,
+   "view_distance": 0
+  },
+  "Heretic": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 224,
+   "dexterity": 443,
+   "foresight": 500,
+   "hp": 11162,
+   "magic": 1636,
+   "mana": 3023,
+   "resistance": 851,
+   "view_distance": 0
+  },
+  "Heretic Ara": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 224,
+   "dexterity": 443,
+   "foresight": 500,
+   "hp": 11162,
+   "magic": 1799,
+   "mana": 3023,
+   "resistance": 851,
+   "view_distance": 0
+  },
+  "Heretic Corvus": {
+   "attack": 135,
+   "crit": 0,
+   "defense": 224,
+   "dexterity": 443,
+   "foresight": 500,
+   "hp": 11162,
+   "magic": 1636,
+   "mana": 3023,
+   "resistance": 851,
+   "view_distance": 0
+  },
+  "None": {
+   "attack": 0,
+   "crit": 0,
+   "defense": 0,
+   "dexterity": 0,
+   "foresight": 0,
+   "hp": 0,
+   "magic": 0,
+   "mana": 0,
+   "resistance": 0,
+   "view_distance": 0
+  },
+  "Realmshifter": {
+   "attack": 1877,
+   "crit": 0,
+   "defense": 340,
+   "dexterity": 826,
+   "foresight": 500,
+   "hp": 10108,
+   "magic": 34,
+   "mana": 727,
+   "resistance": 340,
+   "view_distance": 0
+  },
+  "Realmshifter Corvus": {
+   "attack": 1689,
+   "crit": 0,
+   "defense": 340,
+   "dexterity": 908,
+   "foresight": 500,
+   "hp": 9097,
+   "magic": 34,
+   "mana": 654,
+   "resistance": 340,
+   "view_distance": 0
+  },
+  "Realmshifter Dorado": {
+   "attack": 1502,
+   "crit": 0,
+   "defense": 408,
+   "dexterity": 826,
+   "foresight": 500,
+   "hp": 12129,
+   "magic": 34,
+   "mana": 872,
+   "resistance": 408,
+   "view_distance": 0
+  }
+ }
+}
