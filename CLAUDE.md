@@ -2338,6 +2338,49 @@ forecast date (year-1900 non-leap parse). See
 `.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
 the ten patterns these cluster into.
 
+## The test suite (`orna_test_suite.py`)
+
+Three tiers, run before and after a major update and compared. No framework,
+no mocks - same reasoning as everything else here: mocking the codex/sheets/
+Ollama would test nothing that actually breaks. `python3 orna_test_suite.py`
+is tier 0 alone (~1s); `TIER=0,1,2,3 N=3` is the real gate (~20 min, so record
+a baseline one tier at a time - `SAVE_BASELINE=1` MERGES rather than replaces
+for exactly that reason).
+
+- **Tier 0 (9 checks, no LLM) must be 100%.** It runs each module's own
+  `_demo()` rather than restating their asserts, plus cross-module ground-truth
+  invariants (the `useable_by` absent-field rule, the bogus-field report, the
+  observation-honesty helper, the quality boundaries, the possessive name
+  ladder, the raid's own class split).
+- **Tiers 1-3 score a PASS RATE over N runs**, graded on FACTS (a substring
+  that must appear, one that must not, which tools the trace contains) with
+  every expectation DERIVED FROM LIVE DATA at run time - a suite of pinned
+  numbers would fail on the next game patch instead of on a regression.
+- Determinism levers: `ollama_client` now takes `ORNA_LLM_TEMPERATURE`/
+  `ORNA_LLM_SEED` (env-gated - **unset in production, and then the payload is
+  byte-identical to before**, same rule as `tools`). A/B measured on a real
+  step prompt: 5/5 usable JSON with and without them, so pinning sampling
+  costs nothing.
+- **`finish()` is NEVER in the action trace** - `_advance_inner`'s finish
+  branch returns before the assistant message is appended. So a case asserting
+  "research, then finish" as two tool calls can never pass. Cost two false
+  failures before it was spotted.
+- **Baseline of 2026-09-25**: 11 of 12 cases 3/3, `trifecta-classes` 2/3.
+  A single drop is weak evidence - `stacking-total` measured 1/3 then 3/3 on
+  consecutive batches with no code change, `ukrainian-lock` 1/2 then 3/3.
+  Re-run with `CASE=<id> N=5` before believing a regression.
+- **Check the EXPECTATION before "fixing" the bot.** Twice while building this
+  the grader was wrong and the loop was right. The sharper one: the case
+  asserted "no Judge Trifecta item is useable by mages", and a live run
+  correctly answered that **`Scroll of the Judges Trifecta` IS `all_classes`**
+  - the substring `"judge trifecta"` does not match `"judgeS trifecta"`, the
+  same plural/possessive lossiness as the `_name_candidates` bug. **A set-name
+  substring is a lossy stand-in for set membership; the raid's own `drops`
+  list is the fact** (Judge Trifecta Maximus drops exactly 12 items, 4 warrior
+  / 4 thief / 4 valhallan_summoner, none mage-useable - and the scroll is NOT
+  one of them). Note this also makes the original bug report's question
+  genuinely ambiguous, which is why that case now asks about the raid's drops.
+
 ## Verifying changes
 
 There's no test suite. The working pattern used throughout development:

@@ -1,0 +1,90 @@
+{
+  "saved": "2026-09-25 15:02:08",
+  "n": 3,
+  "cases": [
+    {
+      "id": "falx-facts",
+      "tier": 1,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "feathers-slots",
+      "tier": 1,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "helmet-slot",
+      "tier": 1,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "robe-classes",
+      "tier": 1,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "eos-floor",
+      "tier": 2,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "godforged-orn",
+      "tier": 2,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "top-magic",
+      "tier": 2,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "trifecta-classes",
+      "tier": 2,
+      "runs": 3,
+      "passes": 2,
+      "rate": 0.6666666666666666
+    },
+    {
+      "id": "heretic-build",
+      "tier": 3,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "sirus-strategy",
+      "tier": 3,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "stacking-total",
+      "tier": 3,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    },
+    {
+      "id": "ukrainian-lock",
+      "tier": 3,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
+    }
+  ]
+}

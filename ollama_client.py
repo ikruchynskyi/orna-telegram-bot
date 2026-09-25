@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -181,6 +182,24 @@ def _from_tool_calls(message: dict) -> Optional[dict]:
     return obj
 
 
+def _sampling_options() -> dict:
+    """{"temperature": float, "seed": int} from ORNA_LLM_TEMPERATURE /
+    ORNA_LLM_SEED, or {} when neither is set. Read once at import: this is a
+    test-harness knob, not something to flip per request."""
+    out: dict = {}
+    for env, key, cast in (("ORNA_LLM_TEMPERATURE", "temperature", float), ("ORNA_LLM_SEED", "seed", int)):
+        raw = os.environ.get(env)
+        if raw not in (None, ""):
+            try:
+                out[key] = cast(raw)
+            except ValueError:
+                logger.warning("ollama: ignoring unparseable %s=%r", env, raw)
+    return out
+
+
+_SAMPLING_OPTIONS = _sampling_options()
+
+
 async def chat_json(host: str, model: str, messages: list[dict], headers: Optional[dict] = None,
                      timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None) -> dict:
     """POST /api/chat with think:True + format=json, return the parsed
@@ -197,6 +216,13 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
     payload = {"model": model, "messages": messages, "stream": False, "format": "json", "think": True}
     if tools:
         payload["tools"] = tools
+    # Opt-in reproducibility for the test suite (orna_test_suite.py). Ollama
+    # takes temperature/seed under "options"; a fixed pair makes a step's reply
+    # repeatable for the same prompt, which is the only real determinism lever
+    # a suite over this loop has. Unset in production, and then the payload is
+    # byte-identical to before - same reason `tools` is only added when truthy.
+    if _SAMPLING_OPTIONS:
+        payload["options"] = dict(_SAMPLING_OPTIONS)
     usage_stats.record_llm_call(model, "cloud" if host == OLLAMA_CLOUD_HOST else "local")
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
