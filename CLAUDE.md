@@ -99,6 +99,12 @@ glue around three live, unmocked external services.
   `orna_material_names_uk.json`/`orna_scrape_material_names.py`. See the
   `/orna` section for sources and why this is flattened text rather than
   typed tables.
+- `orna_echo.py` / `orna_echo.txt` / `orna_scrape_echo.py` — playerecho.com's
+  37 Orna guides, the only source in the repo that states FORMULAS and
+  mechanics outright (Ward capacity, Ascension altar costs, dungeon
+  cooldowns/godforging, anguish proofs, per-event tier gates). Committed and
+  re-crawled by hand like `orna_reddit.txt`; searched at SECTION level and
+  surfaced through `knowledge_search`. See the `/orna` section.
 - `orna_guides.py` / `orna_guide_<topic>.txt` (×8) / `orna_scrape_guides.py`
   — long-form WRITTEN community class/build guides (Summoner, Realmshifter/
   Thief, Deity, Gilgamesh, Beowulf, Swash, Heretic, Towers of Olympia
@@ -1446,6 +1452,62 @@ no answer anywhere in the bot.
   ~30KB and this is another *provenance* of answer, not another question
   to ask. Verified end to end: "які слоти можуть мати crucible на avidity
   і який максимальний відсоток?" → all five slots, max 10%, cited.
+
+### The playerecho guide corpus - the only source that states a FORMULA
+
+`orna_echo.py` / `orna_echo.txt` / `orna_scrape_echo.py`, added 2026-09-25 on
+ask. Every other source describes RESULTS: the codex gives an entry's own
+numbers and never a formula, the community sheets tabulate outcomes, the reddit
+corpus has devs explaining things in passing. playerecho.com/orna's 37 guides
+write the mechanics down - and the gaps they fill were real: before this the bot
+had no source at all for "how is Ward capacity calculated" (only a dev Reddit
+quote that Ward absorbs magic damage first), for Ascension altar costs, for
+dungeon modes/cooldowns/godforging, or for per-EVENT tier gates and rewards -
+`orna_calendar` knows only WHICH events are live, never their content.
+
+- **The formulas live in `<pre><code>`, and a parser that reads only `<p>`/`<li>`
+  silently drops every one of them.** First version captured "Base Ward is
+  calculated from your stats:" and then jumped to the worked example, losing
+  `Ward_Base = (HP + MP) / 2` entirely - the single most valuable line on the
+  site. `<pre>` is collected, and its line breaks are PRESERVED (prose is
+  collapsed) because a multi-line formula squeezed onto one line is unreadable.
+- **The `<h1>` is outside `<article>`**, in the page's hero `<section>`, so
+  `article.find("h1")` titled every block with the URL slug.
+- **The site serves `Content-Type: text/html` with NO charset, so `requests`
+  decoded UTF-8 as ISO-8859-1** and `×`/`→`/`★` arrived as `Ã`/`â`. That
+  corrupted exactly the characters the formulas are made of. `_fetch_text` sets
+  `resp.encoding = resp.apparent_encoding`, and `build_text` REFUSES to write a
+  corpus containing mojibake sequences - a silently mis-decoded corpus is worse
+  than a failed crawl. Both pinned in the scraper's `_demo()`.
+- Enumerated from the site's own **sitemap**, not the four paginated index
+  pages, so a pagination change cannot silently drop an article. `robots.txt` is
+  `Allow: /` (checked 2026-09-25); the crawler identifies itself honestly and
+  sleeps 1s between pages.
+- **Searched at SECTION level** (`## Heading` blocks, 639 of them across 37
+  guides), not line level - that is why it is a separate module from
+  `orna_knowledge` rather than a 17th section in it. That corpus is tabular, so
+  one row IS the answer; here the answer is a paragraph plus the formula it
+  introduces, and returning just the line containing "Ward" would strip the
+  formula two lines below. Same argument `orna_reddit`/`orna_guides` make.
+  Heading and title hits are weighted above body hits (3× / 2×): a heading is
+  what a section is ABOUT, a body word may be an aside.
+- Surfaced through `knowledge_search` as a labelled `GUIDE MECHANICS /
+  FORMULAS` block, **not a 19th tool** - the model already picks between 18
+  actions and this is another provenance, not another question. Citations are
+  per-ARTICLE URLs, not one vague site link.
+- Cross-checked against the repo's own ported math, per the mechanics skill's
+  golden rule: the guides' `Total multiplier = (1 + bonuses) × (1 + Ascension
+  Level / 100)` AGREES with `orna_classes.scale`'s +1%/level. The Ward formula
+  has no counterpart in the repo, so it is new knowledge rather than a conflict.
+- Verified end to end: "how is ward capacity calculated in orna?" answers
+  `(HP + MP) / 2` 2/2 via one `knowledge_search` call, and the suite's
+  `ward-formula` case (tier 2) is 3/3 with the expected formula READ OUT OF THE
+  CORPUS at run time rather than hardcoded.
+- Overlap is deliberate and harmless: 8 of the 37 are class guides that
+  `orna_guide_*.txt` also covers, from a different author. Two (`hoa-map`,
+  `orna-vs-hero-of-aethric`) are about Hero of Aethric, the same studio's other
+  game - kept for the same reason the reddit filter keeps "aethric", since the
+  mechanics discussions cross over.
 
 ### The reddit developer corpus - searched by `knowledge_search`, not its own tool
 

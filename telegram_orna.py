@@ -77,6 +77,7 @@ from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
+import orna_echo
 import orna_classes
 import orna_guides
 import orna_knowledge
@@ -1670,6 +1671,25 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
             "applied to your gear-derived stats; a tier-10 specialization also has absolute base stats. "
             "Ascension Level adds +1% per level to every stat (AL 100 doubles them), and PVP doubles HP "
             "only:\n" + classes[:2000])
+    # Written guides that state the MECHANICS AND FORMULAS outright - the one
+    # thing no other source here has (the codex gives an entry's numbers and
+    # never a formula; the sheets tabulate results). Rides on this tool rather
+    # than becoming a 19th action, same reasoning as the amity/class/reddit
+    # blocks above: this is another provenance of answer, not another question.
+    try:
+        echo = await asyncio.to_thread(orna_echo.search_text, query)
+    except Exception as e:
+        logger.warning("orna: echo lookup failed for %r (%s)", query[:60], e)
+        echo = ""
+    if echo:
+        if sources is not None:
+            for sec in await asyncio.to_thread(orna_echo.search, query):
+                _add_source(sources, sec.label[:60], sec.url)
+        blocks.append(
+            "GUIDE MECHANICS / FORMULAS (playerecho.com community guides - the source to quote for a "
+            "FORMULA or a mechanic the codex has no field for: Ward capacity, Ascension altar costs, "
+            "dungeon cooldowns and godforging, anguish proofs, per-event tier gates. Indented lines are "
+            "verbatim formulas - use them as written rather than reasoning one out):\n" + echo[:3000])
     if reddit_hits:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "

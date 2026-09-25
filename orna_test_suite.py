@@ -91,6 +91,7 @@ os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
 import orna_assess                      # noqa: E402
+import orna_echo                        # noqa: E402
 import orna_aussies                     # noqa: E402
 import orna_guides                      # noqa: E402
 import orna_knowledge                   # noqa: E402
@@ -231,6 +232,7 @@ TIER0 = [
     ("quality-vs-level", _check_quality_spec_axes),
     ("towers-consistent", _check_towers_are_self_consistent),
     ("mechanics-wired", _check_mechanics_wired_into_loop),
+    ("echo-corpus", lambda: orna_echo._demo()),
 ]
 
 
@@ -332,6 +334,14 @@ def build_cases() -> list:
     dm_orn = gf_bonus("dark-mage-hood")
     stacked_pct = ((1 + lh_orn / 100) * (1 + dm_orn / 100) - 1) * 100
 
+    # The Ward formula as the corpus states it, e.g. "(HP + MP) / 2" - pulled
+    # from the guide rather than hardcoded here.
+    ward_hit = orna_echo.search_text("ward capacity base formula")
+    ward_formula = next((ln.strip() for ln in ward_hit.splitlines()
+                         if "ward_base" in ln.lower() and "=" in ln), "")
+    assert ward_formula, "ward formula not found in orna_echo.txt - re-run orna_scrape_echo.py"
+    ward_formula = ward_formula.split("=", 1)[1].strip()          # the right-hand side
+
     top_magic = orna_aussies.query_records([], sort_by="magic", sort_dir="desc", limit=1)
     eos = next(f.floor for f in orna_towers.get_tower_floors(datetime.now(timezone.utc))
                if f.kind == "eos")
@@ -371,6 +381,13 @@ def build_cases() -> list:
              Expect(all_of=[str(eos)], tools_all=["towers"])),
         Case("top-magic", 2, "which item has the highest magic stat?",
              Expect(all_of=[str(top_magic[0].sort_value)], tools_any=["query"])),
+
+        # The playerecho guide corpus is the ONLY source that states a formula
+        # outright; before it existed the bot had nothing to answer this from.
+        # The expected formula is read out of the corpus at run time, so a
+        # revision of the guide does not read as a regression.
+        Case("ward-formula", 2, "how is ward capacity calculated in orna?",
+             Expect(all_of=[ward_formula], tools_all=["knowledge_search"])),
 
         # --------------------------- tier 3: research and judgement --------
         # _STRATEGY_RULE: a boss's elemental immunities are in NO structured

@@ -1,5 +1,5 @@
 {
-  "saved": "2026-09-25 15:02:08",
+  "saved": "2026-09-25 17:44:12",
   "n": 3,
   "cases": [
     {
@@ -57,6 +57,13 @@
       "runs": 3,
       "passes": 2,
       "rate": 0.6666666666666666
+    },
+    {
+      "id": "ward-formula",
+      "tier": 2,
+      "runs": 3,
+      "passes": 3,
+      "rate": 1.0
     },
     {
       "id": "heretic-build",
