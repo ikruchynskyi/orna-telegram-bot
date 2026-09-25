@@ -164,6 +164,46 @@ async def resource_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
 
 
+# Telegram rejects a sendMessage over 4096 chars with BadRequest("Message is
+# too long"). Live 2026-09-24: `/stats user <id>` dumps up to
+# MAX_LOG_PER_USER questions WITH the text each user typed, and a single
+# /orna question can run several hundred characters, so an active user's
+# report blew the cap and the whole command failed with "Виникла
+# непередбачена помилка" instead of showing anything.
+TELEGRAM_MAX_CHARS = 4096
+
+
+async def _send_lines(message, lines: list) -> None:
+    """Send `lines` as as few messages as fit, splitting on line boundaries.
+
+    Same idea as telegram_resources.send_report_blocks, kept separate because
+    that one packs pre-built HTML report blocks and this is plain text. A
+    single line longer than the cap is hard-split rather than dropped - the
+    alternative is losing data silently, which is how this bug presented."""
+    chunks, current = [], ""
+    for line in lines:
+        while len(line) > TELEGRAM_MAX_CHARS - 1:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[: TELEGRAM_MAX_CHARS - 1])
+            line = line[TELEGRAM_MAX_CHARS - 1 :]
+        if len(current) + len(line) + 1 > TELEGRAM_MAX_CHARS - 1:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await message.reply_text(chunk)
+
+
+# One logged question printed in full can be hundreds of characters; the
+# point of the log is WHAT was asked, not the whole essay.
+_STATS_TEXT_PREVIEW = 200
+
+
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Hidden admin command: report usage_stats' counters. Gated by the
     same GO_ALLOWED_USER_IDS allowlist /go and /update_codex use.
@@ -194,7 +234,7 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines += [f"  {name}  (id {uid}) — {count}" for uid, name, count in rows]
         lines.append("")
         lines.append("/stats user <id|@username> — деталі й останні питання")
-        await message.reply_text("\n".join(lines))
+        await _send_lines(message, lines)
         return
 
     if args and args[0].lower() == "user":
@@ -213,11 +253,14 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append(f"Останні питання (до {usage_stats.MAX_LOG_PER_USER}):")
         for entry in reversed(detail["recent"]):
             ts = entry["ts"].replace("T", " ")[:16]
-            text = f" {entry['text']}" if entry["text"] else ""
+            raw = entry["text"] or ""
+            if len(raw) > _STATS_TEXT_PREVIEW:
+                raw = raw[:_STATS_TEXT_PREVIEW] + "…"
+            text = f" {raw}" if raw else ""
             lines.append(f"  [{ts}] /{entry['command']}{text}")
         if not detail["recent"]:
             lines.append("  (ще немає даних)")
-        await message.reply_text("\n".join(lines))
+        await _send_lines(message, lines)
         return
 
     data = usage_stats.snapshot()
@@ -246,7 +289,7 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append("  (ще немає даних)")
     lines.append("")
     lines.append("/stats users — список користувачів, /stats user <id> — деталі")
-    await message.reply_text("\n".join(lines))
+    await _send_lines(message, lines)
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
