@@ -1572,6 +1572,36 @@ harness does too); the prompt-guidance changes stay as reinforcement.
 Verified: English build questions answer in English, Ukrainian ones stay
 Ukrainian.
 
+### Inline mode (`@<bot> <query>` in any chat, incl. groups the bot isn't in)
+
+`handle_inline_query` + `handle_chosen_inline_result` route an inline query
+to the SAME loop as `/orna`, so the bot can answer in groups it was never
+added to. The design is shaped by two hard Telegram constraints:
+
+- **Inline queries fire on every keystroke**, so `handle_inline_query` does
+  NO work - it just returns one cheap placeholder `InlineQueryResultArticle`
+  ("🔎 <query> ⏳ обробляю…"). The real loop runs ONCE, when the user picks
+  that result, in `handle_chosen_inline_result`.
+- **An inline answer is ONE editable text message** (the bot can't stream
+  several messages, or send photos, into a chat it isn't a member of). So
+  the loop runs against `_InlineSink` - a stand-in "message" that COLLECTS
+  every `reply_text` (dropping photos/keyboards, `__getattr__` no-ops the
+  rest) instead of posting - and the joined text is `edit_message_text`'d
+  into the inline message via its `inline_message_id`. `_advance(...,
+  with_status=False)` skips the ephemeral `_Status` message (there's no live
+  chat to put it in). Long answers are truncated to 4096 chars; malformed-
+  after-truncation HTML falls back to a tag-stripped plain edit.
+
+Two BotFather settings are REQUIRED and can't be done from code: `/setinline`
+(enable inline at all) and `/setinlinefeedback` -> 100% (so the
+chosen-result update, which carries the `inline_message_id` we edit, is
+delivered - it's only present because the placeholder result has an inline
+keyboard). `telegram_bot.main()` also passes an explicit `allowed_updates`
+including `inline_query`/`chosen_inline_result` so they're always polled. The
+typed-clarification (`ask`) follow-up can't work inline (no chat to wait in);
+if the model asks, the question itself becomes the answer and the user
+re-invokes with more detail.
+
 ## Things that aren't obvious from reading one file at a time
 
 **Handler registration order is load-bearing.** `telegram_bot.py` registers

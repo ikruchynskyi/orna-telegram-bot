@@ -56,9 +56,14 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 from PIL import Image
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, Update,
+)
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    CallbackQueryHandler, ChosenInlineResultHandler, CommandHandler, ContextTypes,
+    InlineQueryHandler, MessageHandler, filters,
+)
 
 from ollama_client import OllamaError, UnsupportedMultimodal, chat_json, chat_json_with_fallback
 from orna_aussies import build_url as build_aussies_url
@@ -2083,7 +2088,7 @@ class _Status:
             logger.debug("orna: status delete failed", exc_info=True)
 
 
-async def _advance(sid: str, message) -> None:
+async def _advance(sid: str, message, with_status: bool = True) -> None:
     """Wraps _advance_inner in a hard wall-clock deadline - see
     LOOP_TIMEOUT_SECONDS. No matter what happens inside (a hung call, a
     pathologically slow chain of fallbacks, anything), this guarantees a
@@ -2092,9 +2097,14 @@ async def _advance(sid: str, message) -> None:
     Also owns the ephemeral status message's whole lifetime: created here and
     cleared in `finally`, so it can't be orphaned by the timeout path (which
     cancels _advance_inner mid-step), by an "ask" that returns to wait for a
-    button, or by an unexpected exception."""
+    button, or by an unexpected exception.
+
+    with_status=False is for INLINE mode (see handle_chosen_inline_result):
+    there's no live chat to post an ephemeral progress message into - the
+    loop's replies are collected and edited into the single inline message at
+    the end - so the _Status message is skipped entirely."""
     session = _ORNA_SESSIONS.get(sid)
-    status = _Status(message)
+    status = _Status(message) if with_status else None
     if session is not None:
         session.status = status
     try:
@@ -2112,7 +2122,8 @@ async def _advance(sid: str, message) -> None:
         usage_stats.record_tool_call("_loop_timeout")
         await _close_out(session, message, "the time limit for this request was reached", fallback)
     finally:
-        await status.clear()
+        if status is not None:
+            await status.clear()
 
 
 async def _call_step_model(session: "OrnaSession", step_number: int):
@@ -2272,6 +2283,144 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ]
     sid = _new_orna_session(messages, MAX_STEPS)
     await _advance(sid, message)
+
+
+# -----------------------------------------------------------------------------
+# inline mode: @bot <query> in ANY chat, including groups the bot isn't in
+# -----------------------------------------------------------------------------
+
+class _InlineSink:
+    """A stand-in "message" for the /orna loop in INLINE mode.
+
+    Inline mode can't stream several messages into a chat the bot isn't a
+    member of - the user's chosen result posts ONE message that we
+    editMessageText afterwards. So instead of posting, this COLLECTS every
+    reply_text the loop makes and joins them into that single message; photos
+    and inline keyboards are dropped (an inline message is one text block).
+    __getattr__ makes any other method the loop calls (reply_photo, a returned
+    message's edit_reply_markup, ...) a harmless async no-op. The loop only
+    ever touches reply_text / chat_id / reply_photo on its message, all
+    covered here."""
+
+    def __init__(self) -> None:
+        self.parts: list = []
+        self.chat_id = 0  # the typed-clarification flow can't run inline; harmless
+
+    async def reply_text(self, text=None, *args, **kwargs):
+        if text is None and args:
+            text = args[0]
+        if text:
+            self.parts.append(str(text))
+        return self
+
+    async def edit_text(self, *args, **kwargs):
+        return self
+
+    async def delete(self, *args, **kwargs):
+        return None
+
+    def __getattr__(self, name):
+        async def _noop(*args, **kwargs):
+            return self
+        return _noop
+
+    def rendered(self) -> str:
+        return "\n\n".join(p for p in self.parts if p and p.strip())
+
+
+# The placeholder result carries an inline keyboard because Telegram only
+# reports the chosen result's inline_message_id (which we must have to edit the
+# answer in) when the sent message has one.
+_INLINE_PLACEHOLDER_KB = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("⏳ обробляю…", callback_data="orna_inline_wait")]]
+)
+_INLINE_MAX_LEN = 4096  # Telegram message hard limit
+
+
+async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """@bot <query> typed in any chat. Answers with ONE cheap placeholder
+    result and does NO work here - inline queries fire on every keystroke. The
+    real /orna loop runs once, when the user PICKS this result, in
+    handle_chosen_inline_result."""
+    iq = update.inline_query
+    if iq is None:
+        return
+    query = (iq.query or "").strip()
+    if not query:
+        await iq.answer([InlineQueryResultArticle(
+            id="orna-help",
+            title="Запит про Orna",
+            description="Напишіть питання, напр.: balor sword або адамантій 2000",
+            input_message_content=InputTextMessageContent("/orna"),
+        )], cache_time=5, is_personal=True)
+        return
+    result = InlineQueryResultArticle(
+        id=uuid.uuid4().hex,
+        title=f"Orna: {query}",
+        description="Натисніть, щоб отримати відповідь",
+        input_message_content=InputTextMessageContent(
+            f"🔎 <b>{html.escape(query)}</b>\n⏳ обробляю…", parse_mode="HTML"
+        ),
+        reply_markup=_INLINE_PLACEHOLDER_KB,
+    )
+    # cache_time=0 + is_personal so each user's pick re-runs the loop freshly,
+    # rather than Telegram serving one user's cached placeholder to another.
+    await iq.answer([result], cache_time=0, is_personal=True)
+
+
+async def handle_chosen_inline_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The user picked the inline result - run the SAME /orna loop as a chat
+    request and edit its answer into the posted (inline) message. Requires
+    BotFather inline feedback (/setinlinefeedback) or this update is never
+    delivered; inline_message_id is present only because the placeholder had a
+    keyboard."""
+    cir = update.chosen_inline_result
+    if cir is None:
+        return
+    query = (cir.query or "").strip()
+    inline_message_id = cir.inline_message_id
+    if not query or not inline_message_id:
+        return
+    usage_stats.record_command_for(update, "orna_inline", query)
+
+    messages = [
+        {"role": "system", "content": _orna_system_prompt(query)},
+        {"role": "user", "content": query},
+    ]
+    sid = _new_orna_session(messages, MAX_STEPS)
+    sink = _InlineSink()
+    try:
+        await _advance(sid, sink, with_status=False)
+    except Exception:
+        logger.warning("orna inline: loop failed for %r", query, exc_info=True)
+
+    answer = sink.rendered() or "Не вдалося сформувати відповідь. Спробуйте /orna у чаті з ботом."
+    header = f"🔎 <b>{html.escape(query)}</b>\n\n"
+    text = (header + answer)[:_INLINE_MAX_LEN]
+    try:
+        await context.bot.edit_message_text(
+            inline_message_id=inline_message_id, text=text,
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+    except TelegramError:
+        # Collected HTML can be malformed once truncated mid-tag - fall back to
+        # a tag-stripped plain version so the "обробляю…" placeholder never
+        # stays stuck.
+        plain = re.sub(r"<[^>]+>", "", f"🔎 {query}\n\n{answer}")[:_INLINE_MAX_LEN]
+        try:
+            await context.bot.edit_message_text(
+                inline_message_id=inline_message_id, text=plain, disable_web_page_preview=True,
+            )
+        except TelegramError:
+            logger.warning("orna inline: failed to edit answer for %r", query, exc_info=True)
+
+
+def build_inline_query_handler() -> InlineQueryHandler:
+    return InlineQueryHandler(handle_inline_query)
+
+
+def build_chosen_inline_result_handler() -> ChosenInlineResultHandler:
+    return ChosenInlineResultHandler(handle_chosen_inline_result)
 
 
 async def _await_ask_text(query, sid: str) -> None:

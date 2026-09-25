@@ -20,7 +20,8 @@ from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go
 from telegram_remind import (build_remind_handler, build_tz_callback_handler,
                              build_tz_edit_callback_handler, build_tz_input_handler,
                              reschedule_pending)
-from telegram_orna import (build_ask_text_handler, build_orna_callback_handler, build_orna_handler,
+from telegram_orna import (build_ask_text_handler, build_chosen_inline_result_handler,
+                          build_inline_query_handler, build_orna_callback_handler, build_orna_handler,
                           build_update_codex_handler)
 from telegram_orna import _next_text, _today_text
 import usage_stats
@@ -313,6 +314,13 @@ def main():
     # out. See telegram_orna.py.
     app.add_handler(build_orna_handler())
     app.add_handler(build_orna_callback_handler())
+    # Inline mode: "@<bot> <query>" typed in ANY chat, including groups the bot
+    # was never added to, routes to the SAME /orna loop; the answer is edited
+    # into the single inline message the user's chosen result posts. Needs
+    # BotFather setup: /setinline (enable inline) AND /setinlinefeedback -> 100%
+    # (so the chosen-result update carrying inline_message_id is delivered).
+    app.add_handler(build_inline_query_handler())
+    app.add_handler(build_chosen_inline_result_handler())
     # Not exposed via setMyCommands anywhere in this repo, so it stays out
     # of the Telegram command menu / autocomplete for regular Orna users.
     app.add_handler(build_go_handler())
@@ -358,7 +366,13 @@ def main():
     app.add_handler(build_resource_conversation())
     reschedule_pending(app)
     logger.info("🤖 Bot is running...")
-    app.run_polling()
+    # Explicit allowed_updates so inline_query/chosen_inline_result are always
+    # polled (the default set includes them, but a previously-set restrictive
+    # value persists server-side otherwise). Lists exactly the update types the
+    # bot handles - no chat_member/reaction noise.
+    app.run_polling(allowed_updates=[
+        "message", "edited_message", "callback_query", "inline_query", "chosen_inline_result",
+    ])
 
 
 if __name__ == "__main__":
