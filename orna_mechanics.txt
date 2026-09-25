@@ -1,0 +1,156 @@
+# orna_mechanics.txt - a curated, verified reference of how Orna's core game
+# mechanics work, read by knowledge_search (see orna_mechanics.py). Built from
+# a community beginner guide (ornalegends.com) and fact-checked against current
+# (early 2026) sources: playorna.com's own codex + blog, the Orna wiki,
+# playerecho.com and reddit r/OrnaRPG. This is well-informed community/player
+# knowledge, similar trust to a good wiki - NOT official developer text, and
+# Orna is patched roughly monthly, so treat specific numbers as "current as of
+# early 2026" and prefer the live codex / patch notes for an exact figure that
+# matters. (A coding-oriented twin of this, with pointers to the repo's own
+# data modules, lives in .claude/skills/orna-game-mechanics/references/
+# mechanics.md - keep the two in sync when a mechanic changes.)
+
+=== Tiers and character level ===
+Orna has 10 class tiers, not 11. The character level cap is 250; tier 10
+unlocks at level 225. Players say "tier 11" for the level 225-250 stretch, but
+no new class lives there - the developers added the Ascension system instead of
+an 11th tier. The three starting classes are Warrior, Mage and Thief; the class
+tree branches as you tier up. The six tier-10 specializations are Gilgamesh,
+Heretic, Realmshifter, Beowulf, Grand Summoner and Deity, each with Celestial
+evolved variants unlocked via the Titans (e.g. Beowulf Auriga/Hydrus, Heretic
+Ara/Corvus, Gilgamesh Hercules/Ursa, Deity Ara/Ursa). Separately, a "class
+specialization" package (Hunter, Berserker, Guardian, Scholar, Stargazer,
+Cleric) unlocks around level 50 - this is a different thing from the tier-10
+specializations.
+
+=== Ascension Level (AL) ===
+Ascension is the endgame progression PAST level 250, added around 2022 (a
+community beginner guide from 2020 will not mention it). You unlock it at tier
+10 (level 225) by building the Altar of Ascension in your Origin Town (about
+50,000,000 orns + 1,000 stone). Each Ascension Level adds +1% to that class's
+base stats, so AL 100 roughly doubles them. It is PER CLASS (all variants of
+one class ascend together), not account-wide, and it does NOT raise the level
+cap - it is a separate, effectively uncapped axis you push independently of
+hitting level 250. AL multiplies base (class/specialization) stats; gear stats
+add on top.
+
+=== Core stats ===
+The main stats are HP, Mana, Attack, Defense, Magic, Resistance, Dexterity,
+Ward, Crit and Foresight, plus View Distance. There is also Crit Damage (how
+much extra a crit does - a separate stat from Crit/Crit chance), Follower Stats,
+Summon Stats, and %-bonus stats (orn/exp/gold/luck bonus). Ward matters more the
+deeper into endgame you go (its pool is roughly (HP+Mana)/2 scaled by gear
+Ward%), because late bosses hit for far more than a raw HP pool. In PVP your HP
+is doubled.
+
+=== Item quality ===
+Quality is a percentage roll that multiplies an item's base stats. The tiers
+(community/wiki ranges): Broken (about 70-89%), Poor (90-99%), Common/Regular
+(100%), Superior (110-119%), Famed (120-130%), Legendary (140-170%), Ornate
+(170-200%); 170% is a Legendary/Ornate crossover. Higher quality = higher
+stats and more adornment slots.
+
+=== Upgrading and forging ===
+Items upgrade through levels: 1-10 at the Blacksmith (costs time, gold and
+materials, increasing per level). Beyond 10 the upgrades are instant but
+expensive: Masterforge = level 11 (at the Alchemist), Demonforge = level 12 (at
+the Demonologist), and Godforge = level 13, which is NOT bought - it is a random
+chance dropped by an "Arisen" superboss (yellow aura) while a demonforged item
+is equipped. Material cost scales with quality (roughly quality-fraction × 333
+for Masterforge, × 666 for Demonforge). Dismantling an item gives 1 material
+regardless of its quality or level.
+
+=== Adornments (jewels) ===
+Adornments are gems socketed into gear for on-hit or passive effects (e.g. a
+lifesteal-on-hit ruby, ward-power gems, status-protection gems). The number of
+slots an item has grows with its FORGE LEVEL, not raw quality: godforged adds
++4 slots, master/demonforged +3, Ornate quality +2, any quality over 100% +1.
+So masterforging an item gives it its Ornate slot count plus one. Base slot
+counts run from 1 up to 12 (only weapons reach the high end), so a fully
+godforged item can reach about 16 slots. Celestial weapons use their own fixed
+slot progression instead. Adornments themselves are items you can look up in the
+codex (they carry their own tier, rarity and stats).
+
+=== Celestial and Arisen gear ===
+Celestial gear is the top item rarity (Tier 10), crafted from refined Skyshards
+and customised with Celestial Augments at the Titan Workshop - these come from
+the Titans/Towers of Olympia and are endgame. "Arisen" is NOT a rarity: it is a
+SOURCE tag for gear dropped by Arisen superbosses, and an Arisen item can be an
+ordinary rarity like Famed. So do not treat "Arisen" as a quality level.
+
+=== Elements and factions ===
+There are four factions, each tied to an element: Earthen Legion (Earth),
+Stormforce (Lightning), Knights of Inferno (Fire), and Frozenguard (Water). You
+pick one at level 10; changing faction is a small real-money purchase (about
+$0.99) and is repeatable. Your faction gives +25% damage dealt with its element
+and -20% damage taken from that element. Sigils (formerly "runes") mark an enemy
+so a matching-element hit does bonus damage. Weapon element affects Attack
+skills; an elemental spell's own element overrides the weapon's. Some
+bosses/monsters are immune to, or resist, specific elements - this per-boss
+resistance data is NOT in the codex; it comes from community "Monster Data" and
+is the key to "how do I beat X" fights.
+
+=== Wild Towers of Olympia ===
+Five real-time endgame towers, one per Titan: Selene, Eos, Oceanus, Themis and
+Prometheus (tier 9+). The wild towers auto-climb over time (starting around
+floor 15, capping at 50, resetting weekly on a different day per Titan). Entry
+costs an Olympian Key; you earn Tower Shards, spent at the Titan Workshop on
+Celestial weapon upgrades, Celestial classes and a personal tower. Added around
+January 2023.
+
+=== Flasks and Omniflask ===
+Flasks are a Mage-tree battle mechanic (added 2025) with their own battle-menu
+slot from tier 2. A flask charges as you cast elemental spells (faster when you
+hit an enemy's weakness) and, in Towers and Monuments, its charge persists
+between battles. Variants include Manaflask, Bloodflask, Ward Flask Infusion,
+Mana-surge and Inflection; Omniflask spends a charged flask for an all-elements
+blast. This is what "omniflask build" refers to.
+
+=== Monuments and guild halls ===
+Monuments (added late 2023) are single-player dungeons themed on Fallen Gods
+(Ithra, Thor, Demeter, Vulcan) - free if you match their faction, otherwise a
+Skeleton Key; they reward Proofs of Monument. The Titan Workshop gates Tower of
+Olympia access and Titan weapons/classes. Kingdom guild halls add Guild Trials,
+real-world "Settlements" (Duke -> Emperor titles), and live PvP.
+
+=== Kingdoms (guilds) ===
+A kingdom holds up to 50 members. You can JOIN one at level 25, but you must be
+level 150 to CREATE one (founding costs about 100,000 orns). As of late 2025,
+kingdoms are no longer faction-locked - members can be from different factions.
+Kingdoms do wars, raid bosses and territory control.
+
+=== Areas and territory ===
+The world is divided into circular areas (~442m across; you interact within
+~250m). Areas have guardians (a one-time double reward on first defeat) and, if
+you control them, pay a small daily orn income. If you do not visit an area for
+about 30 days you become a "ghost" there and your stats in it drop.
+
+=== Followers and Bestial Bond ===
+Followers (pets) are bought from Bestiaries and stored in your Keep (capacity
+grows with Keep level); their stats scale to your level. Bestial Bond is the
+tiered follower-synergy system: tier 1 makes the follower stronger and act more
+often, tier 2 adds a chance to act twice per turn, tier 3 adds a chance to
+protect you. It is strongest on the Valhallan/Beowulf line (Auriga lets
+followers act twice per turn). The old "Beastmaster" is now the
+Tamer -> Handler -> Spirit Tamer line. Note: a Summoner is NOT a follower class
+- it auto-casts summon spells instead (Grand Summoner auto-casts two per
+battle). Followers act on their own AI, not by direct command.
+
+=== PvP: Arena and Colosseum ===
+Arena and Colosseum fights are against an AI running another real player's
+loadout, not a live opponent. Arena has Sparring/PvP/Mirror modes (one Arena
+Token each). Colosseum needs your kingdom to have upgraded its Keep to a Castle,
+costs 20 tokens, and is a fixed run of 20 fights whose opponents scale as you
+win. No items are usable; HP/Mana always start full.
+
+=== Currencies and materials ===
+Gold buys and upgrades gear (endgame upgrades cost into the billions). Orns are
+the premium currency: unlocking classes, swapping specs, buying followers,
+building, and some upgrades. Proofs are per-guild materials used for high-tier
+crafting. Other endgame currencies include Tower Shards and keys (Skeleton,
+Olympian). Materials come from dismantling gear and are consumed by upgrades.
+
+=== Stat bonuses (they multiply) ===
+Several bonuses stack MULTIPLICATIVELY, not additively: Weapon Proficiency +5%
+(Mage/Thief offensive stats), Origin Town +10% to core stats, and a Party bonus
++10% to core stats. Combined that is 1.05 × 1.10 × 1.10 ≈ +27%, not +25%.

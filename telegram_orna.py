@@ -80,6 +80,7 @@ import orna_bonuses
 import orna_classes
 import orna_guides
 import orna_knowledge
+import orna_mechanics
 import orna_reddit
 import orna_releases
 import orna_towers
@@ -1631,9 +1632,26 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
         logger.warning("orna: bonuses lookup failed for %r (%s)", query[:60], e)
         bonuses = ""
 
+    # Curated, community-verified (2026) prose on how each core system works
+    # (factions/ascension/quality/forging/adornments/towers/flasks/...) - the
+    # gap the codex leaves for "how does X work" as opposed to "what are this
+    # item's stats". to_thread: first call reads the file off disk. See
+    # orna_mechanics.py.
+    try:
+        mechanics = await asyncio.to_thread(orna_mechanics.search, query)
+    except Exception as e:
+        logger.warning("orna: mechanics lookup failed for %r (%s)", query[:60], e)
+        mechanics = ""
+
     blocks = []
     if result:
         blocks.append(result[:3000])
+    if mechanics:
+        if sources is not None:
+            _add_source(sources, orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
+        blocks.append(
+            "GAME MECHANICS (community-verified 2026 reference - how the system works in "
+            "general; for an exact current number prefer the codex / releases()):\n" + mechanics)
     if bonuses:
         if sources is not None:
             _add_source(sources, "Amities / Crucibles (aussiescodex)", orna_bonuses.AMITIES_URL)
@@ -2119,6 +2137,9 @@ _TOOLS_TEXT = (
     "effects, plus tier-10 base stats - use it for \"what does class X give\" and stat-estimate questions; "
     "Ascension Level is +1%/level on every stat and PVP doubles HP) - none of that is in any codex page, so "
     "this tool is the only way to answer those, "
+    "PLUS a community-verified (2026) reference on how each core SYSTEM works (factions, Ascension, item "
+    "quality/forging, adornment slots, Wild Towers, flasks, kingdoms, followers) - use it for \"how does X "
+    "work\" conceptual questions, not just item lookups, "
     "PLUS what Orna's own developers (u/OrnaOdie, u/Widogeist) have explained on reddit, which is where hidden "
     "mechanics, exact formulas and \"why it actually works like that\" answers live. A DEVELOPER COMMENTS block "
     "in the result outranks the sheets above it, but can be years old - check releases() before quoting a number "

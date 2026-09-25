@@ -94,6 +94,7 @@ import orna_assess                      # noqa: E402
 import orna_aussies                     # noqa: E402
 import orna_guides                      # noqa: E402
 import orna_knowledge                   # noqa: E402
+import orna_mechanics                   # noqa: E402
 import orna_towers                      # noqa: E402
 import telegram_orna as T               # noqa: E402
 
@@ -111,7 +112,7 @@ def _run_module_demos() -> None:
     """Each module's own _demo() - the repo's existing self-checks, which are
     the real pins for its pure-function bug history. Called rather than
     restated so there is no second copy to drift."""
-    for mod in (orna_assess, orna_aussies, orna_guides, orna_knowledge, orna_towers, T):
+    for mod in (orna_assess, orna_aussies, orna_guides, orna_knowledge, orna_mechanics, orna_towers, T):
         demo = getattr(mod, "_demo", None)
         if demo is None:
             continue
@@ -206,6 +207,19 @@ def _check_towers_are_self_consistent() -> None:
     assert len(floors) == 5 and all(1 <= f.floor <= 50 for f in floors), floors
 
 
+def _check_mechanics_wired_into_loop() -> None:
+    """The verified mechanics corpus must be reachable through the SAME module
+    the loop imports (T.orna_mechanics), not just as a standalone file - this
+    is what would have caught a missing/typo'd import in _run_knowledge_tool.
+    Synchronous on purpose (no network), unlike the full knowledge tool which
+    also hits reddit/bonuses/classes."""
+    fac = T.orna_mechanics.search("factions element damage")
+    for name in ("Earthen Legion", "Stormforce", "Knights of Inferno", "Frozenguard"):
+        assert name in fac, (name, fac[:200])
+    assert "+25%" in fac and "-20%" in fac, fac[:120]
+    assert "+1%" in T.orna_mechanics.search("ascension level"), "AL scaling must be findable"
+
+
 TIER0 = [
     ("module-demos", _run_module_demos),
     ("useable-by-absent-field", _check_useable_by_absent_field),
@@ -216,6 +230,7 @@ TIER0 = [
     ("name-resolution-forms", _check_name_resolution_forms),
     ("quality-vs-level", _check_quality_spec_axes),
     ("towers-consistent", _check_towers_are_self_consistent),
+    ("mechanics-wired", _check_mechanics_wired_into_loop),
 ]
 
 
