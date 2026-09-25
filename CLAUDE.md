@@ -73,6 +73,10 @@ glue around three live, unmocked external services.
   `tower.ts` (pinned commit) and cross-checked against that original
   TypeScript's actual output under Node before deploying — see the `/orna`
   section. Pure time-based math, no external data source at all.
+- `orna_reddit.py` / `orna_reddit.txt` / `orna_scrape_reddit.py` — what
+  Orna's own developers (u/OrnaOdie, u/Widogeist) have written on Reddit:
+  hidden mechanics, exact formulas, "why it works like that" answers. Static
+  and committed, NOT re-crawled — see the `/orna` section.
 - `orna_releases.py` — playorna.com/releases/, the official patch notes,
   parsed from plain server-rendered HTML (`article.release-note`, no
   `codex-bootstrap` JSON — same as `orna_calendar.py`) and cached to disk
@@ -1071,6 +1075,44 @@ control flow:
   to a known Material Forecast material at all, it falls through to
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
+
+### The reddit developer corpus - searched by `knowledge_search`, not its own tool
+
+Orna's devs answer mechanics questions on Reddit in detail that exists in no
+codex page, community sheet or patch note. `orna_scrape_reddit.py` pulls
+u/OrnaOdie's submissions + comments and u/Widogeist's comments into
+`orna_reddit.txt`; `orna_reddit.py` reads it. Added 2026-09-24 on ask.
+- **Reddit requires credentials now - there is no anonymous path.** Verified
+  2026-09-24: `/user/<name>/submitted.json` returns **403** for any
+  User-Agent (browser strings included), `old.reddit.com` **302s to a login
+  page**, and `api.reddit.com` 403s too. The scraper uses read-only
+  application-only OAuth (`grant_type=client_credentials`), which needs a
+  *script* app from https://www.reddit.com/prefs/apps and no password or
+  account link. Reddit also caps any listing at ~1000 items, so a prolific
+  account's oldest history is simply unreachable - `_MIN_BODY_CHARS` drops
+  the "Fixed!"/"thanks" one-liners that dominate that tail anyway.
+- **Committed and re-run BY HAND, unlike the weekly sheets.** Reddit history
+  is append-only and years old; re-crawling it weekly would spend a
+  rate-limited budget re-fetching thousands of unchanged comments to learn
+  nothing. The sheets are live documents, which is why they get a TTL and
+  this does not.
+- **Searched at ENTRY level, not line level** - that is the whole reason it
+  isn't another section inside `orna_knowledge.txt`. That corpus is tabular,
+  so one row IS the answer and returning the matching line is right. A dev
+  explaining why orn bonus multiplies is a paragraph, and handing back only
+  the line containing "multiplicative" strips the reasoning around it - the
+  same argument `orna_guides.py` makes for keeping long-form guides whole.
+- **`knowledge_search` searches both corpora; no 19th tool was added.** The
+  model already picks between 18 actions and the prompt is ~30KB, which is
+  the one thing this file has repeatedly seen it lose instructions to.
+  "Community sheet" vs "what a dev said" is a distinction about the ANSWER's
+  provenance, not about which question to ask - so it comes back as a
+  labelled `DEVELOPER COMMENTS` block that the prompt says outranks the
+  sheets, with an explicit caveat that a years-old comment may predate a
+  patch and `releases()` should be checked before quoting a figure.
+- A missing `orna_reddit.txt` disables the corpus cleanly (logged, empty
+  results) rather than breaking `knowledge_search` for everyone - so a
+  checkout made before the first scrape still works.
 
 ### `releases` - the only source that says what CHANGED
 

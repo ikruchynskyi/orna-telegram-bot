@@ -71,6 +71,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_guides
 import orna_knowledge
+import orna_reddit
 import orna_releases
 import orna_towers
 from orna_assess import (
@@ -1442,20 +1443,42 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     # splitting on punctuation here - the model writes those lists with
     # commas, with "and", or with nothing at all between them.
     result = await asyncio.to_thread(orna_knowledge.search, query)
-    if not result:
-        return f"no knowledge-base matches for {query!r} - try web_search instead"
     # Cite the sheet+tab each matched section came from. search() prefixes
     # every block with "[<section title>]", and that title is the key
     # orna_knowledge.source_url resolves, so the citation is per-TAB rather
     # than one vague "the knowledge base" link.
-    if sources is not None:
+    if result and sources is not None:
         for line in result.split("\n"):
             if line.startswith("[") and line.endswith("]"):
                 title = line[1:-1]
                 url = await asyncio.to_thread(orna_knowledge.source_url, title)
                 if url:
                     _add_source(sources, title, url)
-    return result[:3000]
+
+    # The developer corpus (orna_reddit) is searched by the SAME tool rather
+    # than getting its own: the model already picks between 18 actions, and
+    # "community sheet" vs "what a dev said on reddit" is a distinction about
+    # the ANSWER's provenance, not about which question to ask. Matched at
+    # ENTRY level so a paragraph of reasoning arrives whole - see orna_reddit.
+    reddit_hits = await asyncio.to_thread(orna_reddit.search, query)
+    if reddit_hits and sources is not None:
+        for entry in reddit_hits[:3]:
+            if entry.url:
+                _add_source(sources, entry.head[:60], entry.url)
+
+    blocks = []
+    if result:
+        blocks.append(result[:3000])
+    if reddit_hits:
+        blocks.append(
+            "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
+            "sheets, but some are years old, so a later patch may have changed the numbers; check "
+            "releases() before quoting a figure that matters):\n"
+            + await asyncio.to_thread(orna_reddit.format_entries, reddit_hits)
+        )
+    if not blocks:
+        return f"no knowledge-base matches for {query!r} - try web_search instead"
+    return "\n\n".join(blocks)
 
 
 async def _run_releases_tool(message, query: str, sources: Optional[list] = None) -> str:
@@ -1603,7 +1626,11 @@ _TOOLS_TEXT = (
     "Weakness\" are different gear), so dropping the mode word can land on the wrong one. Without any query you only "
     "see the guide's own opening, which may not be the relevant part for a long guide. No reply_text - like "
     "knowledge_search/web_search, read this as source material and write the real answer in finish().\n"
-    "- knowledge_search(action_input=<search term>): a curated community reference (player-maintained sheets) for "
+    "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets "
+    "PLUS what Orna's own developers (u/OrnaOdie, u/Widogeist) have explained on reddit, which is where hidden "
+    "mechanics, exact formulas and \"why it actually works like that\" answers live. A DEVELOPER COMMENTS block "
+    "in the result outranks the sheets above it, but can be years old - check releases() before quoting a number "
+    "from one that matters. Covers "
     "exactly what Orna's own codex genuinely doesn't track: PER-MONSTER/BOSS ELEMENTAL DAMAGE RESISTANCES/"
     "IMMUNITIES most of all (the codex has NO immunity field for bosses at all - not even an empty one - even "
     "though it matters enormously for \"how do I beat/kill X\" questions; don't conclude \"no immunities, use "
