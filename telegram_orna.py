@@ -1573,6 +1573,21 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     pvp = _as_bool(args.get("pvp"))
     amities = args.get("amities") or {}
 
+    spec_probe = orna_classes.find_class(spec, kind="specialization") if spec else None
+    class_probe = orna_classes.find_class(klass, kind="class") if klass else None
+    if not items and not spec_probe and not class_probe:
+        # Refuse rather than render an empty table. Live 2026-09-24: "/orna
+        # calculate my stats" produced a header, "спорядження не вказано" and
+        # an EMPTY stat table - a confident-looking answer containing nothing.
+        # The prompt's CLARIFICATION rule alone did not hold (the tool
+        # description even used to say "or call it with no items at all"), so
+        # the impossible case is closed here where it cannot be argued with.
+        return ("estimate_stats has nothing to work from - no items, no specialization and no class were "
+                "given, so there is nothing to compute and NOTHING was shown to the user. Do not call this "
+                "again with empty arguments. Call ask() for what you still need: the items they wear and each "
+                "one's quality, their specialization and/or class, their Ascension Level, and whether it is "
+                "PVP. If you cannot ask (inline mode), say plainly that you need those details.")
+
     totals, lines, missing = {}, [], []
     for raw in items[:12]:
         if isinstance(raw, dict):
@@ -1619,8 +1634,7 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     # class lookup returned the tier-10 SPECIALIZATION (searched first by
     # default), whose modifiers are empty - so Sequencer's real -5/+15/-5 were
     # silently dropped and the estimate looked fine.
-    spec_entry = orna_classes.find_class(spec, kind="specialization") if spec else None
-    class_entry = orna_classes.find_class(klass, kind="class") if klass else None
+    spec_entry, class_entry = spec_probe, class_probe
     if klass and class_entry is None:
         # e.g. the model put the specialization in `class` too - don't apply
         # it twice, and say so rather than pretending it counted.
@@ -1816,8 +1830,8 @@ _TOOLS_TEXT = (
     "have\"/\"порахуй мої стати\" questions. POSTS the full table - finish() just needs a short closing line. "
     "NEVER put an item in `items` that the user did not actually name - inventing a plausible loadout "
     "produces a confident, completely fictional answer (live failure: a user gave only their class and got "
-    "back a total built from three items they never mentioned). If they gave no gear, either ask, or call it "
-    "with no `items` at all - the tool then says outright that gear is excluded. Likewise pass the "
+    "back a total built from three items they never mentioned). If they gave no gear, ASK for it - calling this "
+    "with nothing at all is refused outright and shows the user nothing. Likewise pass the "
     "specialization in `specialization` and the CLASS in `class`; putting a specialization in `class` drops "
     "the real class's modifiers. \"Heretic Ara Sequencer\" means specialization=\"Heretic Ara\", "
     "class=\"Sequencer\". Never invent a quality either - if they did not say, ask or state the assumption.\n"

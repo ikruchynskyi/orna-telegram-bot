@@ -1163,6 +1163,21 @@ three of them produced a confident WRONG answer rather than an error:**
 - **Unknowns were silently defaulted** (AL 0). The prompt now requires
   every still-unknown input to be stated as an assumption in `finish()`.
 
+**A prompt rule could not make the model ask - the TOOL had to refuse.**
+Live: "/orna calculate my stats" called `estimate_stats` with empty args and
+posted a header, "спорядження не вказано" and an EMPTY stat table: a
+confident-looking answer containing nothing. Two causes. The tool
+description itself said "if they gave no gear, either ask, **or call it with
+no items at all**" - an explicit licence to skip the clarification, which no
+amount of CLARIFICATION wording further down a 33KB prompt was going to
+outweigh. And the tool cheerfully rendered the empty case. Both fixed: the
+licence is gone, and with no items AND no specialization AND no class the
+tool now posts NOTHING and returns an observation telling the model to
+`ask()` for the specific missing inputs. Verified 3/3 that the same request
+now asks. **The pattern to copy: when a tool can produce a
+technically-valid-but-useless answer, close it in the tool, not in the
+prompt** - the prompt is advice, the tool is the guarantee.
+
 **Clarification vs inline, the two halves of "ask when something is
 missing":**
 - In a CHAT, a request missing something that would change the answer (for
