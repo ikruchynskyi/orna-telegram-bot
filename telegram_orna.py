@@ -72,6 +72,7 @@ from orna_aussies import decode as decode_effect_code
 from orna_aussies import display_name
 from orna_aussies import has_aussies_page
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
+from orna_aussies import unresolvable_condition_fields
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
@@ -509,6 +510,29 @@ def _format_entry(detail: dict) -> str:
     return "\n".join(lines)
 
 
+_MAX_NAMES_IN_OBSERVATION = 25
+
+
+def _names_observation(entries: list, fmt=None) -> str:
+    """The name list a search/query hands BACK to the model, as opposed to the
+    buttons it posts to Telegram. Truncating this SILENTLY is a live bug
+    (2026-09-25): search_codex returned "13 results for 'Judge Trifecta'"
+    followed by only the first FIVE names, so the model opened exactly those
+    five, never learned the other eight existed, and answered that the whole
+    set was "warrior or thief classes only" - it had in fact missed four
+    valhallan_summoner pieces. Nothing in the observation said the list was
+    cut, and the model cannot read the buttons: whatever is not in this string
+    does not exist as far as it is concerned. Same "(+N more)" honesty the
+    open_entry section digest below already uses."""
+    fmt = fmt or (lambda e: f"{e.get('name', '?')} ({e.get('url', '')})")
+    listed = entries[:_MAX_NAMES_IN_OBSERVATION]
+    names = "; ".join(fmt(e) for e in listed)
+    if len(entries) > len(listed):
+        names += (f" (+{len(entries) - len(listed)} MORE not listed - this list is PARTIAL, "
+                  "do not describe the whole set from it)")
+    return names
+
+
 async def _run_codex_search(message, query: str, lang: str = "en", sources: Optional[list] = None) -> str:
     if not query:
         return "search_codex needs a name in action_input"
@@ -611,8 +635,8 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
                 reply_markup=_result_list_keyboard(desc_entries, key),
             )
             _cite_entries(sources, desc_entries)
-            names = "; ".join(f"{e['name']} ({e['url']})" for e in desc_entries[:5])
-            return f"{len(desc_entries)} matches by description for {query!r}: {names}"
+            return (f"{len(desc_entries)} matches by description for {query!r}: "
+                    f"{_names_observation(desc_entries)}")
 
     # Deliberately no reply_text here on a genuine dead end: this is an
     # intermediate step the model can still recover from (retry a
@@ -632,8 +656,7 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
         reply_markup=_result_list_keyboard(results, key),
     )
     _cite_entries(sources, results)
-    names = "; ".join(f"{r.get('name', '?')} ({r.get('url', '')})" for r in results[:5])
-    return f"{len(results)} results for {query!r}: {names}"
+    return f"{len(results)} results for {query!r}: {_names_observation(results)}"
 
 
 _FIELD_LABELS = {"immunities": "імунітет до", "causes": "спричиняє", "gives": "дає", "cures": "лікує"}
@@ -664,6 +687,21 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
     conditions = [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
     if not conditions and not sort_by:
         return "query needs at least one condition, or a sort_by for a ranking ask"
+
+    # An unusable field name must not come back as "0 results" - that reads as
+    # "nothing in the game has this" and gets reported to the user as fact. Say
+    # the field is wrong so the next step can fix it. See
+    # orna_aussies.unresolvable_condition_fields for the live failure.
+    bad_fields = await asyncio.to_thread(unresolvable_condition_fields, conditions)
+    if bad_fields:
+        parts = []
+        for kind, field, close in bad_fields:
+            hint = f" - did you mean {', '.join(close)}?" if close else ""
+            parts.append(f"{kind} field {field!r} does not exist{hint}")
+        return ("query did NOT run - " + "; ".join(parts)
+                + ". This is NOT an empty result: nothing was searched, so it says nothing about whether such "
+                  "records exist. Re-issue the query with a real field, or filter on the entry's name with a "
+                  '{"kind":"text","field":"name"} condition instead.')
 
     try:
         matches = await asyncio.to_thread(
@@ -714,8 +752,7 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
         if sort_by and e.get("sort_value") is not None:
             return f"{e['name']} [{sort_by}={e['sort_value']}] ({e['url']})"
         return f"{e['name']} ({e['url']})"
-    names = "; ".join(_fmt(e) for e in entries[:5])
-    return f"{len(matches)} matches for {summary}: {names}"
+    return f"{len(matches)} matches for {summary}: {_names_observation(entries, _fmt)}"
 
 
 _CALENDAR_LINK_HTML = f'<a href="{CALENDAR_URL_UK}">📅 Переглянути календар подій</a>'
@@ -2238,6 +2275,28 @@ _STRATEGY_RULE = (
     "immune to every element except one - confidently wrong instead of checking."
 )
 
+_COMPLETENESS_RULE = (
+    "MANDATORY RULE - NEVER GENERALISE FROM A SAMPLE. If your answer would make a claim about a WHOLE group - "
+    "\"all/none/only/every/no X\", \"the set is for these classes\", \"there is nothing that...\", a count, a "
+    "\"the best/strongest/cheapest X\" superlative - then you must have observed EVERY member of that group "
+    "first. Whatever you did NOT observe is unknown, never \"absent\". Concretely:\n"
+    "- An observation that says (+N MORE not listed) or PARTIAL means you have NOT seen the group. The count in an "
+    "observation (\"13 results\") is the size of the group; the names listed may be fewer.\n"
+    "- Opening entries one at a time to check an attribute does NOT become complete just because you opened "
+    "several. Five of thirteen is a sample.\n"
+    "- Prefer ONE tool call that returns the complete filtered set over N calls that each return one member: "
+    "query() with a text condition on the name plus an attr/stat condition for the attribute answers "
+    "\"which of set X have property Y\" exhaustively, in one step, and an empty result IS the answer \"none do\". "
+    "A query that returns 0 is evidence; an open_entry you never made is not.\n"
+    "- If you genuinely cannot cover the whole group (too many members, a tool that cannot filter on it), then do "
+    "NOT state a universal. Say which members your answer is based on and that the rest were not checked.\n"
+    "Keep reasoning until the claim you are about to make is actually supported - spending more steps is correct "
+    "here; a confident universal from a partial look is the one outcome to avoid. Live-verified failure: asked "
+    "which items of a 13-item set were useable by mages, the loop opened 5, and answered that the set was "
+    "\"warrior or thief classes only\" - it had never seen the 4 valhallan_summoner pieces, and one filtered "
+    "query() would have settled it in a single step."
+)
+
 _AGGREGATE_RULE = (
     "MULTI-SLOT / BUILD-OPTIMIZATION QUESTIONS (e.g. \"what's the max orn bonus from wearing the best orn item in "
     "every slot\"): call build_optimize ONCE with the relevant stat (and quality/useable_by if given) - it does "
@@ -2338,6 +2397,7 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_STRATEGY_RULE}\n\n"
         f"{_CLASS_GUIDE_RULE}\n\n"
         f"{_AGGREGATE_RULE}\n\n"
+        f"{_COMPLETENESS_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
@@ -3353,6 +3413,36 @@ def _demo() -> None:
     assert "Heretic's Robe" in _name_candidates("Heretics Robe")
     # a curly apostrophe (what a phone types) must reach the straight-quote codex name
     assert "Cupid's Locket" in _name_candidates("Cupid\u2019s Locket")
+
+    # _names_observation: the observation a search/query hands the MODEL must
+    # never be silently shorter than the count it states. Live 2026-09-25:
+    # "13 results for 'Judge Trifecta'" listed 5 names, the model opened those
+    # 5, and answered for all 13 - missing 4 valhallan_summoner pieces.
+    few = [{"name": f"n{i}", "url": f"/u/{i}/"} for i in range(3)]
+    assert _names_observation(few).count(";") == 2 and "more" not in _names_observation(few)
+    many = [{"name": f"n{i}", "url": f"/u/{i}/"} for i in range(_MAX_NAMES_IN_OBSERVATION + 8)]
+    obs = _names_observation(many)
+    assert "+8 MORE not listed" in obs and "PARTIAL" in obs, obs[-120:]
+    assert obs.count(";") == _MAX_NAMES_IN_OBSERVATION - 1
+    assert _names_observation([]) == ""
+
+    # GUARDRAIL for the rule this violated ("a tool puts what the model must
+    # reason with in its OBSERVATION, not only in the message it posted" -
+    # CLAUDE.md). The rule was already written down and got violated anyway, so
+    # pin it structurally instead: every tool that posts a result LIST must
+    # build its observation through the one honest helper, and must not
+    # re-introduce a bare truncating slice of its own. A new list-returning
+    # tool belongs in this tuple.
+    import inspect
+    import re as _re
+    for fn in (_run_codex_search, _run_query_tool):
+        src = inspect.getsource(fn)
+        assert "_names_observation(" in src, (
+            f"{fn.__name__} must build its name list via _names_observation - see CLAUDE.md's "
+            "observation rule; a silent truncation there is invisible to the model")
+        # e.g. `for r in results[:5]` / `for e in entries[:10]` feeding a join
+        bad = _re.findall(r"for \w+ in (?:results|entries|matches|desc_entries)\[:\d+\]", src)
+        assert not bad, (fn.__name__, bad, "truncate inside _names_observation, not here")
 
     print("telegram_orna: all checks passed")
 

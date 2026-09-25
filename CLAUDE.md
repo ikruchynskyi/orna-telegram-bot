@@ -531,6 +531,49 @@ structurally can't recover from.
   1 of 3 before this round. The boost multipliers themselves are now
   STABLE across runs (byte-identical `calculate` expressions), where
   before the header fix they varied 9.0 vs 14.06 vs 15.0.
+- **A tool must never let the loop mistake a SAMPLE for the whole set, and
+  the fix for that class is a RULE plus two invariants - not a nudge per
+  question shape.** Live 2026-09-25: "does Judge Trifecta drop items useable
+  by mages?" answered "warrior or thief classes only", having never seen the
+  four `valhallan_summoner_classes` pieces. Three separate defects, and only
+  the first is specific to that question:
+  * `_run_codex_search`'s observation said `"13 results for 'Judge Trifecta'"`
+    and then listed the first **5** names (`results[:5]`), with nothing marking
+    the cut. The model opened exactly those 5 and generalised. All name lists
+    now go through `_names_observation`, which appends
+    `"(+N MORE not listed - this list is PARTIAL...)"` - the same honesty the
+    `open_entry` section digest already had. This is CLAUDE.md's own
+    observation rule (the model cannot read what you only sent to Telegram)
+    being violated where it had been written down for a year, so it is now
+    pinned STRUCTURALLY: `_demo()` asserts every list-returning tool builds its
+    observation through that helper and re-introduces no bare truncating slice,
+    and the assert names the offending function. Add a new list-returning tool
+    to that tuple.
+  * `_COMPLETENESS_RULE` in the system prompt is the general half: a claim
+    about a whole group (all/none/only/a count/a superlative) requires having
+    observed every member; a PARTIAL observation is not the group; prefer ONE
+    filtered `query` over N `open_entry` calls; and if the group genuinely
+    cannot be covered, state which subset the answer rests on instead of a
+    universal. Deliberately NOT a per-shape hint inside a tool's return value -
+    that was the first version and it is exactly the "thousands of small tuning
+    hacks" this file should not accumulate. Measured after: 7/7 runs answer the
+    question correctly, and the loop now keeps working (one run opened all 13
+    entries and gave the full three-way split) rather than stopping at 5.
+  * **A `0` must mean "nothing matched", never "nothing was searched".**
+    `useable_by` defaulted a MISSING value to `"all_classes"` - defensive for
+    items (0/2764 lack it) but wrong for every other category, so raids/
+    monsters/bosses matched every class filter and the raid "Judge Trifecta
+    Maximus" came back as mage-useable. An absent field is now no-match. And
+    `orna_aussies.unresolvable_condition_fields`, called by `_run_query_tool`
+    before it runs, turns a bogus field name into an explicit "query did NOT
+    run ... this is NOT an empty result" observation with suggestions, instead
+    of 0 rows: the loop filtered on `dropped_by` (excluded as a cross-link
+    field), got 0, and reported "drops nothing usable by mages" - the right
+    answer from no evidence, and the same 0 it would have gotten had the answer
+    been yes. `dropped_by` is still excluded; the data does support it
+    (`dropped_by = "judge-trifecta-maximus"` matches the real 12, by ID not
+    name), so wire it up properly if a request ever needs it rather than
+    un-excluding it blind.
 - Codex/query dead ends get the same mechanical retries `search_codex`
   always had (trailing-number-strip, space-collapse) plus two added
   2026-09-23: collapsing consecutive duplicated letters, and dropping a

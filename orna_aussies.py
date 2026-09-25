@@ -447,6 +447,42 @@ def _resolve_attr_field(field: str) -> Optional[str]:
     return fields[close[0]] if close else None
 
 
+def unresolvable_condition_fields(conditions: list) -> list:
+    """Which of `conditions`' field names resolve to nothing, as
+    [(kind, field, [suggestions])].
+
+    An unresolvable field used to be indistinguishable from a real absence:
+    _eval_condition simply never matched it, so query_records returned 0 rows
+    and the caller read that as "nothing in the game has this". Live 2026-09-25
+    the loop filtered on `dropped_by` (deliberately excluded as a cross-link
+    field, so not in the attr vocabulary), got 0, and reported "this boss drops
+    nothing usable by mages" - the right answer, reached from no evidence at
+    all; the same 0 would have been produced had the answer been yes. A caller
+    that tells the model its FIELD was unusable gets a corrected retry, which
+    is the whole point of the loop; a silent 0 gets a confident guess.
+
+    Only `attr` and `stat` conditions have a resolvable field vocabulary.
+    `text`/`effect`/`ability` fields are fixed small sets handled in
+    _eval_condition itself, so they are not checked here."""
+    bad = []
+    for cond in conditions or []:
+        if not isinstance(cond, dict):
+            continue
+        kind = str(cond.get("kind", "")).strip().lower()
+        field = str(cond.get("field", "") or "").strip()
+        if not field:
+            continue
+        if kind == "attr" and _resolve_attr_field(field) is None:
+            vocab = _all_attr_fields()
+        elif kind == "stat" and _resolve_stat_field(field) is None:
+            vocab = _all_stat_fields()
+        else:
+            continue
+        norm = field.lower().replace(" ", "_").replace("-", "_")
+        bad.append((kind, field, difflib.get_close_matches(norm, list(vocab), n=4, cutoff=0.4)))
+    return bad
+
+
 def _parse_number(raw) -> Optional[float]:
     """'130', '+5', '2%', '-10', '2,500_orns', 5 -> 130.0, 5.0, 2.0, -10.0,
     2500.0, 5.0. None on failure."""
@@ -595,12 +631,18 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             # "all_classes" item, is a valid answer to "something for a
             # mage" and was wrongly excluded before this).
             target_text = _USEABLE_BY_ALIASES.get(target_text, target_text)
-            # every real item has this field populated today (verified
-            # directly - 0/2764 missing or empty), but a record with no
-            # restriction stated at all should read the same as
-            # "all_classes", not "nothing" - defensive, not currently
-            # load-bearing.
-            raw_text = str(raw or "all_classes").strip().lower()
+            # Every real ITEM has this field populated (verified directly -
+            # 0/2764 missing or empty). An earlier version defaulted a missing
+            # value to "all_classes" as a defensive no-op for items, but a
+            # query runs over EVERY category, and raids/monsters/bosses/
+            # buildings/dungeons legitimately have no useable_by at all - so
+            # that default made every one of them match every class filter.
+            # Live 2026-09-25: `name ~ "Judge Trifecta" AND useable_by =
+            # magic_users` returned the RAID "Judge Trifecta Maximus", i.e. a
+            # confident "yes, mages can use it" about a raid. An absent field
+            # is now no-match: it costs nothing for items (none are missing
+            # it) and is the only correct reading everywhere else.
+            raw_text = str(raw).strip().lower() if raw else ""
             # bool(target_text) guard matches the other branches: an empty
             # value must fail closed, not match every record via "" in raw_text.
             matched = bool(target_text) and (target_text in raw_text or raw_text == "all_classes")
@@ -717,6 +759,27 @@ def _demo() -> None:
     for term, expected in cases.items():
         got = _parse_buff_query(term)
         assert got == expected, f"_parse_buff_query({term!r}) = {got!r}, expected {expected!r}"
+    # A bogus field must be REPORTED, not silently return 0 rows - a 0 that
+    # means "nothing was searched" got read as "nothing exists" live.
+    bad = unresolvable_condition_fields([{"kind": "attr", "field": "dropped_by", "value": "x"}])
+    assert len(bad) == 1 and bad[0][0] == "attr" and bad[0][1] == "dropped_by", bad
+    assert unresolvable_condition_fields([
+        {"kind": "attr", "field": "useable_by", "value": "mage"},
+        {"kind": "attr", "field": "place", "value": "head"},
+        {"kind": "stat", "field": "magic", "cmp": ">", "value": 250},
+        {"kind": "text", "field": "name", "value": "judge"},      # fixed vocab, not checked
+        {"kind": "effect", "field": "gives", "value": "Def Down"},
+    ]) == [], "real fields must not be flagged"
+    # fuzzy drift still resolves, so it must NOT be flagged as unresolvable
+    assert unresolvable_condition_fields([{"kind": "stat", "field": "follower_stat", "value": 1}]) == []
+
+    # a record with NO useable_by (raids/monsters) must not match a class filter
+    assert not _eval_condition({"category": "raids", "id": "x", "name": "X"},
+                               {"kind": "attr", "field": "useable_by", "cmp": "=", "value": "mage"})
+    # ...while an explicit all_classes item still does
+    assert _eval_condition({"category": "items", "id": "y", "name": "Y", "useable_by": "all_classes"},
+                           {"kind": "attr", "field": "useable_by", "cmp": "=", "value": "mage"})
+
     print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
 
 
