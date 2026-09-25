@@ -1084,6 +1084,48 @@ control flow:
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
 
+### `estimate_stats` - a whole character's projected stats
+
+`estimate_stats(args={items:[{name,quality}], specialization, class,
+ascension_level, pvp, amities})` posts a full stat table. The order of
+operations is the part that has to be right, and it is deliberately split
+across two modules so each half is pinned by its own self-check:
+  1. every worn item assessed at ITS OWN quality (the same
+     `orna_assess.get_assess_result` path `/orna assess` uses) and summed -
+     gear stats are ADDITIVE;
+  2. plus the tier-10 specialization's absolute base stats;
+  3. then `orna_classes.estimate` applies the class's percent modifiers,
+     Ascension Level (+1%/level) and PVP (HP ×2).
+**Read the projection, not `entry.stats`** - `AssessResult.stats` is
+`{stat: StatRow}` where `StatRow.values` holds one value per upgrade level.
+A first version summed `entry.stats`, which is the item's UNUPGRADED base,
+so a godforged Lost Helmet contributed 172 defense instead of 472 - the
+totals still looked plausible, which is exactly why this is called out.
+
+**Budget raised to `MAX_STEPS = 35` and `LOOP_TIMEOUT_SECONDS = 600`** on
+ask, because a multi-item estimate legitimately needs many tool calls.
+Running out of either still SUMMARISES rather than failing - `_close_out`
+already covered both endings, and there is now a stub check that 35 steps
+followed by exhaustion produces an answer built from what was gathered.
+
+**Clarification vs inline, the two halves of "ask when something is
+missing":**
+- In a CHAT, a request missing something that would change the answer (for
+  a stat estimate: the items, their qualities, the spec/class, AL, PVP)
+  makes the model call `ask`. Verified live - "порахуй мої стати" asks for
+  exactly those, rather than inventing a loadout.
+- INLINE there is no reply channel at all, so `OrnaSession.allow_ask` is
+  False there: the prompt says so up front, and `_advance_inner` refuses an
+  `ask` with an observation telling the model to answer from what it has and
+  state its assumptions. Verified both ways with stubs - chat pauses on the
+  question, inline answers anyway.
+- **`ask` options get normalised** (`_normalize_options`): the model
+  sometimes packs the whole list into ONE string
+  (`["['Клас та одяг', 'Тільки класс', 'Інше']"]`), which rendered as a
+  single button labelled with a Python list repr. A bare string is unpacked
+  too, since iterating it would otherwise make one button per CHARACTER.
+  Same wrong-shape drift as `action_input` arriving inside `args`.
+
 ### Class / specialization stats (`orna_classes.py`) - the player stats estimator
 
 The data behind aussiescodex's own stats estimator, extracted from the

@@ -40,6 +40,7 @@ paging through one result list, which edits that list's keyboard.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import httpx
 import datetime
@@ -103,7 +104,7 @@ _RESULTS_PER_PAGE = 8
 # needs codex-miss + retry + open_entry + knowledge_search/web_search
 # (+ maybe a refined retry) + finish. 16 gives real headroom for that
 # chain plus a genuinely multi-part request on top of it.
-MAX_STEPS = 16
+MAX_STEPS = 35
 # EVERY step tries Ollama Cloud first and falls back to local, per explicit
 # ask 2026-09-24. This replaced a context-weight scheme (CLOUD_CONTEXT_CHARS,
 # now gone) that kept the "cheap" routing/lookup steps on the free local model
@@ -128,8 +129,8 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "calculate", "assess",
-            "compare", "build_optimize", "towers", "class_guide", "knowledge_search", "releases", "web_search",
-            "ask", "finish")
+            "compare", "build_optimize", "estimate_stats", "towers", "class_guide", "knowledge_search",
+            "releases", "web_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -184,7 +185,7 @@ LOCAL_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=1
 # Bumped alongside MAX_STEPS 8->16 to keep giving a legitimately-slow (not
 # hung) full-length run enough real time to finish rather than getting
 # cut off mid-reasoning.
-LOOP_TIMEOUT_SECONDS = 300
+LOOP_TIMEOUT_SECONDS = 600
 # ponytail: fixed TTL + a hard cap, pruned opportunistically on each new
 # /orna call - same tradeoff telegram_go._SESSIONS makes. No persistence,
 # no real LRU; add if session volume ever outgrows one process's memory
@@ -1515,6 +1516,124 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     return "\n\n".join(blocks)
 
 
+# Gear stats ADD together; the class/AL/PVP layer multiplies on top. Keeping
+# those two phases separate is the whole reason this isn't done in the model's
+# head - see orna_classes.estimate for the second half.
+_ESTIMATE_STATS = ("hp", "mana", "attack", "defense", "magic", "resistance",
+                   "dexterity", "foresight", "crit", "ward", "view_distance")
+
+
+async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
+    """Project a full character's stats from worn items + specialization +
+    class + Ascension Level + PVP, and any amity/bonus values given.
+
+    Order of operations, which is the part that has to be right:
+      1. each item assessed at its own quality (the same
+         orna_assess.get_assess_result path /orna assess uses), summed -
+         gear stats are ADDITIVE;
+      2. plus the tier-10 specialization's own base stats;
+      3. times the class's percent stat modifiers;
+      4. times Ascension Level (+1%/level, AL 100 doubles);
+      5. HP doubled if PVP.
+    Steps 2-5 are orna_classes.estimate, so the AL/PVP rules live in exactly
+    one place and are pinned by that module's self-check."""
+    items = args.get("items") or []
+    if isinstance(items, str):
+        items = [items]                 # a lone string would iterate characters
+    spec = str(args.get("specialization") or "").strip()
+    klass = str(args.get("class") or args.get("klass") or "").strip()
+    al = args.get("ascension_level") or args.get("al") or 0
+    try:
+        al = int(al)
+    except (TypeError, ValueError):
+        al = 0
+    pvp = bool(args.get("pvp"))
+    amities = args.get("amities") or {}
+
+    totals, lines, missing = {}, [], []
+    for raw in items[:12]:
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or raw.get("item") or "").strip()
+            quality = str(raw.get("quality") or "").strip()
+        else:
+            name, quality = str(raw).strip(), ""
+        if not name:
+            continue
+        parsed = _parse_quality_spec(quality) if quality else None
+        q, level = parsed if parsed else (200, 13)   # default: fully forged
+        entry, err = await _resolve_aussies_entry(name)
+        if entry is None:
+            missing.append(f"{name} ({err})")
+            continue
+        inp = AssessInput(entry=entry, level=level if entry.is_upgradable else 1,
+                          boss_scaling=entry.boss_scaling, quality=q, stats={})
+        result = get_assess_result(inp, is_quality_calc=True)
+        # AssessResult.stats is {stat: StatRow}, and StatRow.values holds one
+        # projected value PER upgrade level. Take the requested level (or the
+        # top one), NOT entry.stats - those are the item's unupgraded base,
+        # which is what a first version silently summed: a godforged Lost
+        # Helmet came out at its base 172 defense instead of 472.
+        got = {}
+        for stat, row in ((result.stats if result is not None else None) or {}).items():
+            values = getattr(row, "values", None) or []
+            if not values:
+                continue
+            idx = min(max(level, 1), len(values)) - 1
+            if isinstance(values[idx], (int, float)):
+                got[stat] = values[idx]
+        if not got:
+            # A non-scaling item (material, flat accessory) has no projection -
+            # fall back to its raw stats rather than contributing nothing.
+            got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
+        for stat, value in got.items():
+            if stat in _ESTIMATE_STATS and isinstance(value, (int, float)):
+                totals[stat] = totals.get(stat, 0) + value
+        lines.append(f"{entry.name} @ {q}% lv{level}: " +
+                     ", ".join(f"{k} {v:g}" for k, v in sorted(got.items()) if k in _ESTIMATE_STATS))
+
+    # The class layer. A specialization contributes its own base stats too.
+    spec_entry = orna_classes.find_class(spec) if spec else None
+    if spec_entry and spec_entry.get("base_stats"):
+        for stat, value in spec_entry["base_stats"].items():
+            if stat in _ESTIMATE_STATS and isinstance(value, (int, float)) and value:
+                totals[stat] = totals.get(stat, 0) + value
+
+    applied = orna_classes.estimate(klass or spec, ascension_level=al, pvp=pvp, base_stats=totals or None)
+    final = (applied or {}).get("stats") or {k: round(v, 1) for k, v in totals.items()}
+
+    head = ["🧮 <b>Оцінка характеристик</b>"]
+    detail = []
+    if spec_entry:
+        detail.append(f"спеціалізація: {spec_entry['name']}")
+    if klass and orna_classes.find_class(klass):
+        detail.append(f"клас: {orna_classes.find_class(klass)['name']}")
+    detail.append(f"AL {al}")
+    if pvp:
+        detail.append("PVP (HP ×2)")
+    head.append(" · ".join(detail))
+    if lines:
+        head.append("")
+        head.append("\n".join(f"• {html.escape(l)}" for l in lines))
+    if amities:
+        head.append("")
+        head.append("Аміті/бонуси: " + html.escape(", ".join(
+            f"{k} {v}" for k, v in amities.items()) if isinstance(amities, dict) else str(amities)))
+    if missing:
+        head.append("")
+        head.append("⚠️ не знайдено: " + html.escape("; ".join(missing)))
+    head.append("")
+    head.append("<b>Разом:</b>")
+    head.append(pre_table([["Стат", "Значення"]] +
+                          [[k, f"{final[k]:g}"] for k in _ESTIMATE_STATS if final.get(k)]))
+    await message.reply_text("\n".join(head), parse_mode="HTML", disable_web_page_preview=True)
+
+    summary = ", ".join(f"{k}={final[k]:g}" for k in _ESTIMATE_STATS if final.get(k))
+    note = f" Не знайдено: {'; '.join(missing)}." if missing else ""
+    return (f"posted a stats estimate ({len(lines)} item(s), spec={spec or '-'}, class={klass or '-'}, "
+            f"AL={al}, pvp={pvp}). Totals [{summary}].{note} The table is already shown to the user - "
+            f"finish() just needs a short closing line.")
+
+
 async def _run_releases_tool(message, query: str, sources: Optional[list] = None) -> str:
     """playorna.com's own patch notes (orna_releases, disk-cached a week).
 
@@ -1643,6 +1762,14 @@ _TOOLS_TEXT = (
     "gold/luck bonus and similar %-bonus stats) - for a single raw combat stat like magic/attack, use query's "
     "sort_by instead (that's a \"pick the best one\" ask, not a \"stack across slots\" ask). POSTS the full "
     "breakdown - finish() just needs a short closing line.\n"
+    "- estimate_stats(args={\"items\":[{\"name\":\"<item>\",\"quality\":\"<quality or %>\"}, ...],"
+    "\"specialization\":\"<tier-10 spec, e.g. Gilgamesh/Heretic/Realmshifter/Beowulf/Grand Summoner/Deity>\","
+    "\"class\":\"<class, e.g. Duelist/Magus/Warden>\",\"ascension_level\":<0-200>,\"pvp\":true|false,"
+    "\"amities\":{\"<bonus>\":\"<value>\"}}): a FULL character stat estimate. Sums every worn item at its own "
+    "quality, adds the specialization's base stats, then applies the class's percent modifiers, Ascension "
+    "Level (+1% per level, AL 100 doubles) and PVP (doubles HP only). Use this for \"which stats will I "
+    "have\"/\"порахуй мої стати\" questions. POSTS the full table - finish() just needs a short closing line. "
+    "See the CLARIFICATION rule below: it needs the gear, the spec/class, AL and PVP to be right.\n"
     "- towers(): no input. Current floor (15-50, 50=cleared/at the top awaiting reset) of all 5 real-time \"Wild "
     "Towers of Olympia\" (Selene/Eos/Oceanus/Themis/Prometheus) - pure deterministic math from the current time, "
     "always available, never a dead end. Use for \"how tall is tower X now\"/\"which tower is at max\" etc. For "
@@ -1868,7 +1995,7 @@ _AGGREGATE_RULE = (
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 
-def _orna_system_prompt(user_text: str = "") -> str:
+def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = "|".join(f'"{a}"' for a in _ACTIONS)
     # Deterministic per-request language lock. Prompt-only "reply in the
@@ -1887,8 +2014,13 @@ def _orna_system_prompt(user_text: str = "") -> str:
             f"reply you send for THIS request MUST be written in {req_lang} - never another language, no matter "
             f"what language the guide/codex text you read is in or what language the examples below happen to use.\n\n"
         )
+    no_ask = "" if allow_ask else (
+        "INLINE MODE: this request has NO reply channel - there are no buttons and the user cannot answer "
+        "you. NEVER call ask here. If something is missing, pick the most reasonable assumption, ANSWER "
+        "anyway, and state plainly in finish() what you assumed and which detail would change it.\n\n"
+    )
     return (
-        lang_lock +
+        lang_lock + no_ask +
         'You are a ReAct agent answering /orna requests about the mobile RPG "Orna" for a Telegram bot used by '
         f'its guild - requests come in English or Ukrainian. Current date/time: {now} (server local time) - use '
         'this for "today"/"next event"/other relative dates. LANGUAGE (important): reply text (ask/finish '
@@ -1920,7 +2052,14 @@ def _orna_system_prompt(user_text: str = "") -> str:
         # template injects - so it now just states the preference. Either
         # channel parses: ollama_client._from_tool_calls translates a native
         # call back into this same object.
-        "OUTPUT FORMAT: send that single JSON object as ordinary message content - that is the preferred "
+        "CLARIFICATION - when a request is missing something that would CHANGE the answer, ask instead of "
+    "guessing. The clearest case is estimate_stats: a stat estimate needs the ITEMS the player wears and each "
+    "one's QUALITY, their SPECIALIZATION and/or CLASS, their ASCENSION LEVEL, and whether it is PVP - if any "
+    "of those is absent and the user hasn't said to assume, call ask() for the missing one (most important "
+    "first; ask once, and a \"Своя відповідь\" button is added automatically so they can type a list). The "
+    "same applies anywhere else a missing detail materially changes the result. Do NOT ask about something "
+    "you can look up yourself, and do NOT ask when the user has already given a reasonable default.\n\n"
+    "OUTPUT FORMAT: send that single JSON object as ordinary message content - that is the preferred "
         "channel, and the only one every backend agrees on. Emitting a native tool call for one of the action "
         "names above is understood too, but never mix the two or send anything besides the JSON object."
     )
@@ -1947,12 +2086,17 @@ class OrnaSession:
     # order it was consulted - surfaced as a "Джерела" button on finish().
     sources: list = field(default_factory=list)
     status: object = None  # the ephemeral _Status message, owned by _advance
+    # INLINE mode can show no buttons and receive no reply - the answer is one
+    # edited message in a chat the bot isn't in - so "ask" is turned off there
+    # and the model is told to answer from what it has, stating assumptions,
+    # rather than stalling on a question nobody can answer.
+    allow_ask: bool = True
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
 
 
-def _new_orna_session(messages: list, steps_left: int) -> str:
+def _new_orna_session(messages: list, steps_left: int, allow_ask: bool = True) -> str:
     now = time.monotonic()
     for sid in [s for s, sess in _ORNA_SESSIONS.items() if now - sess.created > SESSION_TTL_SECONDS]:
         _ORNA_SESSIONS.pop(sid, None)
@@ -1960,7 +2104,7 @@ def _new_orna_session(messages: list, steps_left: int) -> str:
         oldest = min(_ORNA_SESSIONS, key=lambda s: _ORNA_SESSIONS[s].created)
         _ORNA_SESSIONS.pop(oldest, None)
     sid = uuid.uuid4().hex[:10]
-    _ORNA_SESSIONS[sid] = OrnaSession(messages=messages, steps_left=steps_left)
+    _ORNA_SESSIONS[sid] = OrnaSession(messages=messages, steps_left=steps_left, allow_ask=allow_ask)
     return sid
 
 
@@ -1993,6 +2137,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_open_entry_tool(message, action_input, sources)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
+        if action == "estimate_stats":
+            return await _run_estimate_stats_tool(message, args, sources)
         if action == "releases":
             return await _run_releases_tool(message, action_input, sources)
         if action == "web_search":
@@ -2083,7 +2229,7 @@ class _Status:
     """One ephemeral "what I'm doing now" message: sent on the first update,
     EDITED in place on every later one, deleted when the request ends.
 
-    A /orna request can legitimately run for minutes (MAX_STEPS = 16, plus a
+    A /orna request can legitimately run for minutes (MAX_STEPS = 35, plus a
     wall-clock ceiling of LOOP_TIMEOUT_SECONDS), during which the chat was
     previously silent except for whatever tools happened to post - so there
     was no way to tell a working request from a stuck one. Editing ONE
@@ -2202,6 +2348,36 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
             raise
 
 
+def _normalize_options(raw) -> list:
+    """The "ask" options as a real list of strings.
+
+    The model sometimes hands back the whole list packed into ONE string -
+    seen live: `["['Клас та одяг', 'Тільки класс', 'Інше']"]`, which rendered
+    as a single button labelled with a Python list repr. Same wrong-shape
+    drift as action_input arriving inside args; translate rather than reject.
+    A bare string is also unpacked, since iterating it would otherwise make
+    one button per CHARACTER."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    out = []
+    for item in raw if isinstance(raw, (list, tuple)) else [raw]:
+        text = str(item).strip()
+        if not text:
+            continue
+        if text.startswith(("[", "(")) and text.endswith(("]", ")")) and "," in text:
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, (list, tuple)):
+                out.extend(str(x).strip() for x in parsed if str(x).strip())
+                continue
+        out.append(text)
+    return out
+
+
 async def _advance_inner(sid: str, message) -> None:
     session = _ORNA_SESSIONS.get(sid)
     if session is None:
@@ -2252,7 +2428,16 @@ async def _advance_inner(sid: str, message) -> None:
 
         if action == "ask":
             usage_stats.record_tool_call("ask")
-            options = [str(o).strip() for o in (step.get("options") or []) if str(o).strip()][:4]
+            if not session.allow_ask:
+                session.messages.append({
+                    "role": "user",
+                    "content": "Observation: you cannot ask anything here - this request came from INLINE mode, "
+                               "where there are no buttons and no reply channel. Answer NOW from what you "
+                               "already have, state the assumptions you made for any missing detail, and say "
+                               "which detail would change the answer.",
+                })
+                continue
+            options = _normalize_options(step.get("options"))[:4]
             if not options:
                 session.messages.append({
                     "role": "user",
@@ -2418,10 +2603,10 @@ async def handle_chosen_inline_result(update: Update, context: ContextTypes.DEFA
     usage_stats.record_command_for(update, "orna_inline", query)
 
     messages = [
-        {"role": "system", "content": _orna_system_prompt(query)},
+        {"role": "system", "content": _orna_system_prompt(query, allow_ask=False)},
         {"role": "user", "content": query},
     ]
-    sid = _new_orna_session(messages, MAX_STEPS)
+    sid = _new_orna_session(messages, MAX_STEPS, allow_ask=False)
     sink = _InlineSink()
     try:
         await _advance(sid, sink, with_status=False)
