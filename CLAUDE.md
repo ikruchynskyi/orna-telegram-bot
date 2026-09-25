@@ -1065,6 +1065,37 @@ timestamps have second resolution, so several reports in the same second
 compare equal and a stable sort would otherwise leave them oldest-first
 inside a newest-first list.
 
+**`/ban` / `/unban` block an abuser or spammer, and the enforcement is ONE
+pre-dispatch guard, not a check per handler.** `drop_banned` is a
+`TypeHandler(Update, ...)` registered in **group -1**, i.e. ahead of everything,
+which raises `ApplicationHandlerStop` for a banned user. That single check
+therefore covers commands, free text, photos, button taps, inline queries AND
+the stateful assess/resources conversations - where a per-handler check would
+have to be added to each of the ~20 handlers `main()` registers and would be
+forgotten by the 21st. Notes:
+- **Deliberately SILENT** - no "you are banned" reply. These are spammers and
+  abusers; answering both invites an argument and confirms the bot is
+  listening. Same reasoning as `/go`'s unauthorised path, which just returns.
+- Gated by the same `GO_ALLOWED_USER_IDS` allowlist `/go`/`/stats`/
+  `/update_codex` use, and left out of `set_my_commands` like they are.
+- `/ban` with NO argument lists who is currently blocked, so there is no third
+  command to remember (same shape as a bare `/stats reset` showing what it
+  would clear).
+- **Two guards stop a mistyped id locking the operators out of their own bot:**
+  an admin in `GO_ALLOWED_USER_IDS` cannot be banned, and neither can the
+  caller themselves.
+- **A bare numeric id is accepted even for someone `usage_stats` has never
+  seen.** Free-text messages are not instrumented (see the usage-counters
+  note), so a spammer who never sent a slash command has no record here - and
+  they are precisely who needs banning. `@username` resolution goes through the
+  existing `usage_stats.find_user`, so it only works for someone already known.
+- `usage_stats._banned` is persisted in the same store (surviving the frequent
+  `launchctl` reloads) and is **NOT cleared by `/stats reset`** - a ban is a
+  moderation decision, not a statistic, so wiping the counters must not quietly
+  readmit everyone who was blocked. Pinned by the suite's `ban-guard` tier-0
+  check, which redirects `_STORE_PATH` to a temp file so a routine suite run
+  can never mutate live moderation state.
+
 **`/stats reset` needs a second word, not a button.** It is destructive and
 irreversible, and this chat is full of keyboards from earlier messages - a
 mis-tap must not be able to wipe the counters, so it takes

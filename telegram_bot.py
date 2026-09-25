@@ -2,6 +2,7 @@ import html
 import os
 import logging
 import re
+from typing import Optional
 
 from dotenv import load_dotenv
 load_dotenv()  # must run before importing modules that read env vars at import time (orna_sheets)
@@ -14,7 +15,8 @@ from telegram import (
     BotCommandScopeDefault,
     Update,
 )
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
+from telegram.ext import (ApplicationBuilder, ApplicationHandlerStop, CommandHandler, ContextTypes,
+                          filters, MessageHandler, TypeHandler)
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_reminder_callback_handler, build_resource_conversation
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
@@ -251,6 +253,126 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             logger.warning("report: could not notify admin %s", admin_id, exc_info=True)
 
 
+async def drop_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pre-dispatch guard: a banned user's updates are dropped before ANY
+    handler sees them.
+
+    Registered as a TypeHandler in group -1, i.e. ahead of everything, and it
+    raises ApplicationHandlerStop - which is what makes this ONE check cover
+    commands, free text, photos, button taps, inline queries and the
+    conversation flows alike. A per-handler check would have to be added to
+    every one of the ~20 handlers registered below and would be forgotten by
+    the next one; this cannot be bypassed by a handler that did not opt in.
+
+    Deliberately SILENT - no "you are banned" reply. The people this exists
+    for are spammers and abusers, and answering them both invites an argument
+    and confirms the bot is listening. Same reasoning as /go's unauthorised
+    path, which also just returns.
+    """
+    user = update.effective_user
+    if user and usage_stats.is_banned(user.id):
+        logger.info("banned user_id=%s dropped (%s)", user.id, update.effective_chat.id
+                    if update.effective_chat else "?")
+        raise ApplicationHandlerStop
+
+
+def _resolve_target(arg: str) -> Optional[str]:
+    """A /ban|/unban argument to a user_id string. A bare number is taken
+    as-is even for someone usage_stats has never seen: free-text messages are
+    not instrumented, so a spammer who never sent a slash command has no
+    record here - and they are exactly who needs banning."""
+    arg = arg.strip()
+    if arg.lstrip("-").isdigit():
+        return arg
+    return usage_stats.find_user(arg)
+
+
+def _banned_list_text() -> str:
+    rows = usage_stats.banned_users()
+    if not rows:
+        return "Немає заблокованих користувачів."
+    lines = [f"🚫 Заблоковані ({len(rows)}):"]
+    for uid, name, info in rows:
+        who = f"{html.escape(name)} " if name else ""
+        reason = f" — {html.escape(info.get('reason', ''))}" if info.get("reason") else ""
+        lines.append(f"• <code>{uid}</code> {who}({info.get('ts', '?')[:10]}){reason}")
+    return "\n".join(lines)
+
+
+async def handle_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hidden admin command: block an abuser or spammer.
+
+    /ban                       - list who is currently blocked
+    /ban <id|@username> [why]  - block them (reason is free text, optional)
+
+    Gated by the same GO_ALLOWED_USER_IDS allowlist /go, /stats and
+    /update_codex use, and left out of set_my_commands like they are.
+    """
+    message = update.effective_message
+    if not message:
+        return
+    user = update.effective_user
+    if GO_ALLOWED_USER_IDS and (not user or user.id not in GO_ALLOWED_USER_IDS):
+        logger.warning("ban: rejected user_id=%s", user.id if user else None)
+        return
+
+    args = context.args or []
+    if not args:
+        await message.reply_text(_banned_list_text(), parse_mode="HTML")
+        return
+
+    target = _resolve_target(args[0])
+    if not target:
+        await message.reply_text(
+            f"Не знайшов користувача {html.escape(args[0])!r}. Вкажіть числовий id "
+            "(його видно у <code>/stats users</code>).", parse_mode="HTML")
+        return
+
+    # Two guards, because a mistyped id must never lock the operators out of
+    # their own bot: an admin cannot be banned, including by themselves.
+    if user and target == str(user.id):
+        await message.reply_text("Себе заблокувати не можна.")
+        return
+    if GO_ALLOWED_USER_IDS and int(target) in GO_ALLOWED_USER_IDS:
+        await message.reply_text("Це адміністратор — блокувати не можна.")
+        return
+
+    reason = " ".join(args[1:]).strip()
+    if usage_stats.ban(target, reason, by=user.id if user else None):
+        name = usage_stats.user_detail(target)
+        label = (name or {}).get("name") or ""
+        await message.reply_text(
+            f"🚫 Заблоковано <code>{target}</code>{' ' + html.escape(label) if label else ''}"
+            + (f"\nПричина: {html.escape(reason)}" if reason else ""), parse_mode="HTML")
+    else:
+        await message.reply_text(f"<code>{target}</code> вже заблокований.", parse_mode="HTML")
+
+
+async def handle_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hidden admin command: unblock a user. Same allowlist as /ban."""
+    message = update.effective_message
+    if not message:
+        return
+    user = update.effective_user
+    if GO_ALLOWED_USER_IDS and (not user or user.id not in GO_ALLOWED_USER_IDS):
+        logger.warning("unban: rejected user_id=%s", user.id if user else None)
+        return
+
+    args = context.args or []
+    if not args:
+        await message.reply_text("Вкажіть кого розблокувати: <code>/unban &lt;id&gt;</code>\n\n"
+                                 + _banned_list_text(), parse_mode="HTML")
+        return
+    target = _resolve_target(args[0])
+    if not target:
+        await message.reply_text(f"Не знайшов користувача {html.escape(args[0])!r}.")
+        return
+    if usage_stats.unban(target):
+        await message.reply_text(f"✅ Розблоковано <code>{target}</code>.", parse_mode="HTML")
+    else:
+        await message.reply_text(f"<code>{target}</code> не був заблокований.", parse_mode="HTML")
+
+
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Hidden admin command: report usage_stats' counters. Gated by the
     same GO_ALLOWED_USER_IDS allowlist /go and /update_codex use.
@@ -438,6 +560,10 @@ def main():
     # concurrent activity naturally isolated to different chats/users.
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).concurrent_updates(32).build()
     app.add_error_handler(_on_error)
+    # Group -1 so it runs before every other handler: one guard covering
+    # commands, free text, photos, buttons, inline queries and the stateful
+    # conversations, instead of a check in each of the ~20 handlers below.
+    app.add_handler(TypeHandler(Update, drop_banned), group=-1)
     app.add_handler(CommandHandler("res_today", today_resources))
     app.add_handler(CommandHandler("res_next", resource_next))
     # New unified entry point (routes "today"/"next"/codex-search intent via
@@ -463,6 +589,10 @@ def main():
     app.add_handler(build_update_codex_handler())
     # Same hidden/gated treatment - reports usage_stats' counters.
     app.add_handler(CommandHandler("stats", handle_stats))
+    # Hidden, same allowlist as /go and /stats, and left out of
+    # set_my_commands - moderation tools, not something a guild member needs.
+    app.add_handler(CommandHandler("ban", handle_ban))
+    app.add_handler(CommandHandler("unban", handle_unban))
     # Registered before the Orna conversations: its filter only matches a
     # chat that just tapped /go's "Continue" button, so it's a no-op (falls
     # through to assess/resources below) for every other chat/message.

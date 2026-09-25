@@ -221,6 +221,56 @@ def _check_mechanics_wired_into_loop() -> None:
     assert "+1%" in T.orna_mechanics.search("ascension level"), "AL scaling must be findable"
 
 
+def _check_ban_guard() -> None:
+    """Ban/unban round-trip, persistence, and the pre-dispatch guard.
+
+    _STORE_PATH is redirected to a temp file for the duration: usage_stats.ban
+    writes the REAL usage_stats.json, and a suite meant to be run routinely
+    must never mutate live moderation state or counters."""
+    import asyncio as _asyncio
+    import pathlib as _pathlib
+    import tempfile
+
+    import telegram_bot
+    import usage_stats
+    from telegram.ext import ApplicationHandlerStop
+
+    victim = "999000111"
+    real_path, real_banned = usage_stats._STORE_PATH, dict(usage_stats._banned)
+    with tempfile.TemporaryDirectory() as tmp:
+        usage_stats._STORE_PATH = _pathlib.Path(tmp) / "usage_stats.json"
+        usage_stats._banned.clear()
+        try:
+            assert usage_stats.ban(victim, "spam", by=1) is True
+            assert usage_stats.ban(victim) is False, "a second ban must report already-banned"
+            assert usage_stats.is_banned(victim) and usage_stats.is_banned(int(victim)), \
+                "is_banned must accept both an int and a str id"
+            assert usage_stats._STORE_PATH.exists(), "a ban must be persisted immediately"
+            # A ban is a moderation decision, not a statistic - clearing the
+            # counters must not quietly readmit a spammer.
+            usage_stats.reset()
+            assert usage_stats.is_banned(victim), "reset() must not clear bans"
+
+            class _U:
+                def __init__(self, uid):
+                    self.effective_user = type("u", (), {"id": uid})()
+                    self.effective_chat = type("c", (), {"id": uid})()
+
+            try:
+                _asyncio.run(telegram_bot.drop_banned(_U(int(victim)), None))
+                raise AssertionError("the guard must stop a banned user's update")
+            except ApplicationHandlerStop:
+                pass
+            # ...and must be a no-op for everyone else
+            _asyncio.run(telegram_bot.drop_banned(_U(4242), None))
+            assert usage_stats.unban(victim) is True and not usage_stats.is_banned(victim)
+            assert usage_stats.unban(victim) is False
+        finally:
+            usage_stats._STORE_PATH = real_path
+            usage_stats._banned.clear()
+            usage_stats._banned.update(real_banned)
+
+
 TIER0 = [
     ("module-demos", _run_module_demos),
     ("useable-by-absent-field", _check_useable_by_absent_field),
@@ -233,6 +283,7 @@ TIER0 = [
     ("towers-consistent", _check_towers_are_self_consistent),
     ("mechanics-wired", _check_mechanics_wired_into_loop),
     ("echo-corpus", lambda: orna_echo._demo()),
+    ("ban-guard", _check_ban_guard),
 ]
 
 

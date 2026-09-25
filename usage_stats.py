@@ -47,6 +47,11 @@ _user_tz: Dict[str, float] = {}  # user_id str -> UTC offset in hours, from tele
 # so a user in any DST region silently drifts an hour twice a year with
 # nothing to signal it. A zone is re-evaluated on every read instead.
 _user_zone: Dict[str, str] = {}
+# user_id str -> {"reason", "ts", "by"}. A MODERATION decision, not a
+# statistic: persisted like everything else here so it survives the frequent
+# launchctl reloads, and deliberately NOT cleared by reset() - see its
+# docstring. Enforced in one place, telegram_bot's pre-dispatch guard.
+_banned: Dict[str, dict] = {}
 _since: str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -71,6 +76,7 @@ def _load() -> None:
         _user_reports[uid] = reports
     _user_tz.update(data.get("user_tz", {}))
     _user_zone.update(data.get("user_zone", {}))
+    _banned.update(data.get("banned", {}))
     _since = data.get("since", _since)
 
 
@@ -92,6 +98,7 @@ def _save() -> None:
             "user_reports": _user_reports,
             "user_tz": _user_tz,
             "user_zone": _user_zone,
+            "banned": _banned,
         }))
         tmp.replace(_STORE_PATH)
     except OSError:
@@ -187,7 +194,9 @@ def reset(include_reports: bool = False) -> dict:
         make every member re-pick their zone before their next reminder
         could be scheduled, which is a worse outcome than stale counters;
       * bug reports, unless `include_reports` - an unread report is work
-        waiting to be done, not a number.
+        waiting to be done, not a number;
+      * bans (_banned) - a moderation decision, never a statistic. Clearing
+        the counters must not quietly readmit every spammer who was blocked.
     Returns what was cleared, so the caller can say so rather than just
     claiming success."""
     global _since
@@ -301,6 +310,40 @@ def user_detail(user_id) -> Optional[Dict]:
         "commands": dict(_user_commands[uid]),
         "recent": list(_user_log.get(uid, [])),
     }
+
+
+def is_banned(user_id) -> bool:
+    """Hot path: called once per incoming update, so a plain dict lookup."""
+    return str(user_id) in _banned
+
+
+def ban(user_id, reason: str = "", by=None) -> bool:
+    """Block `user_id`. False if they were already banned (so the caller can
+    say "already banned" rather than claiming it did something)."""
+    uid = str(user_id)
+    if uid in _banned:
+        return False
+    _banned[uid] = {"reason": reason.strip(),
+                    "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "by": str(by) if by is not None else ""}
+    _save()
+    return True
+
+
+def unban(user_id) -> bool:
+    """Unblock `user_id`. False if they were not banned."""
+    uid = str(user_id)
+    if _banned.pop(uid, None) is None:
+        return False
+    _save()
+    return True
+
+
+def banned_users() -> List[tuple]:
+    """[(user_id, display_name_or_empty, info)], newest ban first."""
+    rows = [(uid, _user_names.get(uid, ""), info) for uid, info in _banned.items()]
+    rows.sort(key=lambda r: r[2].get("ts", ""), reverse=True)
+    return rows
 
 
 def find_user(query: str) -> Optional[str]:
