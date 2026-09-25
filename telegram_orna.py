@@ -221,6 +221,12 @@ _STATE_MAX = 200
 # this fixes. Tapping "I want to type" is the unambiguous signal.
 _PENDING_ASK_TEXT: dict = {}  # chat_id -> (sid, expires_monotonic)
 ASK_TEXT_TTL_SECONDS = 600
+# Live 2026-09-24: the loop asked three times in a row. The user tapped
+# "I'll provide details", then "Specialization/Class" - options that name
+# WHAT to supply rather than answering anything - so each tap resumed the
+# loop with no new information and it simply asked again. The prompt's "don't
+# ask more than once" did not hold, so it is enforced here.
+MAX_ASKS_PER_REQUEST = 2
 # "Інше", "Other", "свій варіант", ... - a model-authored option that really
 # means "none of these". Matched loosely because the model writes it freely.
 _OTHER_OPTION_RE = re.compile(r"^(інше|инше|іньше|other|своя|свій|свое|своє)\b|\b(варіант|answer|option)$", re.IGNORECASE)
@@ -2123,9 +2129,15 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     "of those is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
     "question text (e.g. \"вкажіть: спорядження та якість, спеціалізацію/клас, AL, PVP чи ні\") - a "
     "\"Своя відповідь\" button is added automatically, so they can type all of it in one message, and you "
-    "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. Your own options must be REAL, concrete "
-    "choices, never invented pairings (live failure: offering \"Маг(Gilgamesh)\" and \"Ловець(deity)\", "
-    "which are not real class/specialization pairs). Whatever is still unknown after the answer must be "
+    "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. **The user can also simply TYPE their "
+    "answer to any question you ask - say so in the question when what you need is a list.** Every option you "
+    "give must be a possible ANSWER, not a category of answer: \"Mage\", \"Godforged\", \"PVP\" are "
+    "answers; \"I'll provide details\", \"Specialization/Class\", \"Equipment and quality\" are NOT - "
+    "tapping one of those tells you nothing and you will just have to ask again (live failure: three asks in a "
+    "row, each answered by a tap that carried no information). When what you need is several details at once, "
+    "ask for them ALL in the question text and give either real shortcut answers or no options at all. Options "
+    "must also never be invented pairings (live failure: \"Маг(Gilgamesh)\", \"Ловець(deity)\", which are "
+    "not real class/specialization pairs). Whatever is still unknown after the answer must be "
     "stated as an assumption in finish(), never silently defaulted. The "
     "same applies anywhere else a missing detail materially changes the result. Do NOT ask about something "
     "you can look up yourself, and do NOT ask when the user has already given a reasonable default.\n\n"
@@ -2161,6 +2173,7 @@ class OrnaSession:
     # and the model is told to answer from what it has, stating assumptions,
     # rather than stalling on a question nobody can answer.
     allow_ask: bool = True
+    asks_made: int = 0   # capped by MAX_ASKS_PER_REQUEST
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -2498,6 +2511,14 @@ async def _advance_inner(sid: str, message) -> None:
 
         if action == "ask":
             usage_stats.record_tool_call("ask")
+            if session.asks_made >= MAX_ASKS_PER_REQUEST:
+                session.messages.append({
+                    "role": "user",
+                    "content": f"Observation: you have already asked {session.asks_made} times and must not "
+                               "ask again. Work with what the user has already told you, state any remaining "
+                               "assumption explicitly, and finish.",
+                })
+                continue
             if not session.allow_ask:
                 session.messages.append({
                     "role": "user",
@@ -2516,7 +2537,16 @@ async def _advance_inner(sid: str, message) -> None:
                                "there's no free-text reply channel here. Retry with options, or finish.",
                 })
                 continue
+            session.asks_made += 1
             session.ask_options = options
+            # Accept a TYPED answer to this question, not only a tapped one.
+            # Live: the bot asked, the user typed the full answer, and nothing
+            # happened - the wait was armed only by the escape-hatch button,
+            # so a perfectly good reply fell through to the other handlers and
+            # the request looked stuck. Tapping a real option clears this
+            # again (see orna_callback), so it cannot swallow an unrelated
+            # message once the question has been answered.
+            _PENDING_ASK_TEXT[message.chat_id] = (sid, time.monotonic() + ASK_TEXT_TTL_SECONDS)
             # One option per row. Four 30-char labels in a single row is the
             # same shape that made the old UTC picker unreadable on a phone -
             # Telegram shrinks buttons to fit and clips the text with no
@@ -2792,6 +2822,9 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not (0 <= idx < len(session.ask_options)):
             return
         choice = session.ask_options[idx]
+        # The question is answered by this tap - stop waiting for a typed
+        # reply, so a later unrelated message isn't captured as one.
+        _PENDING_ASK_TEXT.pop(query.message.chat_id, None)
         # Consume the pending ask right here (no await between the bounds
         # check above and this clear, so it's atomic on the event loop): a
         # duplicate callback delivery - Telegram redelivery, or a fast

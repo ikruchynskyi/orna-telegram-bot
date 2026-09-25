@@ -1189,6 +1189,26 @@ missing":**
   `ask` with an observation telling the model to answer from what it has and
   state its assumptions. Verified both ways with stubs - chat pauses on the
   question, inline answers anyway.
+- **A typed answer works for EVERY ask, not just the escape hatch.** Live
+  2026-09-24: the bot asked, the user typed the full answer, and nothing
+  happened - `_PENDING_ASK_TEXT` was armed only when the "Своя відповідь"
+  button was tapped, so a perfectly good reply fell through to the other
+  handlers and the request looked stuck with no status message. Posting an
+  `ask` now arms the wait, and **tapping a real option clears it again**, so
+  it can't capture an unrelated message once the question is answered.
+- **`MAX_ASKS_PER_REQUEST = 2`, enforced in code.** The loop asked three
+  times in a row: the user tapped "I'll provide details", then
+  "Specialization/Class" - options naming WHAT to supply rather than
+  answering anything - so each tap resumed the loop with no new information
+  and it asked again. The prompt's "don't ask more than once" did not hold.
+  Past the cap the model gets an observation telling it to work with what it
+  has and finish.
+- **Every option must be a possible ANSWER, not a category of answer.**
+  "Mage"/"Godforged"/"PVP" are answers; "I'll provide details",
+  "Specialization/Class", "Equipment and quality" are not - tapping one
+  carries no information, which is what produced the three-ask loop. The
+  prompt says this with both the good and the bad examples, and tells the
+  model to say outright that the user may just type the whole list.
 - **`ask` options get normalised** (`_normalize_options`): the model
   sometimes packs the whole list into ONE string
   (`["['Клас та одяг', 'Тільки класс', 'Інше']"]`), which rendered as a
