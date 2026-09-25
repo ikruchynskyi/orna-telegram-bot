@@ -1653,28 +1653,32 @@ _NEEDS_INPUT = "NEEDS_INPUT:"
 
 
 async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
-    """Project a full character's stats from worn items + specialization +
-    class + Ascension Level + PVP, and any amity/bonus values given.
+    """Estimate a character's stats. BASE stats (from the specialization + AL,
+    optionally the class's modifiers) and ITEM stats (from worn gear) are
+    computed SEPARATELY and shown as their own blocks, plus a combined total
+    when both are present - so a player can ask for base stats alone (just
+    class, spec and AL, no gear) OR for a full loadout.
 
-    Order of operations, which is the part that has to be right:
-      1. each item assessed at its own quality (the same
-         orna_assess.get_assess_result path /orna assess uses), summed -
-         gear stats are ADDITIVE;
-      2. plus the tier-10 specialization's own base stats;
-      3. times the class's percent stat modifiers;
-      4. times Ascension Level (+1%/level, AL 100 doubles);
-      5. HP doubled if PVP.
-    Steps 3-5 are orna_classes.scale, so the AL/PVP rules live in exactly one
-    place and are pinned by that module's self-check. They were a second copy
-    of that arithmetic here until 2026-09-25, which is how the docstring came
-    to describe code this function wasn't actually running.
+    Order of operations:
+      * gear: each item assessed at its own quality/level (the same
+        orna_assess.get_assess_result path /orna assess uses), summed - gear
+        stats are ADDITIVE;
+      * base: the tier-10 specialization's absolute base stats;
+      * both blocks are then run through orna_classes.scale, which applies the
+        class's percent modifiers, then Ascension Level (+1%/level, AL 100
+        doubles), then PVP (HP doubled). scale() is LINEAR per stat, so
+        base_scaled + items_scaled equals scaling the combined block - the
+        total is exact, just broken out. The AL/PVP rules live only in
+        orna_classes.scale, pinned by that module's self-check.
 
-    This tool VALIDATES ITS INPUTS FIRST and refuses to run on a partial set
-    (per explicit design ask 2026-09-25). Class, specialization, Ascension
-    Level, PVP and the item list are all REQUIRED; the only thing defaulted
-    is an item's quality (100%, exactly as if the user had typed "100%").
-    Everything else missing means ask the user - every wrong answer this tool
-    has produced came from quietly assuming one of them."""
+    REQUIRED: Ascension Level, and at least one of (a real specialization ->
+    base stats, or items -> gear stats). OPTIONAL, never demanded: `class`
+    (its modifiers are applied when given), `items`, and `pvp` (defaults to
+    PVE - a base-stats question is "class, spec, AL" and shouldn't drag the
+    user through a PVP prompt; the assumption is stated in the reply). An
+    item's quality defaults to 100% and level to 1. The tool refuses a call
+    it can't compute anything from and hands back exactly what's missing,
+    rather than guessing."""
     max_items = 12
     items = args.get("items") or []
     if isinstance(items, (str, dict)):
@@ -1707,45 +1711,45 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         except (TypeError, ValueError):
             al = None                      # "AL 100" - report it, never silently 0
     pvp_raw = args.get("pvp")
-    pvp = _as_bool(pvp_raw) if pvp_raw is not None and str(pvp_raw).strip() != "" else None
+    pvp_given = pvp_raw is not None and str(pvp_raw).strip() != ""
+    # PVP defaults to PVE rather than being required: a base-stats question is
+    # "class, spec, AL" and must not drag the user through a PVP prompt. The
+    # assumption is stated in the reply, never silent.
+    pvp = _as_bool(pvp_raw) if pvp_given else False
 
     classes_list = "/".join(orna_classes.all_names("class"))
     specs_list = "/".join(orna_classes.all_names("specialization"))
+    # REQUIRED: AL, and a base source (a real spec) or gear (items). class and
+    # pvp are OPTIONAL - only a NAME the user actually typed but that doesn't
+    # resolve is worth asking to fix (a typo), never a name they simply omitted.
     need = []
-    if not items:
-        need.append('items: every piece of gear they wear, as [{"name":"<item>","quality":"<quality or %>"}] '
-                    '- if they named a BUILD rather than items ("the omniflask raid build"), call '
-                    'class_guide or knowledge_search FIRST and pass the item names it lists')
-    if not klass:
-        need.append("class: their class - one of " + classes_list)
-    elif class_entry is None:
-        need.append(f"class: {klass!r} is not a class. It must be one of " + classes_list)
-    if not spec:
-        need.append('specialization: their tier-10 specialization - one of ' + specs_list
-                    + ' - or "none" if they do not have one')
-    elif not spec_none and spec_entry is None:
-        need.append(f"specialization: {spec!r} is not a specialization. It must be one of " + specs_list
-                    + ', or "none"')
     if al is None:
         need.append("ascension_level: their AL as a plain number"
                     + (f" - {str(al_raw)[:20]!r} is not one" if al_raw is not None else ""))
-    if pvp is None:
-        need.append("pvp: true if they want the PVP figures (HP is doubled), false for PVE")
+    if klass and class_entry is None:
+        need.append(f"class: {klass!r} is not a class - use one of {classes_list}, or omit class")
+    if spec and not spec_none and spec_entry is None:
+        need.append(f"specialization: {spec!r} is not a specialization - use one of {specs_list}, or \"none\"")
+    if spec_entry is None and not items and not (spec and not spec_none):
+        # Nothing to compute from: no (valid) specialization for base stats and
+        # no items for gear stats. (If they typed a spec that just didn't
+        # resolve, the line above already tells them how to fix it.)
+        need.append("a specialization (for BASE stats - one of " + specs_list + ') and/or items (for GEAR '
+                    "stats, as [{\"name\":\"<item>\",\"quality\":\"<quality or %>\"}]) - at least one is required. "
+                    'If they named a BUILD rather than items ("the omniflask raid build"), call class_guide or '
+                    "knowledge_search FIRST and pass the item names it lists")
     if need:
-        # Refuse the partial call in the TOOL, not in the prompt. Both live
-        # failures of this tool were a guessed input rendered as fact: a
-        # loadout the user never mentioned, and (2026-09-25) a lone class
-        # button that produced a header plus an entirely empty stat table.
-        return (_NEEDS_INPUT + " estimate_stats did NOT run, and showed the user NOTHING - these required "
-                "inputs are "
-                "missing or unusable:\n- " + "\n- ".join(need)
-                + "\nDo NOT guess any of them, and do NOT call this again with the same arguments. Call "
-                "ask() ONCE for exactly the items above, all in one question - the user can type the whole "
-                "lot in a single message. If the question is really about a specialization's own base stats "
-                "with no gear involved, use knowledge_search instead; it answers that without any of this. "
-                "If you cannot ask (inline mode), say plainly which of these you still need.")
+        # Refuse the un-computable call in the TOOL, not the prompt. Live
+        # failures were guessed inputs rendered as fact (a loadout the user
+        # never mentioned; a lone class that rendered an empty table).
+        return (_NEEDS_INPUT + " estimate_stats did NOT run, and showed the user NOTHING - these are missing or "
+                "unusable:\n- " + "\n- ".join(need)
+                + "\nDo NOT guess any of them, and do NOT call this again with the same arguments. Call ask() ONCE "
+                "for exactly the items above, in one question (the user can type it all in a single message). "
+                "Reminder: BASE stats need only class + specialization + AL; items and pvp are OPTIONAL (pvp "
+                "defaults to PVE). If you cannot ask (inline mode), say plainly which of these you still need.")
 
-    totals, lines, skipped = {}, [], []
+    gear_raw, lines, skipped = {}, [], []
     if len(items) > max_items:
         skipped.append(f"передано {len(items)} предметів — враховано перші {max_items}")
     for raw in items[:max_items]:
@@ -1810,54 +1814,71 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
             got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
         for stat, value in got.items():
             if stat in _ESTIMATE_STATS and isinstance(value, (int, float)):
-                totals[stat] = totals.get(stat, 0) + value
+                gear_raw[stat] = gear_raw.get(stat, 0) + value
         lines.append(f"{entry.name} @ {q}% lv{level}: " +
                      ", ".join(f"{k} {v:g}" for k, v in sorted(got.items()) if k in _ESTIMATE_STATS))
 
-    if spec_entry and spec_entry.get("base_stats"):
-        for stat, value in spec_entry["base_stats"].items():
-            if stat in _ESTIMATE_STATS and isinstance(value, (int, float)) and value:
-                totals[stat] = totals.get(stat, 0) + value
+    # BASE (specialization's absolute stats) and GEAR each go through the SAME
+    # class-modifier + AL + PVP layer (orna_classes.scale), but stay separate
+    # so base-only works and the gear contribution is shown on its own. scale()
+    # is linear per stat, so base_scaled + items_scaled == scaling the combined
+    # block - the total is exact, just broken out.
+    class_mods = (class_entry or {}).get("stat_modifiers")
+    base_scaled = orna_classes.scale((spec_entry or {}).get("base_stats") or {}, class_mods, al, pvp)
+    items_scaled = orna_classes.scale(gear_raw, class_mods, al, pvp)
 
-    final = orna_classes.scale(totals, (class_entry or {}).get("stat_modifiers"), al, pvp)
-    if not final:
-        # The required-input check above cannot catch this one: every input
-        # was supplied and valid, but not one item name resolved, so there is
-        # still nothing to show. Never post a stat table with no stats in it.
-        return ("estimate_stats computed NOTHING, so the user was shown NOTHING: none of the item names "
-                f"resolved ({'; '.join(skipped)}). Re-check the spelling with search_codex and call this "
-                "again with names the codex actually has, or ask the user to spell them.")
+    if not base_scaled and not items_scaled:
+        # Everything supplied was valid but there's nothing to show: no spec
+        # (so no base) and not one item name resolved. Never post an empty table.
+        return ("estimate_stats computed NOTHING, so the user was shown NOTHING: no specialization was given for "
+                f"base stats and none of the item names resolved ({'; '.join(skipped) or 'no items given'}). "
+                "Re-check spelling with search_codex and call again with real names, add a specialization for "
+                "base stats, or ask the user.")
 
-    head = ["🧮 <b>Оцінка характеристик</b>"]
+    total = {}
+    for stat in _ESTIMATE_STATS:
+        v = round(base_scaled.get(stat, 0) + items_scaled.get(stat, 0), 1)
+        if v:
+            total[stat] = v
+
+    def _stat_table(block: dict) -> str:
+        return pre_table([["Стат", "Значення"]] + [[k, f"{block[k]:g}"] for k in _ESTIMATE_STATS if block.get(k)])
+
     detail = []
-    if spec_entry:
-        detail.append(f"спеціалізація: {spec_entry['name']}")
     if class_entry:
         detail.append(f"клас: {class_entry['name']}")
+    if spec_entry:
+        detail.append(f"спеціалізація: {spec_entry['name']}")
+    elif spec_none:
+        detail.append("спеціалізація: немає")
     detail.append(f"AL {al}")
-    detail.append("PVP (HP ×2)" if pvp else "PVE")
-    head.append(" · ".join(detail))
-    head.append("")
-    head.append("\n".join(f"• {html.escape(l)}" for l in lines))
+    detail.append("PVP (HP ×2)" if pvp else ("PVE — припущення (напишіть «pvp» для PVP)" if not pvp_given else "PVE"))
+
+    head = ["🧮 <b>Оцінка характеристик</b>", " · ".join(detail)]
+    if base_scaled:
+        head += ["", "<b>Базові стати</b> (клас · спеціалізація · AL):", _stat_table(base_scaled)]
+    if lines:
+        head += ["", "<b>Від предметів:</b>", "\n".join(f"• {html.escape(l)}" for l in lines)]
+        if items_scaled:
+            head += ["<i>внесок предметів (після AL / модифікаторів класу):</i>", _stat_table(items_scaled)]
+    if base_scaled and items_scaled:
+        head += ["", "<b>Разом (база + предмети):</b>", _stat_table(total)]
     if amities:
-        head.append("")
-        head.append("Аміті/бонуси: " + html.escape(", ".join(
-            f"{k} {v}" for k, v in amities.items()) if isinstance(amities, dict) else str(amities)))
+        head += ["", "Аміті/бонуси: " + html.escape(", ".join(
+            f"{k} {v}" for k, v in amities.items()) if isinstance(amities, dict) else str(amities))]
     if skipped:
-        head.append("")
-        head.append("⚠️ не враховано: " + html.escape("; ".join(skipped)))
-    head.append("")
-    head.append("<b>Разом:</b>")
-    head.append(pre_table([["Стат", "Значення"]] +
-                          [[k, f"{final[k]:g}"] for k in _ESTIMATE_STATS if final.get(k)]))
+        head += ["", "⚠️ не враховано: " + html.escape("; ".join(skipped))]
     await message.reply_text("\n".join(head), parse_mode="HTML", disable_web_page_preview=True)
 
-    summary = ", ".join(f"{k}={final[k]:g}" for k in _ESTIMATE_STATS if final.get(k))
+    shown = ("base+items" if base_scaled and items_scaled else "base" if base_scaled else "items")
+    summary = ", ".join(f"{k}={total[k]:g}" for k in _ESTIMATE_STATS if total.get(k))
     note = f" NOT counted: {'; '.join(skipped)} - say so in your answer." if skipped else ""
-    return (f"posted a stats estimate ({len(lines)} item(s); spec={spec_entry['name'] if spec_entry else 'none'}, "
-            f"class={class_entry['name'] if class_entry else '-'}, AL={al}, pvp={pvp}). "
-            f"Totals [{summary}].{note} The table is already shown to the user - finish() just needs a short "
-            f"closing line that repeats WHICH inputs were used, so the user can spot a wrong assumption.")
+    pvp_note = " Assumed PVE (user didn't say - mention it)." if not pvp_given else ""
+    return (f"posted a stats estimate [{shown}] ({len(lines)} item(s); "
+            f"spec={spec_entry['name'] if spec_entry else 'none'}, class={class_entry['name'] if class_entry else '-'}, "
+            f"AL={al}, pvp={pvp}). Totals [{summary}].{note}{pvp_note} The table is already shown - finish() just "
+            "needs a short closing line repeating WHICH inputs were used (class, spec, AL, PVE/PVP) so the user can "
+            "spot a wrong assumption.")
 
 
 async def _run_releases_tool(message, query: str, sources: Optional[list] = None) -> str:
@@ -1993,21 +2014,24 @@ _TOOLS_TEXT = (
     "\"specialization\":\"<one of: " + "/".join(orna_classes.all_names("specialization")) + ">\","
     "\"class\":\"<one of: " + "/".join(orna_classes.all_names("class")) + ">\","
     "\"ascension_level\":<the player's AL, any number>,\"pvp\":true|false,"
-    "\"amities\":{\"<bonus>\":\"<value>\"}}): a FULL character stat estimate. Sums every worn item at its own "
-    "quality, adds the specialization's base stats, then applies the class's percent modifiers, Ascension "
-    "Level (+1% per level, AL 100 doubles) and PVP (doubles HP only). Use this for \"which stats will I "
-    "have\"/\"порахуй мої стати\" questions. POSTS the full table - finish() just needs a short closing line. "
-    "ALL FIVE INPUTS ARE REQUIRED: items, class, specialization, ascension_level, pvp. The tool REFUSES a "
-    "partial call - it posts nothing and hands you back the exact list of what is still missing, so there is "
-    "no point calling it to see what happens. The ONLY default is an item's quality (100% when the user did "
-    "not say) and an item's level (1). QUALITY AND LEVEL ARE TWO DIFFERENT THINGS: quality is the % roll "
-    "(100%, 185%, or a tier name like legendary), level is how far it is upgraded - 1 to 10, then 11 "
-    "masterforged, 12 demonforged, 13 godforged. \"godforged\" therefore means level 13, NOT a "
-    "quality; an item can be 185% quality AND level 10. specialization=\"none\" is a valid ANSWER "
-    "for a player who has no tier-10 specialization; "
-    "leaving it out is not, and neither is guessing one. NEVER guess any of the five - a guessed loadout, a "
-    "guessed AL or a guessed PVP flag comes back as a confident WRONG number (live failures: a total built "
-    "from three items the user never mentioned; a lone class that rendered an empty table). Ask instead. "
+    "\"amities\":{\"<bonus>\":\"<value>\"}}): a character stat estimate. It computes BASE stats (from the "
+    "specialization + AL, plus the class's percent modifiers) and ITEM stats (from worn gear) SEPARATELY and "
+    "shows each as its own block plus a combined total. So there are TWO ways to use it: (a) BASE stats only - "
+    "the player asks \"what are my/a Gilgamesh's base stats at AL 100\" and gives just specialization + AL "
+    "(class optional); pass NO items. (b) FULL loadout - also pass the items to add gear on top. Use it for "
+    "\"which stats will I have\"/\"порахуй мої стати\"/\"базові стати\" questions. POSTS the table(s) - finish() "
+    "just needs a short closing line. REQUIRED: ascension_level, AND at least one of (a specialization -> base "
+    "stats, or items -> gear stats). OPTIONAL, so NEVER demand them: `items` (omit for a base-only estimate), "
+    "`pvp` (defaults to PVE - don't ask; the reply states the assumption), and `class` (its modifiers are "
+    "applied only if given). The tool REFUSES a call it can't compute anything from and hands back exactly "
+    "what's missing. Item quality defaults to 100% and level to 1. QUALITY AND LEVEL ARE TWO DIFFERENT THINGS: "
+    "quality is the % roll (100%, 185%, or a tier name like legendary), level is how far it is upgraded - 1 to "
+    "10, then 11 masterforged, 12 demonforged, 13 godforged. \"godforged\" therefore means level 13, NOT a "
+    "quality; an item can be 185% quality AND level 10. specialization=\"none\" is a valid ANSWER for a player "
+    "with no tier-10 specialization (then items are required, since there's no base to compute). NEVER guess a "
+    "specialization, AL, or a loadout - a guessed input comes back as a confident WRONG number (live failures: "
+    "a total built from three items the user never mentioned; a lone class that rendered an empty table). Ask "
+    "instead. "
     "Pass the item names STRAIGHT THROUGH, exactly as the user wrote them - this tool resolves them "
     "itself and reports any it cannot, so do NOT search_codex them first (live failure: eight searches "
     "in a row, then it ran out of patience before ever calling this). An item's quality and level are "
@@ -2275,9 +2299,10 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     # fixed Ukrainian example sitting next to the instruction to answer in
     # English is the same fight _CLASS_GUIDE_RULE already lost - live
     # 2026-09-25, "/orna calculate my stats" came back in Ukrainian.
-    ask_example = ("вкажіть: спорядження та якість, спеціалізацію/клас, AL, PVP чи ні"
+    ask_example = ("вкажіть спеціалізацію та AL (для базових статів); для повного підрахунку — ще спорядження з якістю"
                    if req_lang == "Ukrainian" else
-                   "tell me: your gear and each item's quality, your specialization/class, your AL, and PVP or not")
+                   "tell me your specialization and AL (for base stats); for a full estimate, also your gear and "
+                   "each item's quality")
     no_ask = "" if allow_ask else (
         "INLINE MODE: this request has NO reply channel - there are no buttons and the user cannot answer "
         "you. NEVER call ask here. If something is missing, pick the most reasonable assumption, ANSWER "
@@ -2317,9 +2342,11 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         # channel parses: ollama_client._from_tool_calls translates a native
         # call back into this same object.
         "CLARIFICATION - when a request is missing something that would CHANGE the answer, ask instead of "
-    "guessing. The clearest case is estimate_stats: a stat estimate needs the ITEMS the player wears and each "
-    "one's QUALITY, their SPECIALIZATION and/or CLASS, their ASCENSION LEVEL, and whether it is PVP - if any "
-    "of those is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
+    "guessing. estimate_stats is the clearest case, but mind what each mode actually needs: BASE stats need "
+    "only the SPECIALIZATION and ASCENSION LEVEL (class is optional, and you do NOT need items or PVP for base "
+    "stats - PVP defaults to PVE); a FULL loadout also needs the ITEMS and each one's QUALITY. Only ask for "
+    "what the mode requires: for \"my base stats\" ask just spec + AL, NOT for gear. If a genuinely required "
+    "piece is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
     f"question text (e.g. \"{ask_example}\") - a "
     "\"Своя відповідь\" button is added automatically, so they can type all of it in one message, and you "
     "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. **The user can also simply TYPE their "
