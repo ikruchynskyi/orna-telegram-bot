@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _STORE_PATH = Path(__file__).parent / "usage_stats.json"
 
 MAX_LOG_PER_USER = 40
+# Bug reports kept per user. The 11th drops the oldest, so a single user
+# cannot flood the store, and the cap is per-user rather than global so one
+# noisy reporter can't push everyone else's reports out.
+MAX_REPORTS_PER_USER = 10
 
 _commands: Counter = Counter()
 _llm_calls: Counter = Counter()  # keyed by "model (local|cloud)"
@@ -35,6 +39,7 @@ _orna_tools: Counter = Counter()  # keyed by /orna ReAct loop action name
 _user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Counter[command]
 _user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
 _user_log: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{command,text,ts}, ...], newest last
+_user_reports: Dict[str, List[dict]] = defaultdict(list)  # user_id str -> [{text,ts}, ...], newest last
 _user_tz: Dict[str, float] = {}  # user_id str -> UTC offset in hours, from telegram_remind.request_utc_offset
 # user_id str -> IANA zone name ("Europe/Kyiv"), when the user gave a PLACE
 # rather than a bare offset. Preferred over _user_tz whenever present: a
@@ -62,6 +67,8 @@ def _load() -> None:
     _user_names.update(data.get("user_names", {}))
     for uid, log in data.get("user_log", {}).items():
         _user_log[uid] = log
+    for uid, reports in (data.get("user_reports") or {}).items():
+        _user_reports[uid] = reports
     _user_tz.update(data.get("user_tz", {}))
     _user_zone.update(data.get("user_zone", {}))
     _since = data.get("since", _since)
@@ -82,6 +89,7 @@ def _save() -> None:
             "user_commands": {uid: dict(c) for uid, c in _user_commands.items()},
             "user_names": _user_names,
             "user_log": _user_log,
+            "user_reports": _user_reports,
             "user_tz": _user_tz,
             "user_zone": _user_zone,
         }))
@@ -138,6 +146,36 @@ def record_command_for(update, name: str, text: str = "") -> None:
         getattr(user, "first_name", None),
         text,
     )
+
+
+def record_report(user_id, username: Optional[str], first_name: Optional[str], text: str) -> dict:
+    """Store one bug report and return it (with the reporter's display name),
+    so the caller can forward it to the admins without re-deriving that."""
+    uid = str(user_id)
+    entry = {
+        "text": text[:1000],
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    _user_names[uid] = _display_name(username, first_name)
+    reports = _user_reports[uid]
+    reports.append(entry)
+    del reports[:-MAX_REPORTS_PER_USER]   # 11th drops the 1st
+    _save()
+    return {**entry, "user_id": uid, "display_name": _user_names[uid], "count": len(reports)}
+
+
+def all_reports() -> list:
+    """Every stored report, newest first, as {user_id, display_name, text, ts}."""
+    out = []
+    for uid, reports in _user_reports.items():
+        # Newest-first WITHIN a user before the sort: timestamps have
+        # second resolution, so several reports typed in the same second
+        # compare equal and a stable sort would otherwise leave them
+        # oldest-first inside an otherwise newest-first list.
+        for entry in reversed(reports):
+            out.append({"user_id": uid, "display_name": _user_names.get(uid, uid), **entry})
+    out.sort(key=lambda r: r["ts"], reverse=True)
+    return out
 
 
 def record_llm_call(model: str, backend: str) -> None:

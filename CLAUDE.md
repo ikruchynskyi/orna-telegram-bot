@@ -996,6 +996,26 @@ the end when `cmp` is `"!="`/`"<>"` - a single negation point instead of
 threading it through every branch separately. Verified: 0 weapons in the
 negated result set afterward, and the positive (`"="`) path unchanged.
 
+**`/report <опис>` — the one command aimed at people who CAN'T use the
+admin ones.** Deliberately ungated, unlike `/stats`/`/update_codex`/`/go`:
+the guild members who hit bugs are exactly the ones an allowlist shuts out.
+Each report is stored per user (`usage_stats.record_report`, newest
+`MAX_REPORTS_PER_USER = 10` kept, the 11th dropping the oldest so one noisy
+reporter can't push everyone else out) **and pushed to every
+`GO_ALLOWED_USER_IDS` chat immediately** — a report nobody is told about is
+just a log line, and every bug fixed in this bot so far arrived as a
+message, not as a stored record. Notification is best-effort per recipient
+inside its own try/except: one admin who blocked the bot must not swallow
+the report for the others, and the reporter has already been told it was
+saved either way. An admin filing a report isn't notified about themselves.
+Readable back via `/stats reports` (newest first, across all users), which
+is what stops the store being write-only. Listed in `set_my_commands` and
+in the `/start` welcome, since a bug-report command nobody can find is
+worth nothing. `all_reports()` reverses each user's list BEFORE the sort:
+timestamps have second resolution, so several reports in the same second
+compare equal and a stable sort would otherwise leave them oldest-first
+inside a newest-first list.
+
 **Usage counters (`usage_stats.py`)** — `record_command_for(update, name,
 text)` at the top of every slash-command handler (a thin wrapper around
 `record_command` that pulls `user_id`/`username`/`first_name` straight

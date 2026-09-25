@@ -1,3 +1,4 @@
+import html
 import os
 import logging
 import re
@@ -114,6 +115,8 @@ _WELCOME = (
     "• Складне питання може оброблятись до хвилини — я показую, що саме зараз роблю.\n"
     "• Під відповіддю буває кнопка «\U0001F4DA Джерела» — там видно, звідки я взяв інформацію.\n"
     "• Якщо я перепитаю — можна натиснути кнопку або написати свою відповідь словами.\n\n"
+    "🐞 Якщо щось не працює або відповідь неправильна — напишіть "
+    "<code>/report опис проблеми</code>. Це дуже допомагає.\n\n"
     "❓ <b>Питайте що завгодно — не соромтесь.</b> Немає «неправильних» питань і не "
     "треба особливого формату. Якщо я чогось не знаю або не впевнений — так і скажу."
 )
@@ -204,6 +207,50 @@ async def _send_lines(message, lines: list) -> None:
 _STATS_TEXT_PREVIEW = 200
 
 
+async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report <description> - a guild member tells us something is broken.
+
+    Deliberately UNGATED, unlike /stats and /update_codex: the people who hit
+    bugs are exactly the ones who cannot use admin commands. Stored per user
+    (newest 10 kept) AND pushed to the allowlist immediately, because a report
+    nobody is told about is just a log line - every bug fixed in this bot so
+    far arrived as a message, not as a stored record."""
+    message = update.effective_message
+    if not message:
+        return
+    user = update.effective_user
+    text = " ".join(context.args or []).strip()
+    usage_stats.record_command_for(update, "report", text)
+    if not text:
+        await message.reply_text(
+            "Опишіть проблему одним повідомленням, наприклад:\n"
+            "/report кнопка «нагадати» не спрацювала для адамантину\n\n"
+            "Що допомагає: що ви робили, що очікували і що сталося насправді."
+        )
+        return
+
+    entry = usage_stats.record_report(
+        user.id if user else None,
+        getattr(user, "username", None),
+        getattr(user, "first_name", None),
+        text,
+    )
+    await message.reply_text("✅ Дякую! Звіт збережено — розробник побачить його.")
+
+    # Best-effort per recipient: one blocked chat must not swallow the report
+    # for the others, and the user has already been told it was saved.
+    note = (f"🐞 <b>Новий звіт про помилку</b>\n"
+            f"від {html.escape(entry['display_name'])} (id {entry['user_id']})\n\n"
+            f"{html.escape(entry['text'])}")
+    for admin_id in GO_ALLOWED_USER_IDS:
+        if user and admin_id == user.id:
+            continue                      # don't notify the reporter about themselves
+        try:
+            await context.bot.send_message(admin_id, note, parse_mode="HTML")
+        except Exception:
+            logger.warning("report: could not notify admin %s", admin_id, exc_info=True)
+
+
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Hidden admin command: report usage_stats' counters. Gated by the
     same GO_ALLOWED_USER_IDS allowlist /go and /update_codex use.
@@ -224,6 +271,18 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     args = context.args or []
+
+    if args and args[0].lower() == "reports":
+        reports = usage_stats.all_reports()
+        if not reports:
+            await message.reply_text("Звітів про помилки ще немає.")
+            return
+        lines = [f"🐞 Звіти про помилки ({len(reports)}):", ""]
+        for r in reports:
+            lines.append(f"[{r['ts'].replace('T', ' ')[:16]}] {r['display_name']} (id {r['user_id']})")
+            lines.append(f"  {r['text']}")
+        await _send_lines(message, lines)
+        return
 
     if args and args[0].lower() == "users":
         rows = usage_stats.user_summary()
@@ -288,7 +347,8 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         lines.append("  (ще немає даних)")
     lines.append("")
-    lines.append("/stats users — список користувачів, /stats user <id> — деталі")
+    lines.append("/stats users — список користувачів, /stats user <id> — деталі, "
+                 "/stats reports — звіти про помилки")
     await _send_lines(message, lines)
 
 
@@ -323,6 +383,7 @@ async def _post_init(app):
         BotCommand("orna", "Запит про Orna (природною мовою)"),
         BotCommand("res_today", "Ресурси, доступні сьогодні"),
         BotCommand("res_next", "Коли з'явиться ресурс"),
+        BotCommand("report", "Повідомити про помилку"),
         BotCommand("remind", "Поставити нагадування"),
     ]
     for scope in (
@@ -379,6 +440,7 @@ def main():
     # through to assess/resources below) for every other chat/message.
     # /start and /help both land on the welcome text - a newcomer tries
     # whichever occurs to them, and Telegram itself sends /start on open.
+    app.add_handler(CommandHandler("report", handle_report))
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CommandHandler("help", handle_start))
     app.add_handler(build_go_continue_handler())
