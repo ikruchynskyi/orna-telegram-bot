@@ -73,6 +73,9 @@ glue around three live, unmocked external services.
   `tower.ts` (pinned commit) and cross-checked against that original
   TypeScript's actual output under Node before deploying — see the `/orna`
   section. Pure time-based math, no external data source at all.
+- `orna_bonuses.py` — Amities and Crucibles scraped from aussiescodex's
+  two HTML pages, disk-cached a week like `orna_releases.py`. See the
+  `/orna` section for why these needed a source of their own.
 - `orna_reddit.py` / `orna_reddit.txt` / `orna_scrape_reddit.py` — what
   Orna's own developers (u/OrnaOdie, u/Widogeist) have written on Reddit:
   hidden mechanics, exact formulas, "why it works like that" answers. Static
@@ -1075,6 +1078,43 @@ control flow:
   to a known Material Forecast material at all, it falls through to
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
+
+### Amities and Crucibles (`orna_bonuses.py`)
+
+Gear-bonus affixes: their tiers, roll ranges, and which equipment slots
+each can appear on. **Checked before building anything that these were
+genuinely missing** (asked for explicitly, and worth repeating for any
+future "add source X" request): aussiescodex's own `codex.json` - which
+`orna_aussies.py` already downloads in full - has nine categories and
+neither of these is one of them; the community sheets mention "amity"
+four times and "crucible" once, in passing; the reddit corpus discusses
+them constantly but as prose, never as the numbers. So "what range does
+the Defending amity roll?" or "which slots take an Avidity crucible?" had
+no answer anywhere in the bot.
+
+- Live counts: **184 amity blocks** (one per bonus per tier) and **45
+  crucible rows**. Both pages are server-rendered, so plain HTTP + BS4
+  works - no browser needed, unlike the Reddit crawl.
+- **The crucible table's Bonus cell is a rowspan**, present only on a
+  group's FIRST row. Without carrying it forward every continuation row
+  loses the name of the bonus it describes, which is most of the table.
+- **Some amities are legitimately rangeless** (Arch-Alchemy, The Hybrid
+  are boolean effects), so parsing must not treat a missing range as a
+  failure - an early version counted 145 of 184 as "incomplete" for
+  exactly that reason.
+- Flattened to `" | "` text rather than typed records, same reasoning as
+  `orna_knowledge.txt`: irregular scraped data that a fuzzy search plus a
+  reading model handles better than per-field parsing, and a page tweak
+  then degrades to messier text instead of a crash.
+- **An empty parse is never cached** (same guard as `orna_releases`) -
+  aussiescodex is a JS app and pinning "there are no crucibles" for a week
+  would be worse than retrying.
+- Re-crawl: automatic on the 1-week TTL, and `/update_codex` forces it now
+  alongside the codex, patch notes and sheets.
+- Surfaced through `knowledge_search`, not a 19th tool - the prompt is
+  ~30KB and this is another *provenance* of answer, not another question
+  to ask. Verified end to end: "які слоти можуть мати crucible на avidity
+  і який максимальний відсоток?" → all five slots, max 10%, cited.
 
 ### The reddit developer corpus - searched by `knowledge_search`, not its own tool
 

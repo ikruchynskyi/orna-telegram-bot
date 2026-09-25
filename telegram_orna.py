@@ -74,6 +74,7 @@ from orna_aussies import query_records, refetch_now, resolve_codes as resolve_ef
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
+import orna_bonuses
 import orna_guides
 import orna_knowledge
 import orna_reddit
@@ -1471,9 +1472,22 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
             if entry.url:
                 _add_source(sources, entry.head[:60], entry.url)
 
+    # Amities/crucibles live in neither the sheets nor the codex (checked:
+    # aussies' codex.json has no such category), so they ride along on the
+    # same tool rather than becoming a 19th action - see orna_bonuses.
+    try:
+        bonuses = await asyncio.to_thread(orna_bonuses.search, query)
+    except Exception as e:
+        logger.warning("orna: bonuses lookup failed for %r (%s)", query[:60], e)
+        bonuses = ""
+
     blocks = []
     if result:
         blocks.append(result[:3000])
+    if bonuses:
+        if sources is not None:
+            _add_source(sources, "Amities / Crucibles (aussiescodex)", orna_bonuses.AMITIES_URL)
+        blocks.append("AMITY / CRUCIBLE DATA (aussiescodex):\n" + bonuses[:2000])
     if reddit_hits:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
@@ -1631,7 +1645,9 @@ _TOOLS_TEXT = (
     "Weakness\" are different gear), so dropping the mode word can land on the wrong one. Without any query you only "
     "see the guide's own opening, which may not be the relevant part for a long guide. No reply_text - like "
     "knowledge_search/web_search, read this as source material and write the real answer in finish().\n"
-    "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets "
+    "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets, "
+    "AMITY and CRUCIBLE tables (the gear-bonus affixes: their tiers, roll ranges and which equipment slots each "
+    "can appear on - in no codex page, so this tool is the only way to answer them), "
     "PLUS what Orna's own developers (u/OrnaOdie, u/Widogeist) have explained on reddit, which is where hidden "
     "mechanics, exact formulas and \"why it actually works like that\" answers live. A DEVELOPER COMMENTS block "
     "in the result outranks the sheets above it, but can be years old - check releases() before quoting a number "
@@ -2633,6 +2649,13 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.warning("update_codex: knowledge refetch failed", exc_info=True)
         lines.append(f"база знань: не вдалося оновити ({e})")
+
+    try:
+        bon = await asyncio.to_thread(orna_bonuses.refetch_now)
+        lines.append(f"амітіси/крусібли: {bon['amities']} / {bon['crucibles']}")
+    except Exception as e:
+        logger.warning("update_codex: bonuses refetch failed", exc_info=True)
+        lines.append(f"амітіси/крусібли: не вдалося оновити ({e})")
     await message.reply_text("\n".join(lines))
 
 
