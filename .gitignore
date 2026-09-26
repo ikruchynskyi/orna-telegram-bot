@@ -18,4 +18,11 @@ usage_stats.json
 .knowledge_cache/
 .bonuses_cache/
 orna_model_compare.json
-.qa_cache/
+# .qa_cache/ is deliberately COMMITTED, unlike every other cache here. It is the
+# raw r/OrnaRPG crawl - 800 threads' comments - and it is the one artefact that
+# is expensive to reproduce: an hour of rate-limited fetching that took three
+# runs and four 429 backoffs to complete. Keeping it means orna_scrape_qa.py can
+# resume or extend from any checkout without re-fetching, and that a lost working
+# copy costs nothing. The other caches stay ignored because they refetch in
+# seconds (.aussies_cache) or have a committed fallback (.knowledge_cache ->
+# orna_knowledge.txt).
