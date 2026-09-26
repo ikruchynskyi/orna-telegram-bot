@@ -99,11 +99,12 @@ class FakeMessage:
 
 async def run_once(query: str) -> None:
     replies: list = []
-    messages = [
-        {"role": "system", "content": T._orna_system_prompt(query)},
-        {"role": "user", "content": query},
-    ]
+    # Through the INPUT GATE, like handle_orna: the loop reasons in English and
+    # the answer is translated back, so building the session by hand here would
+    # exercise a path the bot no longer takes.
+    messages, user_lang = await T.build_loop_messages(query)
     sid = T._new_orna_session(messages, T.MAX_STEPS)
+    T._ORNA_SESSIONS[sid].user_lang = user_lang
     await T._advance(sid, FakeMessage(replies))
 
     print("\n-- ACTION TRACE (which tool the model picked each turn) --")

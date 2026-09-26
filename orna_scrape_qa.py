@@ -58,7 +58,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 # threads and lost the other 700. Reddit rate-limits a browser-cookie session
 # fairly tightly, so this backs off politely and the crawl is resumable
 # (.qa_cache) rather than fast.
-DELAY_SECONDS = 2.5
+DELAY_SECONDS = 5.0
 TIMEOUT = 45
 # On a 429: wait Retry-After if given, else escalate. Give up the whole crawl
 # after this many CONSECUTIVE 429s rather than hammering a service that has

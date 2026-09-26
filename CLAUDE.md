@@ -2178,6 +2178,55 @@ answers Ukrainian with the class names left in English.
 Verified: English build questions answer in English, Ukrainian ones stay
 Ukrainian.
 
+### English-first: translate at the edges, reason in one language
+
+Design ask 2026-09-26 - "a lot of text is in Ukrainian and I think it can make
+the bot understand context worse". The loop used to reason in whatever language
+the user wrote, enforced by a per-request CRITICAL LANGUAGE LOCK. Every knowledge
+source it has is ENGLISH (codex, aussies, the sheets, the guides, the dev corpus,
+the player Q&A) and so is every rule in the prompt, so a Ukrainian request made
+the model reason across a language boundary on every step - reading English
+evidence to write Ukrainian thoughts. Now there are two gates and one interior
+language:
+
+- **Input gate** (`build_loop_messages`): a non-English request is translated to
+  English for the loop, and **the original is kept alongside it verbatim** -
+  "prefer THIS spelling for any item/material/class name you pass to a tool".
+  That matters because `need`'s extraction and every codex name lookup run on
+  those tokens, and a translator is exactly the wrong thing to have touched them.
+- **The loop is English, always** (`_LOOP_LANGUAGE`). The lock inverted: every
+  thought, tool argument, ask and finish is English. This also DELETED a whole
+  failure mode - the prompt's own examples used to have to be rebuilt in the
+  user's language, because a Ukrainian example sitting next to an
+  answer-in-English instruction kept winning (CLAUDE.md has two separate
+  incidents of that). With one language there is nothing to imitate wrongly.
+- **Output gate**: the finished answer (and an `ask`) is translated back, and
+  ONLY when it is not already in the target language - the fixed
+  capability/reminder replies the prompt tells the model to copy verbatim are
+  Ukrainian, and re-translating them would both cost a call and paraphrase text
+  that is deliberately deterministic. `ask` OPTIONS are never translated: they
+  are matched back by exact text when tapped, and several are proper nouns.
+- **Proper nouns are pinned by ENUMERATION and then CHECKED, because the rule
+  alone does not hold.** The first live Ukrainian answer rendered the class
+  `Duelist` as "Дулїст" - unresolvable in the data, the same failure the old lock
+  existed for. `_proper_nouns` extracts the capitalised identifiers from the
+  source, the prompt lists them as "must appear EXACTLY as written", and the
+  result is verified; a dropped name triggers ONE retry naming it. Measured
+  after: 4/4, 2/2 and 1/1 identifiers kept across three real answers.
+  Subtlety worth keeping: an extracted name must be VERBATIM in the source or
+  "keep this exactly" is unsatisfiable - stripping common words from the middle
+  turned "Altar of Ascension" into "Altar Ascension", which appears nowhere and
+  would have burned a retry on every single translation. Edges only.
+- **Both gates degrade to the untranslated text on any failure** rather than
+  raising: a slightly-wrong-language answer beats no answer. Cost is two extra
+  model calls on a non-English request, one per gate.
+- **Both harnesses go through the input gate now** (`orna_test_suite.
+  run_case_once`, the skill's `orna_loop_harness`). Building the session by hand
+  would test a path production no longer takes, and `ukrainian-lock` would fail
+  for the wrong reason. Verified after: `ukrainian-lock` 2/2 (Ukrainian in,
+  Cyrillic out, class names left English) and `heretic-build` 2/2 (English in,
+  English out).
+
 ### Inline mode (`@<bot> <query>` in any chat, incl. groups the bot isn't in)
 
 `handle_inline_query` + `handle_chosen_inline_result` route an inline query

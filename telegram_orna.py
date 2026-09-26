@@ -2748,6 +2748,149 @@ def _low_confidence_banner(pct: Optional[int], why: str, ukrainian: bool) -> str
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 
+# ENGLISH-FIRST PIPELINE (design ask 2026-09-26). The loop used to reason in
+# whatever language the user wrote, enforced by a per-request lock. Every one of
+# its knowledge sources is ENGLISH (codex, aussies, the sheets, the guides, the
+# dev corpus, the Q&A threads), and so is every rule in this prompt, so a
+# Ukrainian request meant the model reasoned across a language boundary on every
+# step and read English evidence to write Ukrainian thoughts. Now: translate IN
+# at the edge, reason and finish in English, translate OUT at the edge. The user
+# still only ever sees their own language.
+#
+# Costs two extra model calls on a non-English request (one per gate), which is
+# why both degrade to the untranslated text on any failure rather than erroring -
+# a slightly-wrong-language answer beats no answer.
+_LOOP_LANGUAGE = "English"
+
+
+def _detect_lang(text: str) -> str:
+    """"Ukrainian" | "English". This guild writes only those two, the same
+    assumption the old per-request language lock already made."""
+    return "Ukrainian" if text and _CYRILLIC_RE.search(text) else "English"
+
+
+# Words that start a sentence or are simply capitalised in English prose - not
+# identifiers, so they must not be pinned or the "keep these exact" list becomes
+# noise the model ignores.
+_NOT_A_NAME = frozenset("""
+the a an and or but if then this that these those you your i it is are was were be been
+for with from into onto about over under per each every all any none no not only also
+what which when where why how who whom whose there here they them their our we us
+in on at to of as by so than that's don't can cannot could should would may might must
+base total stats stat level tier quality rarity class classes item items weapon weapons
+yes maybe note reason answer question example see use using used get gets got give gives
+""".split())
+
+_NAME_RE = re.compile(r"\b[A-Z][A-Za-z0-9'’\-]*(?:\s+(?:of|the|de)?\s*[A-Z][A-Za-z0-9'’\-]*)*")
+
+
+def _proper_nouns(text: str) -> list:
+    """Candidate IDENTIFIERS in English text - item/class/spell names and the
+    like - longest first.
+
+    A general "never translate a proper noun" instruction is not enough: live
+    2026-09-26 the very first Ukrainian answer rendered the class `Duelist` as
+    "Дулїст", which resolves to nothing in the data and is exactly the failure
+    the old language lock also existed for. Enumerating the names explicitly in
+    the prompt, and then CHECKING they survived, is far stronger than a rule."""
+    found = []
+    for m in _NAME_RE.finditer(text or ""):
+        words = m.group(0).split()
+        # Strip common words from the EDGES only. Dropping interior ones broke
+        # "Altar of Ascension" into "Altar Ascension", which then appears
+        # nowhere in the source - so the survived-check could never pass and
+        # every translation burned a pointless retry.
+        while words and words[0].lower() in _NOT_A_NAME:
+            words.pop(0)
+        while words and words[-1].lower() in _NOT_A_NAME:
+            words.pop()
+        cleaned = " ".join(words)
+        if len(cleaned) < 3 or cleaned.lower() in _NOT_A_NAME:
+            continue
+        # Must be verbatim in the source, or "keep this exactly" is unsatisfiable.
+        if cleaned not in (text or "") or cleaned in found:
+            continue
+        found.append(cleaned)
+    return sorted(found, key=len, reverse=True)
+
+
+async def _translate(text: str, target: str, source: str = "") -> str:
+    """`text` in `target`, or the original text unchanged on any failure.
+
+    Proper nouns are pinned: an Orna item/class/spell name is an IDENTIFIER, and
+    a translated one matches nothing in the data - the live failure that lock
+    already existed for ("Дудар", "Гільгармос" resolve to nothing)."""
+    text = (text or "").strip()
+    if not text:
+        return text
+    names = _proper_nouns(text) if target != "English" else []
+    keep = ""
+    if names:
+        keep = (" These are IDENTIFIERS and must appear in your output EXACTLY as written here, unchanged and "
+                "not transliterated: " + "; ".join(names[:25]) + ".")
+
+    async def _once(extra: str) -> Optional[str]:
+        prompt = (
+            f"Translate the user's message into {target}."
+            + (f" It is written in {source}." if source else "")
+            + " Reply with JSON only: {\"text\": \"<the translation>\"}. Rules: translate the MEANING, not word "
+              "by word. NEVER translate or transliterate a proper noun - Orna item, class, specialization, "
+              "monster, spell, guild, event and material names keep their original spelling exactly (they are "
+              "identifiers; a translated name matches nothing in the game data). Keep numbers, percentages and "
+              "any HTML tags exactly as they are. Do not answer the message, add anything, or omit anything."
+            + keep + extra
+        )
+        try:
+            got = await chat_json_with_fallback(
+                ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL,
+                [{"role": "system", "content": prompt}, {"role": "user", "content": text}],
+                api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
+            )
+        except Exception as e:
+            logger.warning("orna: translation to %s failed (%s)", target, e)
+            return None
+        out = got.get("text") if isinstance(got, dict) else None
+        return out.strip() if isinstance(out, str) and out.strip() else None
+
+    out = await _once("")
+    if out is None:
+        logger.warning("orna: translation to %s produced nothing - using the original", target)
+        return text
+    # VERIFY the identifiers survived, and retry ONCE naming the ones that did
+    # not. Checked rather than trusted: "Duelist" came back as "Дулїст" on the
+    # first live Ukrainian answer even with the rule above in the prompt.
+    lost = [n for n in names if n not in out]
+    if lost:
+        logger.info("orna: translation dropped %s - retrying once", lost[:5])
+        retry = await _once(" Your previous attempt WRONGLY changed these names; reproduce each one character for "
+                            "character: " + "; ".join(lost[:15]) + ".")
+        if retry is not None:
+            still = [n for n in lost if n not in retry]
+            if len(still) < len(lost):
+                out = retry
+            if still:
+                logger.warning("orna: translation still dropped %s", still[:5])
+    return out
+
+
+async def build_loop_messages(text: str, allow_ask: bool = True) -> tuple:
+    """-> (messages, user_lang). The INPUT GATE.
+
+    A non-English request is translated for the loop, and the ORIGINAL is kept
+    alongside it verbatim: the translation is what the model reasons over, but
+    an item or material name is safer in the spelling the user actually typed -
+    `need`'s extraction and every codex name lookup work on those tokens."""
+    user_lang = _detect_lang(text)
+    body = text
+    if user_lang != _LOOP_LANGUAGE:
+        english = await _translate(text, _LOOP_LANGUAGE, source=user_lang)
+        if english != text:
+            body = (f"{english}\n\n[The user wrote this in {user_lang}. Original, verbatim - prefer THIS "
+                    f"spelling for any item/material/class name you pass to a tool: {text}]")
+    return ([{"role": "system", "content": _orna_system_prompt(text, allow_ask=allow_ask)},
+             {"role": "user", "content": body}], user_lang)
+
+
 def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = "|".join(f'"{a}"' for a in _ACTIONS)
@@ -2759,26 +2902,36 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     # the script the user actually wrote in (this guild writes English or
     # Ukrainian) and stating the required language up front, per request, is
     # far more reliable than making the model infer it.
-    req_lang = "Ukrainian" if user_text and _CYRILLIC_RE.search(user_text) else "English"
-    lang_lock = ""
-    if user_text:
-        lang_lock = (
-            f"CRITICAL LANGUAGE LOCK: the user's current request is written in {req_lang}. Every ask/finish "
-            f"reply you send for THIS request MUST be written in {req_lang} - never another language, no matter "
-            f"what language the guide/codex text you read is in or what language the examples below happen to use. "
-            "PROPER NAMES ARE NOT TRANSLATED: items, classes, specializations, monsters and spells keep their "
-            "English spelling inside a reply in any language - they are identifiers, and a translated name "
-            "matches nothing in the data (live failure: a class question offered \"Дудар\" and "
-            "\"Гільгармос\", which resolve to nothing at all).\n\n"
-        )
+    # ENGLISH-FIRST: the loop reasons and writes in English, ALWAYS, and an
+    # output gate translates the finished answer back if the user wrote in
+    # something else (see _translate / build_loop_messages). This replaced a
+    # per-request lock that forced the model into the user's language: every
+    # knowledge source here is English, so that made it reason across a language
+    # boundary on every step and read English evidence to write Ukrainian
+    # thoughts. One language for all reasoning is both simpler and, per the
+    # design ask, less likely to lose context.
+    lang_lock = (
+        f"LANGUAGE: think, plan and write EVERY thought, tool argument, ask and finish answer in "
+        f"{_LOOP_LANGUAGE}. Do this even when the user wrote in another language - their message has been "
+        f"translated for you above, and your answer is translated back for them automatically, so you never "
+        f"need to write their language yourself. Every source you can read (codex, community sheets, guides, "
+        f"developer comments, player Q&A) is in English too, so staying in English keeps your reasoning and "
+        f"your evidence in one language.\n"
+        "PROPER NAMES ARE NEVER TRANSLATED, in any direction: items, classes, specializations, monsters and "
+        "spells are IDENTIFIERS and keep their English spelling - a translated name matches nothing in the "
+        "data (live failure: a class question offered \"Дудар\" and \"Гільгармос\", which resolve to "
+        "nothing at all).\n\n"
+    )
     # The clarification example below is the ask text the model is most likely
     # to imitate, so it is written in the language the lock just demanded. A
     # fixed Ukrainian example sitting next to the instruction to answer in
     # English is the same fight _CLASS_GUIDE_RULE already lost - live
     # 2026-09-25, "/orna calculate my stats" came back in Ukrainian.
-    ask_example = ("вкажіть спеціалізацію та AL (для базових статів); для повного підрахунку — ще спорядження з якістю"
-                   if req_lang == "Ukrainian" else
-                   "tell me your specialization and AL (for base stats); for a full estimate, also your gear and "
+    # Always English now. It used to be built in the user's language so the model
+    # would imitate the right one; under English-first there is only one, which
+    # removes that whole failure mode (the prompt's own examples repeatedly beat
+    # the language instruction - see CLAUDE.md).
+    ask_example = ("tell me your specialization and AL (for base stats); for a full estimate, also your gear and "
                    "each item's quality")
     no_ask = "" if allow_ask else (
         "INLINE MODE: this request has NO reply channel - there are no buttons and the user cannot answer "
@@ -2872,6 +3025,10 @@ class OrnaSession:
     # _NEEDS_INPUT). A finish() while this is set is really a question, so the
     # typed-answer wait stays armed past it.
     needs_input: bool = False
+    # The language the user wrote in, so the OUTPUT GATE knows what to translate
+    # the finished answer into. Defaults to the loop's own language, i.e. no
+    # translation - a caller that does not set it keeps the old behaviour.
+    user_lang: str = _LOOP_LANGUAGE
     # INLINE mode can show no buttons and receive no reply - the answer is one
     # edited message in a chat the bot isn't in - so "ask" is turned off there
     # and the model is told to answer from what it has, stating assumptions,
@@ -3213,8 +3370,16 @@ async def _advance_inner(sid: str, message) -> None:
             # CONFIDENCE GATE. The model's own number, clamped by what the loop
             # actually verified, and below the floor the answer LEADS with an
             # admission instead of stating itself flatly.
-            answer, effective = _confidence_gate(
-                session, step, action_input or "Не вдалося сформувати відповідь.")
+            # OUTPUT GATE: the loop reasons in English, the user reads their own
+            # language. Only translate when the answer is not ALREADY in the
+            # target language - the fixed capability/reminder replies the prompt
+            # tells the model to copy verbatim are Ukrainian, and re-translating
+            # them would both cost a call and paraphrase deterministic text.
+            answer_text = action_input or "Не вдалося сформувати відповідь."
+            if (session.user_lang != _LOOP_LANGUAGE
+                    and _detect_lang(answer_text) != session.user_lang):
+                answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE)
+            answer, effective = _confidence_gate(session, step, answer_text)
             await _reply_markdown(message, answer, reply_markup=markup)
             # The model often states what it still needs as an ANSWER rather
             # than as an ask(), which ENDS the request - and the user's reply
@@ -3284,7 +3449,15 @@ async def _advance_inner(sid: str, message) -> None:
             # depends on the model having thought to offer "Інше".
             rows.append([InlineKeyboardButton("✍️ Своя відповідь", callback_data=f"orna|askfree|{sid}|0")])
             keyboard = InlineKeyboardMarkup(rows)
-            await _reply_markdown(message, action_input or "Уточніть, будь ласка:", reply_markup=keyboard)
+            # An ask is user-facing too, so it goes through the same gate. The
+            # OPTIONS are deliberately left alone: they are matched back by
+            # exact text when tapped, and several are proper nouns (class and
+            # specialization names) that must not be translated at all.
+            ask_text = action_input or "Уточніть, будь ласка:"
+            if (session.user_lang != _LOOP_LANGUAGE
+                    and _detect_lang(ask_text) != session.user_lang):
+                ask_text = await _translate(ask_text, session.user_lang, source=_LOOP_LANGUAGE)
+            await _reply_markdown(message, ask_text, reply_markup=keyboard)
             return
 
         if session.status is not None:
@@ -3325,11 +3498,9 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    messages = [
-        {"role": "system", "content": _orna_system_prompt(text)},
-        {"role": "user", "content": text},
-    ]
+    messages, user_lang = await build_loop_messages(text)
     sid = _new_orna_session(messages, MAX_STEPS)
+    _ORNA_SESSIONS[sid].user_lang = user_lang
     await _advance(sid, message)
 
 
@@ -3431,11 +3602,9 @@ async def handle_chosen_inline_result(update: Update, context: ContextTypes.DEFA
         return
     usage_stats.record_command_for(update, "orna_inline", query)
 
-    messages = [
-        {"role": "system", "content": _orna_system_prompt(query, allow_ask=False)},
-        {"role": "user", "content": query},
-    ]
+    messages, user_lang = await build_loop_messages(query, allow_ask=False)
     sid = _new_orna_session(messages, MAX_STEPS, allow_ask=False)
+    _ORNA_SESSIONS[sid].user_lang = user_lang
     sink = _InlineSink()
     try:
         await _advance(sid, sink, with_status=False)
@@ -3906,6 +4075,37 @@ def _demo() -> None:
     assert "Не можу відповісти впевнено" in banner_uk and "поріг" in banner_uk
     assert "I don't know this reliably" in banner_en and str(_CONFIDENCE_FLOOR) in banner_en
     assert _CYRILLIC_RE.search(banner_uk) and not _CYRILLIC_RE.search(banner_en)
+
+    # English-first pipeline: the loop reasons in English and the gates sit at
+    # the edges. _detect_lang is what both keys off.
+    assert _detect_lang("що сьогодні є") == "Ukrainian"
+    assert _detect_lang("what is today") == "English"
+    assert _detect_lang("") == "English" and _detect_lang("balor sword") == "English"
+    # a mixed message counts as Ukrainian - any Cyrillic means the user wrote it
+    assert _detect_lang("покажи Judge Trifecta Falx") == "Ukrainian"
+    # the prompt must now demand English, unconditionally, and must NOT carry the
+    # old per-request Ukrainian lock
+    for probe in ("що сьогодні є", "what is today"):
+        prompt = _orna_system_prompt(probe)
+        assert "write EVERY thought, tool argument, ask and finish answer in English" in prompt, probe
+        assert "MUST be written in Ukrainian" not in prompt, probe
+    assert "PROPER NAMES ARE NEVER TRANSLATED" in _orna_system_prompt("x")
+
+    # _proper_nouns: what the translator is told to keep character-for-character.
+    # Every name it returns MUST be verbatim in the source, or "keep this exactly"
+    # is unsatisfiable and every translation burns a retry - which is what
+    # "Altar of Ascension" -> "Altar Ascension" did.
+    for probe in ("You should buy Grand Summoner first, then the Altar of Ascension.",
+                  "Judge Trifecta Maximus drops items for Warrior and Thief classes.",
+                  "Duelist (tier 5 class) gives defense -5%"):
+        for name in _proper_nouns(probe):
+            assert name in probe, (name, probe)
+    assert "Altar of Ascension" in _proper_nouns("then the Altar of Ascension.")
+    assert "Duelist" in _proper_nouns("Duelist (tier 5 class) gives defense -5%")
+    assert "Judge Trifecta Maximus" in _proper_nouns("Judge Trifecta Maximus drops 12 items")
+    # prose with no identifier must pin nothing, so the instruction stays signal
+    assert _proper_nouns("I do not know this reliably. The tools came back empty.") == []
+    assert _proper_nouns("") == []
 
     # the gate itself: claim vs evidence, and which language the admission takes
     class _Sess:

@@ -550,9 +550,14 @@ class FakeMessage:
 async def run_case_once(case: Case) -> tuple:
     """-> (reason, tools, final). reason is "" on pass."""
     replies: list = []
-    messages = [{"role": "system", "content": T._orna_system_prompt(case.q)},
-                {"role": "user", "content": case.q}]
+    # Go through the INPUT GATE, exactly as handle_orna does: under the
+    # English-first pipeline the loop reasons in English and an output gate
+    # translates the answer back, so a harness that builds the session by hand
+    # would test a path production no longer uses - and the Ukrainian case would
+    # fail for the wrong reason.
+    messages, user_lang = await T.build_loop_messages(case.q)
     sid = T._new_orna_session(messages, T.MAX_STEPS)
+    T._ORNA_SESSIONS[sid].user_lang = user_lang
     try:
         await T._advance(sid, FakeMessage(replies))
     except Exception as exc:
