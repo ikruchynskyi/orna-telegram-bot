@@ -1765,6 +1765,45 @@ state flatly. Added 2026-09-24 on explicit ask.
   воїна? чи були зміни?" called `releases` and cited the real 1.334
   +5% Ward Power change in its answer.
 
+### The chat shows the ANSWER, not the loop's browsing (2026-09-26)
+
+Reported after the Judge Trifecta run: correct behaviour, unusable output. The
+loop opened twelve codex entries and posted a full card for each, so the answer
+arrived at the bottom of a wall of reasoning artefacts the user had to scroll
+past. The ask was explicit - data stays in the model's context, the user sees the
+answer clearly and opens codex entries only if they want to.
+
+- **The browse tools record instead of posting.** `open_entry` fetches with
+  `post=False` (fetch + digest, render nothing), and `search_codex`/`query`
+  record their result entries rather than posting a results card.
+  `_remember_entries` collects them on the session, deduped by url and capped at
+  `_MAX_VIEWED_ENTRIES = 40` so a 50-row query cannot build an unusable
+  keyboard. **Every observation is byte-identical**, so the model's context and
+  reasoning are untouched - this is purely what lands in the chat.
+- **`finish()` carries one "📄 Записи кодексу (N)" button.** Tapping it posts the
+  paged list, and tapping an entry there goes through the EXISTING `open`
+  callback and renders the identical card - no second rendering path to keep in
+  step. A button TAP still posts immediately, because there the card IS what was
+  asked for.
+- Measured on the reported request: **17 steps, 13 entries read, ONE user-visible
+  message** (the answer; the ephemeral status line deletes itself). Before: a
+  dozen cards plus the answer. A simple lookup is likewise one message.
+- **This partly reverses an earlier explicit preference, flagged rather than
+  silently overwritten.** `query` results were once link-only buttons and were
+  changed to render richly in chat "once it was clear having the stats actually
+  visible in the chat (not just a link to tap through to) was the valuable part".
+  The stats are still visible in chat - tapping an entry posts the same full card
+  - they are one tap away instead of automatic. If that trade turns out wrong for
+  browse-shaped asks ("show me the Last Martyr set"), the fix is to post the
+  results card when the request IS a browse and keep deferring it when the loop
+  is doing internal lookups, not to revert wholesale.
+- **What still posts:** computed deliverables, because they ARE the answer - the
+  `assess` stat table, `estimate_stats`, `today`/`next` reports, `towers`,
+  `build_optimize`, `need`. The line is browse artefacts vs computed results.
+  Pinned in `_demo`: a spy message stub asserts `open_entry` and `search_codex`
+  send NOTHING, that a repeat read does not duplicate the button entry, and that
+  the recorder is capped.
+
 ### The ephemeral status message (shared by `/orna` AND `/go`)
 
 A `/orna` request can legitimately run for minutes (`MAX_STEPS = 16`, plus

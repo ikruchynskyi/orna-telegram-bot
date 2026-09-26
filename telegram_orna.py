@@ -541,7 +541,42 @@ def _names_observation(entries: list, fmt=None) -> str:
     return names
 
 
-async def _run_codex_search(message, query: str, lang: str = "en", sources: Optional[list] = None) -> str:
+# Cap on the read-entries button's list - a loose query can match 50 rows.
+_MAX_VIEWED_ENTRIES = 40
+
+
+def _remember_entries(session, entries: list) -> None:
+    """Record codex entries the loop LOOKED AT, for the one button finish()
+    offers. Deduped by url, capped so a 50-row query cannot make an unusable
+    keyboard.
+
+    This is the whole of the 2026-09-26 UI change: the loop used to post a card
+    per lookup - twelve full entry cards, or ten one-result search headers, on a
+    single request - so the answer landed at the bottom of a wall of reasoning
+    artefacts the user had to scroll past. The model's observations are
+    unchanged, so the DATA is still in its context; only the chat gets quieter.
+
+    NOTE this partly reverses an earlier explicit preference (CLAUDE.md: query
+    results were once link-only buttons and were changed to render richly in
+    chat, "once it was clear having the stats actually visible in the chat was
+    the valuable part"). The stats are still visible in chat here - tapping an
+    entry posts the identical card - they are just one tap away instead of
+    automatic. Flagged rather than silently overwritten."""
+    if session is None or not isinstance(getattr(session, "viewed_entries", None), list):
+        return
+    seen = {e.get("url") for e in session.viewed_entries}
+    for entry in entries:
+        url = entry.get("url")
+        if not url or url in seen or len(session.viewed_entries) >= _MAX_VIEWED_ENTRIES:
+            continue
+        seen.add(url)
+        session.viewed_entries.append({"name": entry.get("name") or url, "url": url,
+                                       "tier": entry.get("tier"),
+                                       "sort_value": entry.get("sort_value")})
+
+
+async def _run_codex_search(message, query: str, lang: str = "en", sources: Optional[list] = None,
+                            session=None) -> str:
     if not query:
         return "search_codex needs a name in action_input"
     try:
@@ -636,12 +671,9 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
         if desc_matches:
             logger.info("orna: %r found nothing by name, found %d by description", query, len(desc_matches))
             desc_entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier} for m in desc_matches]
-            key = _remember({"entries": desc_entries, "lang": lang})
-            await message.reply_text(
-                f"🔎 <b>{html.escape(query)}</b> (за описом) — {len(desc_entries)} результат(и)",
-                parse_mode="HTML",
-                reply_markup=_result_list_keyboard(desc_entries, key),
-            )
+            # Recorded for finish()'s one button rather than posted - see
+            # _remember_entries.
+            _remember_entries(session, desc_entries)
             _cite_entries(sources, desc_entries)
             return (f"{len(desc_entries)} matches by description for {query!r}: "
                     f"{_names_observation(desc_entries)}")
@@ -657,12 +689,7 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
     if not results:
         return f"0 results for {query!r}"
 
-    key = _remember({"entries": results, "lang": lang})
-    await message.reply_text(
-        f"🔎 <b>{html.escape(query)}</b> — {len(results)} результат(и)",
-        parse_mode="HTML",
-        reply_markup=_result_list_keyboard(results, key),
-    )
+    _remember_entries(session, results)
     _cite_entries(sources, results)
     return f"{len(results)} results for {query!r}: {_names_observation(results)}"
 
@@ -691,7 +718,8 @@ def _describe_condition(cond: dict) -> str:
     return str(cond)
 
 
-async def _run_query_tool(message, conditions: list, combinator: str, category: str, sort_by: str, sort_dir: str) -> str:
+async def _run_query_tool(message, conditions: list, combinator: str, category: str, sort_by: str, sort_dir: str,
+                          session=None) -> str:
     conditions = [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
     if not conditions and not sort_by:
         return "query needs at least one condition, or a sort_by for a ranking ask"
@@ -743,12 +771,10 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
                 "sort_value": m.sort_value} for m in matches]
     suffix = " (показано перші 50)" if len(entries) >= 50 else ""
 
-    key = _remember({"entries": entries, "lang": "en"})
-    await message.reply_text(
-        f"🔎 <b>{html.escape(summary)}</b> — {len(entries)} результат(и){suffix}",
-        parse_mode="HTML",
-        reply_markup=_result_list_keyboard(entries, key),
-    )
+    # Recorded for finish()'s one button rather than posted - see
+    # _remember_entries, including the note on the earlier preference this
+    # partly reverses. `suffix` is kept in the observation below instead.
+    _remember_entries(session, entries)
     # Include sort_value (the actual ranked number, e.g. an orn_bonus %)
     # directly in the observation text when a sort was requested - without
     # this the model could only see it in the posted message's button
@@ -760,7 +786,7 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
         if sort_by and e.get("sort_value") is not None:
             return f"{e['name']} [{sort_by}={e['sort_value']}] ({e['url']})"
         return f"{e['name']} ({e['url']})"
-    return f"{len(matches)} matches for {summary}: {_names_observation(entries, _fmt)}"
+    return (f"{len(matches)} matches for {summary}{suffix}: {_names_observation(entries, _fmt)}")
 
 
 _CALENDAR_LINK_HTML = f'<a href="{CALENDAR_URL_UK}">📅 Переглянути календар подій</a>'
@@ -917,12 +943,19 @@ def _codex_path_problem(url: str) -> str:
     return ""
 
 
-async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
-    """Posts the full rendered entry (sprite, facts/effects/tags, cross-
-    link section buttons, Assess link) and returns its `detail` dict so a
-    caller (open_entry's tool wrapper) can build a text digest from it -
-    the button-driven "open" callback ignores the return value, same as
-    before this returned nothing."""
+async def _send_entry(message, entry_ref: dict, lang: str, post: bool = True) -> Optional[dict]:
+    """Fetch a codex entry and (by default) post the full rendered card -
+    sprite, facts/effects/tags, cross-link section buttons, Assess link -
+    returning its `detail` dict so a caller can build a text digest from it.
+
+    `post=False` fetches and returns WITHOUT rendering anything. That is what
+    the open_entry TOOL uses now: a request that reads twelve entries used to
+    post twelve full cards, burying the actual answer under reasoning
+    artefacts the user then had to scroll past (reported 2026-09-26 on the
+    Judge Trifecta run). The model's observation is unchanged - the data stays
+    in its context either way - and the user gets ONE button on the answer that
+    opens any of those entries on demand. A button TAP still posts, since there
+    the card IS what was asked for."""
     url = entry_ref.get("url")
     problem = _codex_path_problem(url)
     if problem:
@@ -936,13 +969,17 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
         data = await asyncio.to_thread(fetch_codex_json, url, lang)
     except Exception as e:
         logger.warning("orna: failed to fetch codex page %s", url, exc_info=True)
-        await message.reply_text(f"Не вдалося завантажити сторінку кодексу: {e}")
+        if post:
+            await message.reply_text(f"Не вдалося завантажити сторінку кодексу: {e}")
         return None
 
     detail = data.get("detail")
     if not detail:
-        await message.reply_text("Сторінку кодексу не вдалося розпізнати.")
+        if post:
+            await message.reply_text("Сторінку кодексу не вдалося розпізнати.")
         return None
+    if not post:
+        return detail        # tool path: the digest is the product, not a card
 
     sprite = detail.get("sprite")
     if sprite:
@@ -974,10 +1011,13 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     return detail
 
 
-async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None) -> str:
+async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None,
+                               session=None) -> str:
     if not url:
         return "open_entry needs a url in action_input (from a previous observation)"
-    detail = await _send_entry(message, {"url": url}, "en")
+    # post=False: see _send_entry. The entry is recorded on the session so
+    # finish() can offer it, instead of a card landing in the chat now.
+    detail = await _send_entry(message, {"url": url}, "en", post=False)
     if detail and detail.get("_problem"):
         # An invented url, not a fetch failure - say what is wrong so the next
         # step fixes it instead of retrying the same thing or answering from
@@ -990,6 +1030,10 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
     if sources is not None:
         _add_source(sources, detail.get("name") or url,
                     f"https://playorna.com{url}" if url.startswith("/") else url)
+    if session is not None and isinstance(getattr(session, "viewed_entries", None), list):
+        entry = {"name": detail.get("name") or url, "url": url, "tier": detail.get("tier")}
+        if not any(e.get("url") == url for e in session.viewed_entries):
+            session.viewed_entries.append(entry)
     facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or [])[:8])
     digest = f"{detail.get('name')}: {facts}"
     effects = detail.get("effects") or []
@@ -3055,6 +3099,9 @@ class OrnaSession:
     # the finished answer into. Defaults to the loop's own language, i.e. no
     # translation - a caller that does not set it keeps the old behaviour.
     user_lang: str = _LOOP_LANGUAGE
+    # Codex entries the loop READ this request. open_entry no longer posts a card
+    # per entry (that buried the answer); finish() offers them behind one button.
+    viewed_entries: list = field(default_factory=list)
     # INLINE mode can show no buttons and receive no reply - the answer is one
     # edited message in a chat the bot isn't in - so "ask" is turned off there
     # and the model is told to answer from what it has, stating assumptions,
@@ -3078,7 +3125,8 @@ def _new_orna_session(messages: list, steps_left: int, allow_ask: bool = True) -
     return sid
 
 
-async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None) -> str:
+async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
+                    session=None) -> str:
     """Dispatch one tool call. Wrapped in a broad except so a bug in any
     single tool ends that step with an observation the model can react to,
     instead of killing the whole loop (defense in depth alongside
@@ -3095,16 +3143,17 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         if action == "need":
             return await _run_need_tool(message, action_input)
         if action == "search_codex":
-            return await _run_codex_search(message, action_input, sources=sources)
+            return await _run_codex_search(message, action_input, sources=sources, session=session)
         if action == "query":
             return await _run_query_tool(
                 message, args.get("conditions") or [], str(args.get("combinator") or "and"),
                 str(args.get("category") or ""), str(args.get("sort_by") or ""), str(args.get("sort_dir") or "desc"),
+                session=session,
             )
         if action == "events":
             return await _run_events_tool(message, action_input)
         if action == "open_entry":
-            return await _run_open_entry_tool(message, action_input, sources)
+            return await _run_open_entry_tool(message, action_input, sources, session)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
         if action == "estimate_stats":
@@ -3343,13 +3392,25 @@ async def _advance_inner(sid: str, message) -> None:
             # reply_text was showing that syntax completely literally.
             # Same fix /go already has for its own model-authored replies.
             markup = None
+            rows: list = []
+            # The entries the loop READ, behind one button. open_entry used to
+            # post a card each - twelve of them on one real request - so the
+            # answer arrived below a wall of them. This keeps the answer at the
+            # bottom of the chat where the user is looking, and still one tap
+            # from any entry.
+            if session.viewed_entries:
+                ekey = _remember({"entries": list(session.viewed_entries), "lang": "en"})
+                rows.append([InlineKeyboardButton(
+                    f"📄 Записи кодексу ({len(session.viewed_entries)})",
+                    callback_data=f"orna|entries|{ekey}|0")])
             if session.sources:
                 if len(_SOURCES) >= _SOURCES_MAX:
                     _SOURCES.pop(next(iter(_SOURCES)), None)
                 _SOURCES[sid] = list(session.sources)
-                markup = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")
-                ]])
+                rows.append([InlineKeyboardButton(
+                    f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")])
+            if rows:
+                markup = InlineKeyboardMarkup(rows)
             # CONFIDENCE GATE. The model's own number, clamped by what the loop
             # actually verified, and below the floor the answer LEADS with an
             # admission instead of stating itself flatly.
@@ -3452,7 +3513,7 @@ async def _advance_inner(sid: str, message) -> None:
                            f"{session.seen_calls[sig]} - it was NOT run again. Stop repeating it: use that "
                            f"result, try a DIFFERENT tool or input, or finish with what you have.")
         else:
-            observation = await _run_tool(message, action, action_input, args, session.sources)
+            observation = await _run_tool(message, action, action_input, args, session.sources, session)
             session.seen_calls[sig] = observation
         session.needs_input = observation.startswith(_NEEDS_INPUT)
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
@@ -3761,6 +3822,20 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _send_entry(query.message, entries[idx], state.get("lang", "en"))
         return
 
+    if kind == "entries":
+        # Renders the read-entries list as the SAME paged keyboard a search
+        # result list uses, so tapping one goes through the existing "open"
+        # branch above and posts the normal card - no second rendering path.
+        entries = state.get("entries") or []
+        if not entries:
+            return
+        await query.message.reply_text(
+            f"📄 <b>Записи, які я відкривав</b> — {len(entries)}",
+            parse_mode="HTML",
+            reply_markup=_result_list_keyboard(entries, key, 0),
+        )
+        return
+
     if kind == "page":
         page = int(arg) if arg.isdigit() else 0
         entries = state.get("entries") or []
@@ -4058,6 +4133,47 @@ def _demo() -> None:
     assert "Не можу відповісти впевнено" in banner_uk and "поріг" in banner_uk
     assert "I don't know this reliably" in banner_en and str(_CONFIDENCE_FLOOR) in banner_en
     assert _CYRILLIC_RE.search(banner_uk) and not _CYRILLIC_RE.search(banner_en)
+
+    # The BROWSE tools must post nothing and record instead: a request that read
+    # twelve entries used to post twelve cards and bury its own answer. A card
+    # arriving from a tool is the regression to catch, so this asserts on a
+    # message stub that records every send.
+    class _Spy:
+        chat_id = 0
+
+        def __init__(self):
+            self.sent = []
+
+        def __getattr__(self, name):
+            async def rec(*a, **k):
+                self.sent.append(name)
+                return _Spy()
+            return rec
+
+    class _Sess:
+        def __init__(self):
+            self.viewed_entries = []
+            self.sources = []
+
+    spy, sess = _Spy(), _Sess()
+    obs = asyncio.run(_run_tool(spy, "open_entry", "/codex/items/vritra-charm/", {}, sess.sources, sess))
+    assert spy.sent == [], f"open_entry must post nothing, sent {spy.sent}"
+    assert obs.startswith("Vritra Charm"), obs[:60]
+    assert len(sess.viewed_entries) == 1 and sess.viewed_entries[0]["url"].endswith("vritra-charm/")
+    # ...and a second read of the same url must not duplicate the button entry
+    asyncio.run(_run_tool(spy, "open_entry", "/codex/items/vritra-charm/", {}, sess.sources, sess))
+    assert len(sess.viewed_entries) == 1, sess.viewed_entries
+
+    spy2, sess2 = _Spy(), _Sess()
+    obs2 = asyncio.run(_run_tool(spy2, "search_codex", "Judge Trifecta", {}, sess2.sources, sess2))
+    assert spy2.sent == [], f"search_codex must post nothing, sent {spy2.sent}"
+    assert "results for" in obs2 and sess2.viewed_entries, obs2[:60]
+    # the recorder is capped, or a 50-row query builds an unusable keyboard
+    big = [{"name": f"n{i}", "url": f"/codex/items/n{i}/"} for i in range(200)]
+    sess3 = _Sess()
+    _remember_entries(sess3, big)
+    assert len(sess3.viewed_entries) == _MAX_VIEWED_ENTRIES, len(sess3.viewed_entries)
+    _remember_entries(None, big)          # must not raise without a session
 
     # English-first pipeline: the loop reasons in English and the gates sit at
     # the edges. _detect_lang is what both keys off.
