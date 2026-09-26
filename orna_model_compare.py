@@ -52,6 +52,10 @@ import orna_test_suite as S      # noqa: E402  - cases, graders and FakeMessage
 import telegram_orna as T        # noqa: E402
 
 RESULTS_PATH = os.path.join(REPO_ROOT, "orna_model_compare.json")
+# What the loop posts to the user when a step's model call dies outright. Such a
+# run says nothing about answer quality - only that the backend failed.
+_RUN_ERROR_SIGNATURES = ("Не вдалося обробити запит", "Ollama request failed",
+                         "запит триває надто довго", "harness raised")
 
 
 def _load_results() -> list:
@@ -85,11 +89,13 @@ def report(runs: list) -> None:
             if not rows:
                 continue
             ok = sum(1 for r in rows if not r["reason"])
+            errs = sum(1 for r in rows if r.get("errored"))
             t = statistics.median(r["seconds"] for r in rows)
             steps = statistics.median(r["steps"] for r in rows)
             tools = rows[0]["tools"] or ["-"]
-            print(f"    {model:<34} {ok}/{len(rows)} pass  t={t:6.1f}s  steps={steps:g}  "
-                  f"tools={','.join(tools)[:60]}")
+            print(f"    {model:<34} {ok}/{len(rows)} pass"
+                  + (f" ({errs} ERRORED)" if errs else "")
+                  + f"  t={t:6.1f}s  steps={steps:g}  tools={','.join(tools)[:56]}")
             for r in rows:
                 if r["reason"]:
                     print(f"        FAIL: {r['reason'][:100]}")
@@ -99,9 +105,12 @@ def report(runs: list) -> None:
         rows = [r for r in runs if r["model"] == model]
         ok = sum(1 for r in rows if not r["reason"])
         times = [r["seconds"] for r in rows]
-        print(f"  {model:<34} {ok}/{len(rows)} pass  "
-              f"median {statistics.median(times):6.1f}s  total {sum(times):7.1f}s  "
-              f"steps/req {statistics.median([r['steps'] for r in rows]):g}")
+        errs = sum(1 for r in rows if r.get("errored"))
+        graded = len(rows) - errs
+        print(f"  {model:<34} {ok}/{graded} pass of graded"
+              + (f", {errs}/{len(rows)} ERRORED (backend failed - not an answer)" if errs else "")
+              + f"  median {statistics.median(times):6.1f}s  steps/req "
+                f"{statistics.median([r['steps'] for r in rows]):g}")
     # Tool-choice differences are often the real story: two models can both
     # pass while one takes four tool calls and the other eleven.
     print("\n  tool usage (calls per model, all cases):")
@@ -142,10 +151,21 @@ async def main() -> int:
                 except Exception as exc:
                     reason, tools, final = f"harness raised {exc!r}", [], ""
                 elapsed = time.time() - started
+                # A run that CRASHED is not a run that answered wrongly, and
+                # conflating them makes a comparison actively misleading: muse-
+                # glimmer's Ollama 500s surfaced as the loop's Ukrainian error
+                # text, which the grader then reported as "answer must be in
+                # English but contains Cyrillic" and as missing facts. Detect the
+                # failure text the loop posts when a step dies and mark the run
+                # ERROR, so a broken backend is never scored as a bad answer.
+                errored = any(sig in final for sig in _RUN_ERROR_SIGNATURES)
+                if errored:
+                    reason = "RUN ERRORED (not an answer): " + final.strip()[:140]
                 runs.append({"model": model, "case": case.id, "tier": case.tier,
+                             "errored": errored,
                              "seconds": round(elapsed, 1), "steps": len(tools), "tools": tools,
                              "reason": reason, "cold": first, "answer": final[:400]})
-                mark = "PASS" if not reason else "FAIL"
+                mark = "PASS" if not reason else ("ERR " if errored else "FAIL")
                 print(f"  {mark}  [{case.tier}] {case.id:<20} {elapsed:6.1f}s  "
                       f"{len(tools):2d} steps  {','.join(tools)[:52]}"
                       + ("   (cold load)" if first else ""))

@@ -2571,20 +2571,50 @@ the cloud. Results append to a gitignored JSON so a long comparison can be run
 one model per invocation (each fits inside a sane timeout) and still print one
 combined table (`REPORT=1`).
 
-Measured 2026-09-25, 6 cases (2 simple, 2 medium, 2 hard), N=1, both MLX:
+**A run that CRASHED is not a run that answered wrongly, and conflating them
+makes the comparison actively misleading.** When a step's model call dies, the
+loop posts its Ukrainian failure text - and the grader then scored that as
+"answer must be in English but contains Cyrillic" and as missing facts, i.e. it
+blamed the model's judgement for a backend fault. Runs whose answer carries a
+loop-level failure signature are now marked **ERRORED** and excluded from the
+pass denominator. Rows recorded before this lack the flag (muse-glimmer's), so
+count them from the stored answer text instead.
 
-| model | pass | median | total | steps/req |
+Measured 2026-09-25, the same 6 cases (2 simple, 2 medium, 2 hard), N=1, local:
+
+| model | passed | crashed | median | first tool right? |
 |---|---|---|---|---|
-| `nemotron-3.5-lightning:30b-mlx` (current) | 6/6 | **33s** | 223s | 1.5 |
-| `qwen3.8:27b-mlx` | 6/6 | **138s** | 875s | 1.5 |
+| `nemotron-3.5-lightning:30b-mlx` (current) | **6/6** | 0 | **33s** | yes |
+| `qwen3.8:27b-mlx` | **6/6** | 0 | 138s | yes |
+| `lfm2.5:8b` | 2/4 graded | 2/6 | 60s | mostly |
+| `muse-glimmer:30b-mlx` | 1/3 graded | 4/7 | 184s | no |
+| `laguna-xs-2.1:nvfp4` | 0/0 graded | **6/6** | 24s | **yes** |
 
-**Same answers, same tool choices, ~4x the wall clock.** Both picked the same
-tool first on every case, and qwen's only routing difference was one extra
-`query` on the 13-item set question (15 steps vs 12) - it did not buy a better
-answer. So on this evidence there is no reason to switch: the current model is
-right as often and four times faster, and wall-clock is the scarce resource in
-this loop (`LOOP_TIMEOUT_SECONDS`, and a cloud step that times out before
-falling back to local). Caveats: N=1 per case, so a small accuracy difference
+Read past the pass column, because the failures have three different causes:
+- **`laguna-xs-2.1` answered CORRECTLY and still scored zero.** Every run died
+  on `Ollama returned non-JSON content` whose content was the right answer in
+  prose ("Judge Trifecta Falx is a **Tier 10** weapon with **Famed**..."). It
+  routed perfectly - the correct first tool on all six - and then wrote the
+  FINISH step as markdown instead of the required JSON envelope, which the loop
+  cannot use. That is a format-compliance gap, not a quality one, and it would
+  likely pass if the finish step tolerated prose the way
+  `ollama_client._from_tool_calls` tolerates a native tool call.
+- **`muse-glimmer` fails in the backend, and it is NOT the known harmony bug.**
+  Its 500s ran 19-36s (not the `45.00Xs` read-timeout signature) and the server
+  log shows renderer/parser `glimmer` with `harmony=null` and no "no reverse
+  mapping" line anywhere - so this is the glimmer parser failing on this prompt
+  shape, a different cause from the gpt-oss case documented above. Where it did
+  answer, it looped: 64 `query` calls across the set and one case hitting the
+  full 35-step ceiling without ever reading an entry.
+- **`lfm2.5:8b` is the only one with genuine ANSWER failures** (2), naming the
+  wrong classes for a set - plus 2 crashes.
+
+So there is no reason to switch: the current model is right as often as the best
+alternative and 4x faster, and wall-clock is the scarce resource in this loop.
+
+qwen matched nemotron answer-for-answer and picked the same tool first on every
+case; its only routing difference was one extra `query` on the 13-item set
+question (15 steps vs 12), which bought nothing. Caveats: N=1 per case, so a small accuracy difference
 would not show - re-run with N>=3 before concluding anything about quality; the
 first request per model pays a cold load (flagged in the output); and these are
 wall-clock figures for the whole ReAct loop including real codex/sheets calls,
