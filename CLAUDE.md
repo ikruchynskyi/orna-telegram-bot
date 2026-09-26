@@ -2560,6 +2560,36 @@ forecast date (year-1900 non-leap parse). See
 `.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
 the ten patterns these cluster into.
 
+## Comparing local models (`orna_model_compare.py`)
+
+Runs the SAME requests through two or more local models and reports wall-clock,
+step count, the exact tool sequence each chose, and pass/fail. Reuses
+`orna_test_suite`'s graded cases rather than new prompts, so "was it right" is
+decided by the suite's live-data expectations, not by eye. Always local-only
+(`MAX_CLOUD_CALLS = 0`) - through a cloud-first loop most steps would measure
+the cloud. Results append to a gitignored JSON so a long comparison can be run
+one model per invocation (each fits inside a sane timeout) and still print one
+combined table (`REPORT=1`).
+
+Measured 2026-09-25, 6 cases (2 simple, 2 medium, 2 hard), N=1, both MLX:
+
+| model | pass | median | total | steps/req |
+|---|---|---|---|---|
+| `nemotron-3.5-lightning:30b-mlx` (current) | 6/6 | **33s** | 223s | 1.5 |
+| `qwen3.8:27b-mlx` | 6/6 | **138s** | 875s | 1.5 |
+
+**Same answers, same tool choices, ~4x the wall clock.** Both picked the same
+tool first on every case, and qwen's only routing difference was one extra
+`query` on the 13-item set question (15 steps vs 12) - it did not buy a better
+answer. So on this evidence there is no reason to switch: the current model is
+right as often and four times faster, and wall-clock is the scarce resource in
+this loop (`LOOP_TIMEOUT_SECONDS`, and a cloud step that times out before
+falling back to local). Caveats: N=1 per case, so a small accuracy difference
+would not show - re-run with N>=3 before concluding anything about quality; the
+first request per model pays a cold load (flagged in the output); and these are
+wall-clock figures for the whole ReAct loop including real codex/sheets calls,
+not tokens/sec.
+
 ## The test suite (`orna_test_suite.py`)
 
 Three tiers, run before and after a major update and compared. No framework,

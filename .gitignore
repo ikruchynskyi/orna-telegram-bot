@@ -17,3 +17,4 @@ usage_stats.json
 .releases_cache/
 .knowledge_cache/
 .bonuses_cache/
+orna_model_compare.json
