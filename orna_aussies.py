@@ -447,6 +447,65 @@ def _resolve_attr_field(field: str) -> Optional[str]:
     return fields[close[0]] if close else None
 
 
+_CLASS_ABILITY_INDEX: Optional[dict] = None
+
+
+def _class_ability_index() -> dict:
+    """alias (lowercased) -> class record id, for every class in codex.json.
+
+    aussies names the gendered pairs as ONE entry ("Beowulf / Bestla",
+    "Heretic Ara / Hera Ara"), so an exact lookup for "Beowulf" finds nothing -
+    each side of the slash is registered as its own alias."""
+    global _CLASS_ABILITY_INDEX
+    if _CLASS_ABILITY_INDEX is None:
+        index: dict = {}
+        for rid in _codex()["main"].get("classes", {}):
+            full = display_name("classes", rid) or ""
+            for alias in [full] + full.split(" / "):
+                alias = alias.strip().lower()
+                if alias:
+                    index.setdefault(alias, rid)
+        _CLASS_ABILITY_INDEX = index
+    return _CLASS_ABILITY_INDEX
+
+
+def class_abilities(name: str) -> list:
+    """Every ability of a class or tier-10 specialization, WITH what it does:
+    [{"slug", "name", "description"}].
+
+    This is the general answer to "the bot should work the nuances out itself
+    rather than having them hand-coded": all 82 classes - including every
+    tier-10 specialization and its celestial variants - carry a structured
+    `abilities` list in codex.json, and translations.en.json describes all 134
+    of them in plain English ("Resurgence: You become more powerful as your HP
+    decreases in battle"). So a conditional passive can be SURFACED for any
+    class without anyone writing a rule per specialization.
+
+    Note the two sources are complementary, not redundant: orna_classes.json
+    carries `passiveEffects` for 13 classes (and is the only place naming the
+    Dual Staffs / Dual Wield conditions) but has NOTHING for the tier-10
+    specializations, while this has all of them. Callers should show both."""
+    rid = _class_ability_index().get((name or "").strip().lower())
+    if rid is None:                      # fall back to fuzzy, as elsewhere here
+        close = difflib.get_close_matches((name or "").strip().lower(),
+                                          list(_class_ability_index()), n=1, cutoff=0.82)
+        rid = _class_ability_index().get(close[0]) if close else None
+    if rid is None:
+        return []
+    record = _codex()["main"]["classes"].get(rid) or {}
+    table = (_translations().get("abilities") or {})
+    out = []
+    for entry in record.get("abilities") or []:
+        slug = entry.get("name") if isinstance(entry, dict) else str(entry)
+        if not slug:
+            continue
+        info = table.get(slug) or {}
+        out.append({"slug": slug,
+                    "name": info.get("name") or slug.replace("_", " ").title(),
+                    "description": (info.get("description") or "").strip()})
+    return out
+
+
 def unresolvable_condition_fields(conditions: list) -> list:
     """Which of `conditions`' field names resolve to nothing, as
     [(kind, field, [suggestions])].

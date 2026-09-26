@@ -73,6 +73,7 @@ from orna_aussies import display_name
 from orna_aussies import has_aussies_page
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
 from orna_aussies import unresolvable_condition_fields
+from orna_aussies import class_abilities as orna_aussies_class_abilities
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
@@ -2052,7 +2053,31 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     # nuance that decides whether a loadout is good (reported live 2026-09-25).
     passives = [str(x) for x in ((class_entry or {}).get("passives") or [])]
     passives += [str(x) for x in ((spec_entry or {}).get("passives") or [])]
+    # ...plus the abilities DISCOVERED from the codex for this class/spec, with
+    # what each one does. orna_classes.json only carries passiveEffects for 13
+    # classes and none of the tier-10 specializations, so relying on it alone
+    # meant a Gilgamesh/Deity/Heretic estimate listed no passives at all. Every
+    # one of aussies' 82 classes has a structured `abilities` list and
+    # translations.en.json describes all 134 - so this generalises to every
+    # specialization from DATA, with no rule written per class.
+    abilities = []
+    for who in ((spec_entry or {}).get("name"), (class_entry or {}).get("name")):
+        if not who:
+            continue
+        try:
+            found = await asyncio.to_thread(orna_aussies_class_abilities, who)
+        except Exception as e:
+            logger.warning("orna: ability lookup failed for %r (%s)", who, e)
+            continue
+        for ab in found:
+            if ab["name"] not in {a["name"] for a in abilities}:
+                abilities.append({**ab, "owner": who})
     hand_note = ""
+    if abilities:
+        head += ["", "<b>Здібності класу/спеціалізації</b> (таблиця їх НЕ враховує):"]
+        head += ["\n".join(f"• <b>{html.escape(a['name'])}</b> — {html.escape(a['description'][:190])}"
+                            if a["description"] else f"• <b>{html.escape(a['name'])}</b>"
+                            for a in abilities)]
     if passives:
         head += ["", "<b>Пасивки класу/спеціалізації</b> (умовні — таблиця їх НЕ враховує):",
                  "\n".join(f"• {html.escape(x)}" for x in passives)]
@@ -2075,8 +2100,11 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     # and these are exactly the facts it must reason with when saying whether a
     # loadout is a good one.
     passive_note = ""
+    if abilities:
+        passive_note += (" [class/spec abilities (not in the table, mention any that change the answer): "
+                         + "; ".join(f"{a['name']}: {a['description'][:90]}" for a in abilities[:8]) + "]")
     if passives:
-        passive_note = (f" [conditional passives NOT in the table: {'; '.join(passives)}]"
+        passive_note += (f" [conditional passives NOT in the table: {'; '.join(passives)}]"
                         + (f" [dual-wield condition {hand_note}]" if hand_note else ""))
     dual_note = (f" [dual wield: two one-handed weapons, their stats counted at "
                  f"x{_DUAL_WIELD_FACTOR} of the combined total]" if dual_wield else "")
@@ -3659,6 +3687,19 @@ def _demo() -> None:
         "one celestial + one ordinary weapon is a legal dual wield"
     assert _check_loadout([cel("Celestial Archistaff")]) == ([], False)
     assert _DUAL_WIELD_FACTOR == 0.65
+
+    # Class/spec abilities must be DISCOVERED from the codex, not hand-written
+    # per specialization: orna_classes.json has passiveEffects for 13 classes
+    # and none of the tier-10 specs, so an estimate for Gilgamesh/Deity/Heretic
+    # listed no passives at all before this.
+    import orna_aussies as _aussies
+    for spec in ("Heretic Ara", "Gilgamesh", "Deity", "Grand Summoner", "Beowulf"):
+        found = _aussies.class_abilities(spec)
+        assert found, f"no abilities discovered for {spec}"
+        assert any(a["description"] for a in found), f"{spec}: abilities carry no descriptions"
+    # a gendered-pair name resolves from either side ("Beowulf / Bestla")
+    assert _aussies.class_abilities("Bestla"), "the second name of a gendered pair must resolve"
+    assert _aussies.class_abilities("no such class at all") == []
 
     print("telegram_orna: all checks passed")
 

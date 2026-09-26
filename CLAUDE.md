@@ -1357,6 +1357,29 @@ worn together with an Arisen North Star (off-hand). Three separate defects:
   two-hander**, measured on this very request: two one-handed staves total
   13,467 magic against the Celestial Archistaff's 12,445, so "the two-hander
   is obviously better" is wrong and the prompt says so.
+- **Only ONE CELESTIAL weapon can be equipped**, one-handed or two-handed
+  (game rule, stated 2026-09-25) - it matters precisely because celestials top
+  most stat rankings, so a naive "best in every slot" search reaches for two of
+  them. This also invalidated this file's own first dual-wield measurement,
+  which used two celestial staves: the legal pairing (Celestial Staff + Arisen
+  Fey Macha Pillar) totals **13,743** magic, not 13,467, against the
+  two-hander's 12,445 - so the dual-wield advantage is LARGER than first
+  reported.
+- **Class/spec abilities are DISCOVERED from the codex, not hand-written per
+  specialization** (`orna_aussies.class_abilities`, added 2026-09-25 on the ask
+  "ideally bot should find out this data for all specializations on its own").
+  All 82 classes - every tier-10 spec and celestial variant included - carry a
+  structured `abilities` list in `codex.json`, and `translations.en.json`
+  describes all 134 of them in plain English ("Resurgence: You become more
+  powerful as your HP decreases in battle"). So `estimate_stats` can list what a
+  Gilgamesh/Deity/Heretic Ara actually does with no rule written per class.
+  Two things to know: aussies names the gendered pairs as ONE entry
+  ("Beowulf / Bestla", "Heretic Ara / Hera Ara"), so each side of the slash is
+  registered as its own alias or a lookup for "Beowulf" finds nothing; and the
+  two sources are COMPLEMENTARY, not redundant - `orna_classes.json` carries
+  `passiveEffects` for only 13 classes and NONE of the tier-10 specs, but it is
+  the only place naming the Dual Staffs / Dual Wield conditions (Sequencer,
+  Duelist), which aussies has no class record for at all. Show both.
 - **Class/spec PASSIVES are conditional and the stat table cannot express
   them** - `orna_classes.json` has carried `"Sequencer Doublecast (Dual
   Staffs)"` / `"Sequencer Weapon Power (Dual Staffs)"` all along and nothing
