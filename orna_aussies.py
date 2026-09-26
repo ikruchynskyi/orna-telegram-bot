@@ -506,6 +506,48 @@ def class_abilities(name: str) -> list:
     return out
 
 
+_ALL_NAMES: Optional[list] = None
+
+
+def all_codex_names() -> list:
+    """Every display name in codex.json, across all nine categories (~5k)."""
+    global _ALL_NAMES
+    if _ALL_NAMES is None:
+        out = []
+        for category, records in _codex()["main"].items():
+            for rid in records:
+                name = display_name(category, rid)
+                if name:
+                    out.append(name)
+        _ALL_NAMES = out
+    return _ALL_NAMES
+
+
+def fuzzy_codex_name(query: str, cutoff: float = 0.72) -> str:
+    """The real codex name `query` most likely MEANT, or "".
+
+    Live 2026-09-26: "/orna what crest of feeling does?" - the real item is
+    `Crest of the Felling`, one substituted letter away - and the loop answered
+    "no such item exists in the current codex database" while its own search for
+    "crest" had listed the right name. `search_codex`'s mechanical ladder cannot
+    reach it (it strips quality words, possessives and trailing words; a typo
+    INSIDE a word is a different shape), so this matches the whole query against
+    the real name vocabulary instead. Same "fuzzy-correct against the corpus's
+    own words" fix orna_knowledge.search and _resolve_stat_field already use.
+
+    Fast enough to call inline - difflib over ~5k names measured at under 10ms -
+    but callers still go through asyncio.to_thread because building the
+    vocabulary can trigger the aussies cache fetch."""
+    query = (query or "").strip()
+    if len(query) < 4:
+        return ""                      # too short to disambiguate anything
+    names = all_codex_names()
+    matches = difflib.get_close_matches(query, names, n=1, cutoff=cutoff)
+    if matches and matches[0].lower() != query.lower():
+        return matches[0]
+    return ""
+
+
 def unresolvable_condition_fields(conditions: list) -> list:
     """Which of `conditions`' field names resolve to nothing, as
     [(kind, field, [suggestions])].

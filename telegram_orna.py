@@ -71,6 +71,7 @@ from orna_aussies import build_url as build_aussies_url
 from orna_aussies import decode as decode_effect_code
 from orna_aussies import display_name
 from orna_aussies import has_aussies_page
+from orna_aussies import fuzzy_codex_name
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
 from orna_aussies import unresolvable_condition_fields
 from orna_aussies import class_abilities as orna_aussies_class_abilities
@@ -687,6 +688,32 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
     # one clean answer). Only a genuinely final "nothing anywhere" belongs
     # in the user's chat, and that's finish()'s job once the model gives up.
     if not results:
+        # LAST RESORT: the name may simply be misspelled or misheard. Live
+        # 2026-09-26: "what crest of feeling does?" - the real item is `Crest of
+        # the Felling`, ONE substituted letter away - and the loop answered "no
+        # such item exists in the current codex database" while its own earlier
+        # search for "crest" had listed the right name on screen. The mechanical
+        # ladder above cannot reach that shape: it strips quality words,
+        # possessives and trailing words, but a typo INSIDE a word needs a fuzzy
+        # match against the real name vocabulary. Placed after every other
+        # fallback so it can only turn a dead end into a hit.
+        corrected = await asyncio.to_thread(fuzzy_codex_name, query)
+        if corrected:
+            try:
+                results = (await asyncio.to_thread(codex_search, corrected, "en")).get("results") or []
+            except Exception:
+                logger.warning("orna: fuzzy-name retry failed for %r", corrected)
+                results = []
+            if results:
+                logger.info("orna: %r looks like %r - searched that instead", query, corrected)
+                _remember_entries(session, results)
+                _cite_entries(sources, results)
+                # The model MUST be told it was a correction, or it will present
+                # the answer as if the user's spelling was right - and the user
+                # never learns the real name.
+                return (f"0 results for {query!r}, but that looks like a misspelling of {corrected!r} "
+                        f"({len(results)} result(s)): {_names_observation(results)}. Answer about "
+                        f"{corrected!r} and SAY that is how you read the question.")
         return f"0 results for {query!r}"
 
     _remember_entries(session, results)
@@ -1389,6 +1416,18 @@ async def _resolve_aussies_entry(item_name: str):
             if results:
                 logger.info("orna: resolved %r via looser name %r", item_name, cand)
                 break
+    if not results:
+        # Same fuzzy last resort as _run_codex_search - assess/compare/
+        # build_optimize/estimate_stats all dead-end here, and a misspelled item
+        # name is exactly as likely from them.
+        corrected = await asyncio.to_thread(fuzzy_codex_name, item_name)
+        if corrected:
+            try:
+                results = (await asyncio.to_thread(codex_search, corrected, "en")).get("results") or []
+            except Exception:
+                results = []
+            if results:
+                logger.info("orna: resolved %r via fuzzy name %r", item_name, corrected)
     if not results:
         return None, f"no codex entry found for {item_name!r} - try search_codex first to confirm the exact name"
     url = results[0].get("url", "")
@@ -4174,6 +4213,20 @@ def _demo() -> None:
     _remember_entries(sess3, big)
     assert len(sess3.viewed_entries) == _MAX_VIEWED_ENTRIES, len(sess3.viewed_entries)
     _remember_entries(None, big)          # must not raise without a session
+
+    # A misspelled codex name must be CORRECTED, not answered with "no such item
+    # exists". Live: "what crest of feeling does?" - the real item is `Crest of
+    # the Felling`, one letter away - and the loop denied it existed while its
+    # own search for "crest" had listed the name.
+    spy4, sess4 = _Spy(), _Sess()
+    obs4 = asyncio.run(_run_tool(spy4, "search_codex", "crest of feeling", {}, sess4.sources, sess4))
+    assert "Crest of the Felling" in obs4, obs4[:150]
+    assert "misspelling" in obs4 and "SAY that is how you read" in obs4, obs4[:150]
+    assert sess4.viewed_entries, "the corrected result must still reach the entries button"
+    # ...and a query that is not a name at all must NOT be corrected into one
+    import orna_aussies as _aussies
+    for not_a_name in ("what is the best weapon", "how do i level up", "mag > 250", "sword"):
+        assert _aussies.fuzzy_codex_name(not_a_name) == "", not_a_name
 
     # English-first pipeline: the loop reasons in English and the gates sit at
     # the edges. _detect_lang is what both keys off.

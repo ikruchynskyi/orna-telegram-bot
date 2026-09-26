@@ -818,6 +818,36 @@ only gives tier-1 T. Mag ↑, not tier 2. Root causes, both fixed:
    character-for-character, not re-notated or guessed. Verified 8/8
    after the prompt change.
 
+**A MISSPELLED codex name is fuzzy-matched against the real name vocabulary -
+the mechanical ladder cannot reach a typo INSIDE a word.** Live 2026-09-26:
+"/orna what crest of feeling does?" answered "No such item exists in the current
+codex database", having itself listed `Crest of the Felling` - ONE substituted
+letter away - among the alternatives it offered. Every retry `_run_codex_search`
+had strips things from the EDGES (quality words, possessives, a trailing word, a
+stray number, duplicated letters), so `"feeling"` -> `"felling"` was structurally
+out of reach, and `_name_candidates` produced only junk for it
+(`"crest's of feeling"`, `"crest of"`).
+- `orna_aussies.fuzzy_codex_name` matches the whole query against
+  `all_codex_names()` - every display name across all nine categories, ~5,064 of
+  them, built in 0.02s and searched by `difflib` in under 10ms. Same
+  "fuzzy-correct against the corpus's own vocabulary" fix
+  `orna_knowledge.search` and `_resolve_stat_field` already use.
+- **Cutoff 0.72, measured both ways**: it corrects `crest of feeling`, `balor
+  sord`, `judge trifecta falks`, `celestial arcistaff`, `vritra charme`, `lost
+  helmut` (6/6) and refuses to invent a name for `what is the best weapon`,
+  `how do i level up`, `mag > 250`, `zzzzqqqq` or a bare `sword` (5/5). A query
+  under 4 characters is never corrected.
+- Placed AFTER every existing fallback in `_run_codex_search`, so it can only
+  turn a dead end into a hit, and wired into `_resolve_aussies_entry` too -
+  `assess`/`compare`/`build_optimize`/`estimate_stats` all dead-end there and a
+  typo is just as likely from them.
+- **The observation SAYS it was a correction** ("that looks like a misspelling of
+  X ... SAY that is how you read the question"), or the model presents the answer
+  as though the user's spelling was right and they never learn the real name.
+  Measured after: the reported request answers in **2 steps** with "You likely
+  meant Crest of the Felling - Tier 7 Famed accessory, Raid Rewards +50%", where
+  before it denied the item existed. Pinned in `_demo`.
+
 **A trailing stray number on an otherwise-valid codex name falls back to
 the name with the number stripped** (`_run_codex_search`, alongside the
 existing "rainsong" space-collapse and description-substring fallbacks).
