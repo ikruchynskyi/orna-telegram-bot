@@ -1692,6 +1692,11 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
+# knowledge_search can compose six source blocks; capped in TOTAL, not just
+# per block - see the note where they are joined.
+_KNOWLEDGE_OBS_MAX = 8000
+
+
 async def _run_knowledge_tool(message, query: str, sources: Optional[list] = None) -> str:
     """Curated community reference (orna_knowledge.txt, see
     orna_scrape_knowledge.py) for exactly the gap web_search exists for -
@@ -1833,7 +1838,27 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
         )
     if not blocks:
         return f"no knowledge-base matches for {query!r} - try web_search instead"
-    return "\n\n".join(blocks)
+    # TOTAL cap, not just a per-block one. Each block was capped individually
+    # (3000, 2000, ...) but knowledge_search now composes up to SIX of them -
+    # sheets, player Q&A, guide formulas, mechanics, class data, dev comments -
+    # and one call was measured at 14,909 characters. That is a large slice of
+    # the step's context spent on sources that may all be marginal, which is the
+    # opposite of helping the model reason. Whole blocks are dropped from the END
+    # (they are appended in deliberate order) and the model is TOLD how many, so
+    # it can narrow the query rather than assume it saw everything - the same
+    # "never let a truncation look complete" rule as _names_observation.
+    out, dropped = [], 0
+    used = 0
+    for block in blocks:
+        if used + len(block) > _KNOWLEDGE_OBS_MAX and out:
+            dropped += 1
+            continue
+        out.append(block)
+        used += len(block) + 2
+    if dropped:
+        out.append(f"[{dropped} further source block(s) omitted to keep this observation readable - "
+                   "ask a NARROWER question if you need them.]")
+    return "\n\n".join(out)
 
 
 # Gear stats ADD together; the class/AL/PVP layer multiplies on top. Keeping

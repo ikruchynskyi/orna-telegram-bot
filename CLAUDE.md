@@ -2633,27 +2633,44 @@ searched the ITEM while the text is indexed by the MECHANIC. It also carries the
 one thing no other source has: a **corrected premise** ("those are summons, not
 followers"), which the tool description tells the model to look for.
 
-- **Reddit rate-limits hard, so the crawl is RESUMABLE and currently
-  INCOMPLETE.** 825 unique QUESTION-flaired posts were listed, 796 had >=2
-  comments, and Reddit started 429ing after ~88 of them; a second run was
-  throttled on the LISTING itself and produced zero posts. So both the listing
-  and each post's comments are cached under `.qa_cache/` (gitignored), a 429
-  backs off (30/60/120/240s, honouring `Retry-After`) and then STOPS rather than
-  grinding, and the corpus is rebuilt from the whole cache on every run.
-  **Current state: 87 threads / 248 answers of an intended ~800.** Re-run
-  `REDDIT_COOKIE=... QA_HELDOUT_IDS=... python3 orna_scrape_qa.py` later to
-  resume - it skips everything already cached.
-- **Precision over recall, deliberately, and this needed measuring.** A thread
-  must match the QUESTION side (title or `Q:` line) at least TWICE and score >=6.
-  A single shared word is almost always incidental: "how do I get the summoner
-  class" matched a thread titled "How'd someone get the wealth shrine" on
-  `how`+`get`. **An irrelevant Q&A block is worse than none**, because the model
-  may build an answer on it. Generic words are dropped by DOCUMENT FREQUENCY
-  derived from the corpus (`_MAX_DOC_FREQ = 0.10`), not a hardcoded stopword
-  list - measured on the real corpus: 0.10 drops every interrogative while
-  keeping all of summoner/vritra/amities/orns/followers/anguished/adornment/beo,
-  where 0.15 left "how" and "get" in. At 87 threads recall is consequently LOW:
-  most questions return nothing, which is the correct failure direction.
+- **Reddit rate-limits hard, so the crawl is RESUMABLE - and it took three
+  runs.** 825 unique QUESTION-flaired posts listed, 800 with >=2 comments. At 1s
+  between requests Reddit 429'd after ~88 of them; a second run was throttled on
+  the LISTING itself and produced zero posts. Both the listing and each post's
+  comments are now cached under `.qa_cache/` (gitignored), a 429 backs off
+  (30/60/120/240s, honouring `Retry-After`) and then STOPS rather than grinding,
+  and the corpus rebuilds from the whole cache on every run. **At 5s per request
+  the third run completed 800/800 with zero failures and four handled 429 pauses
+  -> 751 threads / 1,806 answers, 809KB.** Re-run
+  `REDDIT_COOKIE=... QA_HELDOUT_IDS=... python3 orna_scrape_qa.py` to extend it;
+  it skips everything cached.
+- **Scoring is IDF-weighted, and the three wrong designs before it are the
+  lesson.** (1) Binary keep/drop of "common" words by document frequency
+  DISCARDED "summoner" - >45 of 751 threads mention it - so "how do I get the
+  summoner class" could not be answered at all. **On a single-topic corpus the
+  domain terms are frequent BY NATURE and are also the discriminating ones**, so
+  they must be down-weighted, never dropped. (2) Requiring TWO question-side hits
+  was tuned on the rate-limited 87-thread corpus and rejected real questions at
+  scale: "how does ward work" reduces to {work, ward}, and a thread titled "94k
+  ward how??" matches one of them - so all 59 ward threads were unreachable. At
+  751 threads the RANKING does the precision work, so the floor only has to
+  reject a zero-signal match. (3) Giving an UNKNOWN word the maximum weight
+  ("rare by definition") made "hello" a super-discriminator that matched "Hello
+  I'm new and looking for tips" for any greeting; a word no question contains
+  scores ZERO, because it cannot help FIND a question.
+  The floor is on a score NORMALISED by log(N), so it does not depend on corpus
+  size - an absolute floor rejected everything in the unit-test fixture, which is
+  how that bug announced itself. `_MIN_SCORE = 2.5` by measurement: every real
+  test question reachable, NONE of six deliberately-generic ones matched. The
+  fixture is padded to a realistic shape for the same reason - IDF is meaningless
+  over two threads.
+- **KNOWN LIMIT, stated rather than tuned around:** IDF cannot separate a word
+  that is rare AND meaningless from one that is rare and meaningful. Swept the
+  floor 1.2->9 before normalising and every value both answered all the real
+  questions and matched the junk ones, i.e. the knob does not separate them. That
+  is acceptable because of where the result goes - the tool hands the model
+  "possibly related threads" to judge, not an answer, and the confidence gate
+  stops a weak match becoming a confident reply.
 - Vote counts stay IN the text (`A [22up]`, `A [6up DEV]`) so the reading model
   can weigh a 22-upvote answer against a 2-upvote one, dev answers are flagged,
   and every block carries its DATE - the tool description says `releases()`
@@ -2664,6 +2681,14 @@ followers"), which the tool description tells the model to look for.
   reaches the live threads anyway (see the benchmarking section below).
 - The cookie is read from `REDDIT_COOKIE` and never committed, same rule as
   `orna_scrape_reddit`'s two routes.
+- **`knowledge_search`'s observation is capped in TOTAL, not just per block.**
+  It now composes up to SIX source blocks (sheets, player Q&A, guide formulas,
+  mechanics, class data, dev comments) and one call measured **14,909
+  characters** - a large slice of a step's context spent on sources that may all
+  be marginal, which is the opposite of helping the model reason.
+  `_KNOWLEDGE_OBS_MAX = 8000` drops whole blocks from the END and TELLS the model
+  how many were omitted, so a truncation never looks complete - the same rule as
+  `_names_observation`. Measured after: ~7.3-7.9KB per call.
 
 ### The confidence gate - finish() must say when it does not know
 
