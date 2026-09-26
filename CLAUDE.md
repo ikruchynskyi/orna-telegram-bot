@@ -2588,6 +2588,7 @@ Measured 2026-09-25, the same 6 cases (2 simple, 2 medium, 2 hard), N=1, local:
 | `qwen3.8:27b-mlx` | **6/6** | 0 | 138s | yes |
 | `lfm2.5:8b` | 2/4 graded | 2/6 | 60s | mostly |
 | `muse-glimmer:30b-mlx` | 1/3 graded | 4/7 | 184s | no |
+| `magistral:latest` | 4/5 graded | 1/6 | 146s | yes |
 | `laguna-xs-2.1:nvfp4` | 0/0 graded | **6/6** | 24s | **yes** |
 
 Read past the pass column, because the failures have three different causes:
@@ -2608,6 +2609,17 @@ Read past the pass column, because the failures have three different causes:
   full 35-step ceiling without ever reading an entry.
 - **`lfm2.5:8b` is the only one with genuine ANSWER failures** (2), naming the
   wrong classes for a set - plus 2 crashes.
+- **`magistral:latest` is the best of the alternatives on correctness** (4 of 5
+  graded, the miss being the 13-item set answered without "warrior") but is 4x
+  slower than the current model, and its one crash is the same shape as
+  laguna's: it emitted its REASONING into `content` ("I see that the class_guide
+  tool requires a specific topic to be set in the args...") instead of the JSON
+  envelope. Unlike the other locals it is selected by `go_template` rather than
+  a renderer/parser, which is the likely reason `"think": True` did not keep the
+  reasoning out of `content` for it. Two of six models therefore fail ONLY on
+  the JSON envelope, which makes tolerating a prose/reasoning finish the single
+  highest-value robustness change available here - it would recover laguna
+  entirely and magistral's one loss.
 
 So there is no reason to switch: the current model is right as often as the best
 alternative and 4x faster, and wall-clock is the scarce resource in this loop.
