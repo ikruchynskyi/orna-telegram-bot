@@ -93,6 +93,7 @@ from orna_assess import (
 from orna_codex import clear_cache as clear_codex_cache, codex_search, fetch_codex_json
 from telegram_assess import _format_response
 from orna_sheets import GUILD_NAMES, fetch_sheet_data, get_today_month_day
+from telegram_go import _Status  # shared ephemeral status line, see its docstring
 from telegram_go import (
     GO_ALLOWED_USER_IDS, GO_MODEL, OLLAMA_API_KEY, TAVILY_API_KEY, _calculate, _reply_markdown, _tavily_search,
 )
@@ -3167,49 +3168,6 @@ _ACTION_LABELS = {
     "web_search": "🌐 Шукаю в інтернеті…",
 }
 _THINKING_LABEL = "🤔 Думаю…"
-
-
-class _Status:
-    """One ephemeral "what I'm doing now" message: sent on the first update,
-    EDITED in place on every later one, deleted when the request ends.
-
-    A /orna request can legitimately run for minutes (MAX_STEPS = 35, plus a
-    wall-clock ceiling of LOOP_TIMEOUT_SECONDS), during which the chat was
-    previously silent except for whatever tools happened to post - so there
-    was no way to tell a working request from a stuck one. Editing ONE
-    message rather than sending a new line per step is what keeps this from
-    becoming the scrollback spam that dead-end tool messages already had to
-    be removed for; deleting it at the end means a finished conversation
-    reads exactly as it did before this existed.
-
-    Every Telegram call here is best-effort: a failed status update must
-    never affect the answer, so all of them swallow their errors."""
-
-    def __init__(self, message):
-        self._message = message
-        self._sent = None
-        self._last = None
-
-    async def update(self, text: str) -> None:
-        if text == self._last:
-            return  # don't spend an API call re-writing the same line
-        self._last = text
-        try:
-            if self._sent is None:
-                self._sent = await self._message.reply_text(text)
-            else:
-                await self._sent.edit_text(text)
-        except Exception:
-            logger.debug("orna: status update failed", exc_info=True)
-
-    async def clear(self) -> None:
-        sent, self._sent, self._last = self._sent, None, None
-        if sent is None:
-            return
-        try:
-            await sent.delete()
-        except Exception:
-            logger.debug("orna: status delete failed", exc_info=True)
 
 
 async def _advance(sid: str, message, with_status: bool = True) -> None:

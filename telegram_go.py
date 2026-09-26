@@ -275,6 +275,16 @@ _NSFW_GUIDANCE = (
 # The loop's action names, in ONE place - both the prompt's action enum and
 # the `tools` array below are built from this. Mirrors telegram_orna._ACTIONS.
 _ACTIONS = ("search", "youtube", "open", "calculate", "ask", "finish")
+# What the ephemeral status line says per action. Keyed on _ACTIONS so a new
+# action shows a generic label rather than leaking its internal name.
+_ACTION_LABELS = {
+    "search": "🔎 Searching…",
+    "youtube": "📹 Fetching the video…",
+    "open": "📄 Reading the page…",
+    "calculate": "🧮 Calculating…",
+}
+_STATUS_THINKING = "🤔 Thinking…"
+_STATUS_WORKING = "⏳ Working…"
 # Declared to Ollama on every model call - NOT because this loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because a "pick one of these named
@@ -324,6 +334,51 @@ def _system_prompt(nsfw: bool) -> str:
     )
 
 
+class _Status:
+    """One ephemeral "what I'm doing now" message: sent on the first update,
+    EDITED in place on every later one, deleted when the request ends.
+
+    Both loops in this bot can legitimately run for minutes, during which the
+    chat was previously silent except for whatever tools happened to post - so
+    there was no way to tell a working request from a stuck one. Lives here
+    rather than in telegram_orna (where it was written) because /orna imports
+    from /go and not the other way round, so this is the acyclic home for the
+    shared version. Editing ONE
+    message rather than sending a new line per step is what keeps this from
+    becoming the scrollback spam that dead-end tool messages already had to
+    be removed for; deleting it at the end means a finished conversation
+    reads exactly as it did before this existed.
+
+    Every Telegram call here is best-effort: a failed status update must
+    never affect the answer, so all of them swallow their errors."""
+
+    def __init__(self, message):
+        self._message = message
+        self._sent = None
+        self._last = None
+
+    async def update(self, text: str) -> None:
+        if text == self._last:
+            return  # don't spend an API call re-writing the same line
+        self._last = text
+        try:
+            if self._sent is None:
+                self._sent = await self._message.reply_text(text)
+            else:
+                await self._sent.edit_text(text)
+        except Exception:
+            logger.debug("status update failed", exc_info=True)
+
+    async def clear(self) -> None:
+        sent, self._sent, self._last = self._sent, None, None
+        if sent is None:
+            return
+        try:
+            await sent.delete()
+        except Exception:
+            logger.debug("status delete failed", exc_info=True)
+
+
 @dataclass
 class GoSession:
     messages: list
@@ -335,6 +390,7 @@ class GoSession:
     sources: list = field(default_factory=list)
     yt_url: str = ""
     ask_options: list = field(default_factory=list)
+    status: object = None  # the ephemeral _Status message, owned by _advance
 
 
 _SESSIONS: dict[str, GoSession] = {}
@@ -874,9 +930,28 @@ async def _advance(sid: str, message) -> None:
     session = _SESSIONS.get(sid)
     if session is None:
         return
+    # Ephemeral "what I'm doing now" line, same as /orna's (ask 2026-09-26).
+    # /go's steps are the SLOWEST in the bot - a youtube action downloads and
+    # re-encodes a video - and the plane-wifi case this command exists for is
+    # exactly where silence is indistinguishable from a hang.
+    #
+    # _advance owns its whole lifetime: an `ask` RETURNS from inside the loop to
+    # wait on a button tap, so the status has to be cleared on every exit path,
+    # which is what the try/finally below guarantees. Reusing the session field
+    # means a resumed session (Continue, or an answered ask) starts a fresh line
+    # rather than trying to edit a message from the previous turn.
+    session.status = _Status(message)
+    try:
+        await _advance_steps(sid, session, message)
+    finally:
+        await session.status.clear()
+        session.status = None
 
+
+async def _advance_steps(sid: str, session, message) -> None:
     while session.steps_left > 0:
         session.steps_left -= 1
+        await session.status.update(_STATUS_THINKING)
         try:
             step = await _call_model(session.messages, nsfw=session.nsfw)
         except (OllamaError, _UnsupportedMultimodal) as e:
@@ -886,6 +961,11 @@ async def _advance(sid: str, message) -> None:
 
         action = step.get("action")
         action_input = str(step.get("action_input") or "").strip()
+        # An action with no label falls back to a generic line rather than
+        # leaking the internal action name; finish/ask need none, since both end
+        # the turn with a real message of their own.
+        if action not in ("finish", "ask"):
+            await session.status.update(_ACTION_LABELS.get(action, _STATUS_WORKING))
 
         if action == "finish" or not action:
             await _send_finish(sid, session, message, action_input or "I couldn't figure out an answer.")

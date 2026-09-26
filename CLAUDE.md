@@ -1765,7 +1765,7 @@ state flatly. Added 2026-09-24 on explicit ask.
   воїна? чи були зміни?" called `releases` and cited the real 1.334
   +5% Ward Power change in its answer.
 
-### The ephemeral status message
+### The ephemeral status message (shared by `/orna` AND `/go`)
 
 A `/orna` request can legitimately run for minutes (`MAX_STEPS = 16`, plus
 the `LOOP_TIMEOUT_SECONDS` ceiling), and the chat was previously silent for
@@ -1788,6 +1788,17 @@ existed. Added 2026-09-24 on ask.
   answer, or an extra API call per step for the same string.
 - An action with no label falls back to a generic "⏳ Працюю…" rather than
   leaking the internal action name.
+- **`_Status` lives in `telegram_go.py`, not where it was written.** `/go` got
+  the same line on ask 2026-09-26, and `/orna` imports from `/go` while `/go`
+  imports nothing from `/orna` - so that is the acyclic home for the shared
+  class, and duplicating it was the wrong answer. `/go`'s labels are its own
+  (`_ACTION_LABELS` keyed on its `_ACTIONS`, English, since `/go` is not the
+  guild-facing command) and its steps are the SLOWEST in the bot - a `youtube`
+  action downloads and re-encodes a video - on the one feature built for slow
+  plane wifi, where silence is indistinguishable from a hang. Same
+  own-its-whole-lifetime rule: `/go`'s `ask` returns from inside the loop to wait
+  on a button, so the status is created in `_advance` and cleared in a `finally`
+  around the extracted `_advance_steps`.
 
 ### `finish()` carries a "📚 Джерела" button - what the answer was actually built from
 
