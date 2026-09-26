@@ -2560,6 +2560,54 @@ forecast date (year-1900 non-leap parse). See
 `.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
 the ten patterns these cluster into.
 
+## Benchmarking against public answers does not work - the bot can read them
+
+A blind test was run 2026-09-26: six top r/OrnaRPG question posts of the year,
+title+body only, answered by the loop, then compared against the top-voted
+comments. It is a good exercise and the failure PATTERNS below are worth having.
+But as a repeatable benchmark it is structurally broken, in two ways that both
+bit:
+- **`orna_reddit.txt` already contains the answer.** "Where to spend orns?"
+  looked like a clean win - the bot's figures (50m Altar of Ascension, 15m
+  specs, 16m Grand Summoner, 20m Deity) matched u/Widogeist's top comment
+  exactly. They matched because that comment is verbatim in the corpus (`grep
+  -c "Altar of Ascension is 50m"` -> 1). It retrieved the thing it was graded
+  against.
+- **`web_search` reaches the thread itself.** On "Anguished Ornate questions"
+  the cloud model made **13 web_search calls** and cited "the Orna Reddit thread
+  (r/OrnaRPG - Anguished Ornate questions)", reproducing the top comment. So
+  even holding a post out of the corpus does not make it blind - the ground
+  truth is on the open web, which is a tool the bot has.
+**So do not use public Q&A as a scored benchmark.** `orna_test_suite`'s cases
+are derived from the game DATA and graded against it, which is why they stay
+honest. Use Reddit for finding failure shapes, never for a pass rate.
+
+What the exercise did surface, on questions where nothing leaked:
+- **It will not challenge a question's premise.** "How to get multiple
+  followers?" - the community's top answer (22up) was "you're fighting a
+  summoner, those are summons, not followers", which is also why they have their
+  own HP bar. Both models answered the question as asked and explained follower
+  capacity instead.
+- **It fabricates a cause rather than saying it does not know.** For the Vritra
+  Charm it invented auto-dismantle settings and a differently-named debuff; the
+  real answer (18up) is that status immunity never blocks effects caused by YOU
+  or YOUR FOLLOWER. That exact statement is in `orna_reddit.txt` ("...will not
+  prevent debuffs that are caused by your followers spells/abilities") and three
+  `knowledge_search` calls missed it, because the model searched the ITEM name
+  while the answer is indexed by the MECHANIC - searching "immunity debuffs
+  caused by follower" returns it immediately.
+- **It hedges where the question is binary.** "Do the stats stack, 39% or 24%?"
+  got "likely refers to" rather than the top comment's clean "it doesn't stack".
+
+**`open_entry` now refuses a url it was not given by a tool**
+(`_codex_path_problem`). Two live cases in one session: `/codex/items/vritra
+charm/` - a path the model built from the item NAME, space and all - and
+`https://playerecho.com/orna/circle-of-anguish`, a CITATION url from a
+`knowledge_search` block. Both raised inside `fetch_codex_json`, burned a step,
+and the Vritra request then answered from invention. It now returns an
+observation naming the problem (wrong host / not a codex path / came from a
+citation) and posts nothing, so the loop can recover. Pinned in `_demo`.
+
 ## Comparing local models (`orna_model_compare.py`)
 
 Runs the SAME requests through two or more local models and reports wall-clock,

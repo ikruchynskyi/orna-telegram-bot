@@ -65,6 +65,18 @@ def cloud_is_parked() -> bool:
     return time.monotonic() < _cloud_down_until
 
 
+def reset_cloud_cooldown() -> None:
+    """Un-park the cloud leg immediately.
+
+    For the model-comparison harness: one model's failures would otherwise park
+    cloud for 300s and the NEXT model under test would be measured entirely
+    through its local fallback, which looks like that model being fast and
+    wrong. Not used by the bot itself - a real request should always respect the
+    breaker."""
+    global _cloud_down_until
+    _cloud_down_until = 0.0
+
+
 class OllamaError(RuntimeError):
     """Raised when Ollama can't be reached, or replies with something no
     caller can use as a structured-output dict (including valid JSON that

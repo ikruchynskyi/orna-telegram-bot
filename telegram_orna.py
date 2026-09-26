@@ -877,6 +877,41 @@ async def _fetch_upscaled_sprite(url: str):
         return None
 
 
+# A codex path as playorna actually serves them: /codex/<category>/<id>/.
+# Anything else handed to open_entry was invented rather than taken from a tool
+# result - see _codex_path_problem.
+_CODEX_PATH_RE = re.compile(r"^/codex/[a-z-]+/[A-Za-z0-9_-]+/?$")
+
+
+def _codex_path_problem(url: str) -> str:
+    """Why `url` is not a codex page path, or "" if it is fine.
+
+    open_entry only fetches playorna codex pages, and the model twice handed it
+    something else (live 2026-09-26): `/codex/items/vritra charm/` - a path it
+    built from an item NAME, space included, instead of using the url a search
+    returned - and `https://playerecho.com/orna/circle-of-anguish`, a CITATION
+    url from a knowledge_search block. Both raised inside fetch_codex_json,
+    burned a step, and in the Vritra case the request went on to answer from
+    invention. Failing with an instruction is strictly better than failing with
+    a traceback: the loop can recover from the first."""
+    url = (url or "").strip()
+    if not url:
+        return "no url given"
+    if url.startswith(("http://", "https://")):
+        host = url.split("/")[2].lower() if len(url.split("/")) > 2 else ""
+        if "playorna.com" not in host:
+            return (f"{url!r} is not a playorna codex page (host {host!r}). open_entry only opens "
+                    "/codex/... pages from search_codex or query results. A citation link from "
+                    "knowledge_search cannot be opened - the text it gave you IS the source")
+        url = "/" + "/".join(url.split("/")[3:])
+    if not _CODEX_PATH_RE.match(url):
+        return (f"{url!r} is not a codex path. It must look like /codex/items/<id>/ and must come "
+                "from a search_codex or query RESULT, not be built from the item's name (a name "
+                "with a space in it is the giveaway) - call search_codex first and use the url it "
+                "returns")
+    return ""
+
+
 async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     """Posts the full rendered entry (sprite, facts/effects/tags, cross-
     link section buttons, Assess link) and returns its `detail` dict so a
@@ -884,9 +919,14 @@ async def _send_entry(message, entry_ref: dict, lang: str) -> Optional[dict]:
     the button-driven "open" callback ignores the return value, same as
     before this returned nothing."""
     url = entry_ref.get("url")
-    if not url:
-        await message.reply_text("У цього запису немає посилання на сторінку кодексу.")
-        return None
+    problem = _codex_path_problem(url)
+    if problem:
+        # Deliberately no reply_text: this is a recoverable mis-step for the
+        # model to fix, not something to show the user (same reasoning as a
+        # dead-end search). The tool wrapper returns `problem` as its
+        # observation - see _run_open_entry_tool.
+        logger.info("orna: refusing open_entry for %r - %s", url, problem[:80])
+        return {"_problem": problem}
     try:
         data = await asyncio.to_thread(fetch_codex_json, url, lang)
     except Exception as e:
@@ -933,6 +973,11 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
     if not url:
         return "open_entry needs a url in action_input (from a previous observation)"
     detail = await _send_entry(message, {"url": url}, "en")
+    if detail and detail.get("_problem"):
+        # An invented url, not a fetch failure - say what is wrong so the next
+        # step fixes it instead of retrying the same thing or answering from
+        # memory (which is what happened live for the Vritra Charm).
+        return f"open_entry did NOT run: {detail['_problem']}"
     if not detail:
         return f"couldn't open {url}"
     # Cite the pages actually READ. A search_codex result list isn't cited -
@@ -3687,6 +3732,18 @@ def _demo() -> None:
         "one celestial + one ordinary weapon is a legal dual wield"
     assert _check_loadout([cel("Celestial Archistaff")]) == ([], False)
     assert _DUAL_WIELD_FACTOR == 0.65
+
+    # open_entry only opens playorna codex pages, and the model twice invented
+    # something else - a path built from an item name (space included) and a
+    # playerecho citation url from knowledge_search. Both raised a traceback and
+    # wasted a step; one answered from invention afterwards.
+    assert _codex_path_problem("/codex/items/vritra-charm/") == ""
+    assert _codex_path_problem("/codex/items/vritra-charm") == ""
+    assert _codex_path_problem("https://playorna.com/codex/items/vritra-charm/") == ""
+    assert "not a codex path" in _codex_path_problem("/codex/items/vritra charm/")
+    assert "not a playorna codex page" in _codex_path_problem("https://playerecho.com/orna/circle-of-anguish")
+    assert "citation link" in _codex_path_problem("https://playerecho.com/orna/ward-guide")
+    assert _codex_path_problem("") and _codex_path_problem("Vritra Charm")
 
     # Class/spec abilities must be DISCOVERED from the codex, not hand-written
     # per specialization: orna_classes.json has passiveEffects for 13 classes

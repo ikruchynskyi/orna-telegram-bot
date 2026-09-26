@@ -48,6 +48,7 @@ if not os.environ.get("SHEETS_API_KEY"):
 os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
+import ollama_client            # noqa: E402  - to clear the cloud circuit breaker
 import orna_test_suite as S      # noqa: E402  - cases, graders and FakeMessage
 import telegram_orna as T        # noqa: E402
 
@@ -129,19 +130,34 @@ async def main() -> int:
         report(_load_results())
         return 0
 
-    models = [m.strip() for m in (os.environ.get("MODELS") or T.LOCAL_OLLAMA_MODEL).split(",") if m.strip()]
+    default_model = T.ORNA_CLOUD_MODEL if os.environ.get("CLOUD") == "1" else T.LOCAL_OLLAMA_MODEL
+    models = [m.strip() for m in (os.environ.get("MODELS") or default_model).split(",") if m.strip()]
     wanted = {c.strip() for c in (os.environ.get("CASES") or "").split(",") if c.strip()}
     n = int(os.environ.get("N", "1"))
     cases = [c for c in S.build_cases() if not wanted or c.id in wanted]
     if not cases:
         sys.exit(f"no cases matched {sorted(wanted)}")
 
-    # Local only: through a cloud-first loop most steps would measure the cloud.
-    T.MAX_CLOUD_CALLS = 0
+    # CLOUD=1 compares CLOUD models instead: the loop keeps its normal
+    # cloud-first routing and ORNA_CLOUD_MODEL is what varies. Caveat worth
+    # holding onto when reading those numbers - a failed cloud step still falls
+    # back to the LOCAL model mid-request, so a cloud model that errors is
+    # partly measured through its fallback rather than cleanly failing. That is
+    # the real production behaviour, which is the point, but it means a bad
+    # cloud row is "cloud+fallback", not "cloud alone".
+    cloud = os.environ.get("CLOUD") == "1"
+    if not cloud:
+        # Local only: through a cloud-first loop most steps would measure the cloud.
+        T.MAX_CLOUD_CALLS = 0
     runs = _load_results()
     for model in models:
-        print(f"\n{'#' * 78}\n# {model}  ({len(cases)} case(s) x N={n}, local only)\n{'#' * 78}")
-        T.LOCAL_OLLAMA_MODEL = model
+        where = "CLOUD (local fallback on failure)" if cloud else "local only"
+        print(f"\n{'#' * 78}\n# {model}  ({len(cases)} case(s) x N={n}, {where})\n{'#' * 78}")
+        if cloud:
+            T.ORNA_CLOUD_MODEL = model
+            ollama_client.reset_cloud_cooldown()
+        else:
+            T.LOCAL_OLLAMA_MODEL = model
         first = True
         for case in cases:
             for _ in range(n):
