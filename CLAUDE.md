@@ -2560,6 +2560,79 @@ forecast date (year-1900 non-leap parse). See
 `.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
 the ten patterns these cluster into.
 
+### The player Q&A corpus - the only source indexed by the QUESTION
+
+`orna_qa.py` / `orna_qa.txt` / `orna_scrape_qa.py`, added 2026-09-26 on ask.
+r/OrnaRPG questions paired with their best-voted answers. Every other corpus is
+keyed on an ANSWER's wording (`orna_knowledge` tabular, `orna_reddit` dev prose,
+`orna_echo` guide sections, `orna_guides` whole guides); an incoming question
+resembles a past player's question far more than any answer, and that is exactly
+the live retrieval failure that motivated it - the Vritra Charm answer WAS in
+`orna_reddit.txt` and three `knowledge_search` calls missed it because the model
+searched the ITEM while the text is indexed by the MECHANIC. It also carries the
+one thing no other source has: a **corrected premise** ("those are summons, not
+followers"), which the tool description tells the model to look for.
+
+- **Reddit rate-limits hard, so the crawl is RESUMABLE and currently
+  INCOMPLETE.** 825 unique QUESTION-flaired posts were listed, 796 had >=2
+  comments, and Reddit started 429ing after ~88 of them; a second run was
+  throttled on the LISTING itself and produced zero posts. So both the listing
+  and each post's comments are cached under `.qa_cache/` (gitignored), a 429
+  backs off (30/60/120/240s, honouring `Retry-After`) and then STOPS rather than
+  grinding, and the corpus is rebuilt from the whole cache on every run.
+  **Current state: 87 threads / 248 answers of an intended ~800.** Re-run
+  `REDDIT_COOKIE=... QA_HELDOUT_IDS=... python3 orna_scrape_qa.py` later to
+  resume - it skips everything already cached.
+- **Precision over recall, deliberately, and this needed measuring.** A thread
+  must match the QUESTION side (title or `Q:` line) at least TWICE and score >=6.
+  A single shared word is almost always incidental: "how do I get the summoner
+  class" matched a thread titled "How'd someone get the wealth shrine" on
+  `how`+`get`. **An irrelevant Q&A block is worse than none**, because the model
+  may build an answer on it. Generic words are dropped by DOCUMENT FREQUENCY
+  derived from the corpus (`_MAX_DOC_FREQ = 0.10`), not a hardcoded stopword
+  list - measured on the real corpus: 0.10 drops every interrogative while
+  keeping all of summoner/vritra/amities/orns/followers/anguished/adornment/beo,
+  where 0.15 left "how" and "get" in. At 87 threads recall is consequently LOW:
+  most questions return nothing, which is the correct failure direction.
+- Vote counts stay IN the text (`A [22up]`, `A [6up DEV]`) so the reading model
+  can weigh a 22-upvote answer against a 2-upvote one, dev answers are flagged,
+  and every block carries its DATE - the tool description says `releases()`
+  outranks an old answer on numbers. Upvotes are a crowd signal, not truth.
+- The six blind-evaluation threads are crawled into `orna_qa_heldout.txt`
+  instead of the corpus (`QA_HELDOUT_IDS`), so the bot cannot answer the
+  questions it is judged on. Hygiene only, NOT a guarantee - `web_search`
+  reaches the live threads anyway (see the benchmarking section below).
+- The cookie is read from `REDDIT_COOKIE` and never committed, same rule as
+  `orna_scrape_reddit`'s two routes.
+
+### The confidence gate - finish() must say when it does not know
+
+Explicit ask 2026-09-26, after three of six answers in the blind Reddit review
+invented a cause rather than admitting ignorance. Two halves, and the second is
+the one that makes it real:
+
+- **Prompt** (`_CONFIDENCE_RULE`): every `finish()` carries a `confidence` 0-100
+  scored on the EVIDENCE (90-100 every claim from an observation; 75-89 a stated
+  assumption; below 75 you are guessing), and below the floor it must say so in
+  the answer, name the unverified part and what would settle it.
+- **Code** (`_confidence_gate`, `_evidence_ceiling`, `_CONFIDENCE_FLOOR = 75`):
+  a self-reported number is weakly calibrated, so it is **CLAMPED by what the
+  loop actually verified**. No tool called at all -> ceiling 40 ("nothing was
+  verified"); every observation a dead end -> ceiling 60. Below 75 the reply
+  LEADS with an explicit "I don't know this reliably" banner in the user's own
+  language, with the partial answer kept beneath it rather than discarded - the
+  label has to come first so it cannot be skim-read past, but a labelled partial
+  beats a blank refusal.
+- `_DEAD_END_MARKERS` fails OPEN (evidence assumed good) if a tool starts
+  refusing with new wording: a false cap on every answer would be worse than a
+  missed one.
+- The whole decision is ONE function so it is testable - inline in the finish
+  branch it was not, because there is no way to inject a step into
+  `_advance_inner`. Pinned in `_demo` across six cases: 95% claimed with no tool
+  calls is gated, 95% with only dead ends is gated, 95% with a real observation
+  passes through untouched, the model's own 50% is honoured, no number plus real
+  evidence is NOT penalised, and the admission follows the user's language.
+
 ## Benchmarking against public answers does not work - the bot can read them
 
 A blind test was run 2026-09-26: six top r/OrnaRPG question posts of the year,

@@ -79,6 +79,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
 import orna_echo
+import orna_qa
 import orna_classes
 import orna_guides
 import orna_knowledge
@@ -160,6 +161,9 @@ _STEP_TOOLS = [{"type": "function", "function": {
         "action_input": {"type": "string"},
         "args": {"type": "object"},
         "options": {"type": "array", "items": {"type": "string"}},
+        # finish() only: 0-100, how sure the answer is. Gated at
+        # _CONFIDENCE_FLOOR and clamped by _evidence_ceiling.
+        "confidence": {"type": "integer"},
     }},
 }} for name in _ACTIONS]
 # Shorter than ollama_client.DEFAULT_TIMEOUT's 90s read timeout (which
@@ -1801,6 +1805,24 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
             "FORMULA or a mechanic the codex has no field for: Ward capacity, Ascension altar costs, "
             "dungeon cooldowns and godforging, anguish proofs, per-event tier gates. Indented lines are "
             "verbatim formulas - use them as written rather than reasoning one out):\n" + echo[:3000])
+    # Player Q&A, indexed by the QUESTION rather than by an answer's wording -
+    # the one axis none of the other corpora have, and the only source carrying
+    # a CORRECTED PREMISE ("those are summons, not followers").
+    try:
+        qa = await asyncio.to_thread(orna_qa.search_text, query)
+    except Exception as e:
+        logger.warning("orna: qa lookup failed for %r (%s)", query[:60], e)
+        qa = ""
+    if qa:
+        if sources is not None:
+            for th in await asyncio.to_thread(orna_qa.search, query):
+                _add_source(sources, f"r/OrnaRPG: {th.title}"[:60], th.url)
+        blocks.append(
+            "PLAYER Q&A (r/OrnaRPG threads where someone asked this before. The [Nup] figure is that answer's "
+            "upvotes - a heavily-upvoted answer is strong evidence and a 2up one is weak; DEV marks Orna's own "
+            "developers. Read these for a CORRECTED PREMISE too: the top answer often says the question itself is "
+            "based on a misunderstanding, which is worth more than answering it as asked. Each block carries its "
+            "DATE - an old answer may predate a patch, so releases() outranks it on numbers):\n" + qa[:3000])
     if reddit_hits:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
@@ -2511,6 +2533,31 @@ _STRATEGY_RULE = (
     "immune to every element except one - confidently wrong instead of checking."
 )
 
+# Below this, finish() must SAY it does not know rather than answer flatly
+# (explicit ask 2026-09-26). The number is the model's own, which is weakly
+# calibrated on its own - so it is CLAMPED by what the loop actually verified,
+# see _evidence_ceiling. A self-reported 95% on zero tool calls is exactly the
+# failure this exists to stop: three of six answers in the blind Reddit test
+# invented a cause rather than admitting ignorance (see CLAUDE.md).
+_CONFIDENCE_FLOOR = 75
+
+_CONFIDENCE_RULE = (
+    "EVERY finish() MUST carry a \"confidence\" number, 0-100: how sure you are that the answer is CORRECT, "
+    "not how sure you are that you followed the steps. Judge it on the evidence you actually have:\n"
+    "- 90-100: every claim came from a tool observation in this conversation.\n"
+    "- 75-89: the substance came from observations, with a small gap you have stated as an assumption.\n"
+    "- BELOW 75: you are guessing, the tools came back empty, the sources disagree, or part of the question is "
+    "unanswered. Then SAY SO in the answer itself - lead with the fact that you do not know reliably, say which "
+    "part is unverified and what would settle it (a tool that failed, a source that has no such field, an input "
+    "the user has not given). Do NOT dress a guess up as an answer.\n"
+    f"An answer below {_CONFIDENCE_FLOOR} is shown to the user with an explicit \"I don't know this reliably\" "
+    "banner, so an inflated number does not help you - and the number is CLAMPED by what the loop actually "
+    "verified: if you called no tool, or every tool came back empty, your confidence is capped no matter what you "
+    "claim. \"I could not find this\" is a GOOD answer here; an invented mechanism is the worst one. Three of six "
+    "answers in a live review stated a fabricated cause instead of admitting ignorance, which is what this rule "
+    "exists to stop."
+)
+
 _REASONING_RULE = (
     "REASON TWICE - ONCE BEFORE THE TOOLS, ONCE BEFORE finish(). This is mandatory, and the place to do it is the "
     "\"thought\" field.\n"
@@ -2601,6 +2648,103 @@ _AGGREGATE_RULE = (
 )
 
 
+# Observation markers meaning a tool produced NO usable evidence. Kept as
+# substrings of the real observation strings the tools return, so a tool that
+# starts refusing differently will fail OPEN (evidence assumed good) rather than
+# silently capping every answer - a false cap is worse than a missed one here.
+_DEAD_END_MARKERS = (
+    "0 results", "0 matches", "no matches", "did not run", "did NOT run",
+    "no codex entry found", "no knowledge-base matches", "couldn't open",
+    "couldn't parse", "lookup failed", "query failed", "isn't assessable",
+    "computed NOTHING", "nothing found", "no further tool calls",
+)
+
+
+def _evidence_ceiling(session) -> tuple:
+    """(ceiling, why) - the highest confidence the EVIDENCE supports, whatever
+    the model claims.
+
+    The model cannot be the only judge of its own certainty: the loop already
+    knows whether any tool returned anything. No call at all means nothing was
+    verified; every call dead-ending means it was verified and came back empty.
+    Either way a confident answer can only have come from memory."""
+    observations = [str(v or "") for v in session.seen_calls.values()]
+    if not observations:
+        return 40, "no tool was called, so nothing in this answer was verified"
+    lowered = [o.lower() for o in observations]
+    useful = [o for o in lowered
+              if not any(m.lower() in o for m in _DEAD_END_MARKERS)]
+    if not useful:
+        return 60, "every tool call came back empty or refused"
+    return 100, ""
+
+
+def _parse_confidence(step: dict) -> Optional[int]:
+    """The model's own confidence out of finish()'s args, 0-100, or None.
+
+    Accepts it at the top level or nested in args (the same wrong-placement
+    drift _advance_inner already tolerates for action_input), and a 0-1 float
+    as well as a percentage, because both get written."""
+    raw = None
+    for holder in (step, step.get("args") if isinstance(step.get("args"), dict) else None):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("confidence", "confidence_pct", "certainty"):
+            if holder.get(key) is not None:
+                raw = holder[key]
+                break
+        if raw is not None:
+            break
+    if raw is None:
+        return None
+    try:
+        value = float(str(raw).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+    if 0.0 < value <= 1.0:
+        value *= 100                    # "0.9" means 90%, not 1%
+    return max(0, min(100, int(round(value))))
+
+
+def _confidence_gate(session, step: dict, answer: str) -> tuple:
+    """-> (answer_to_send, effective_confidence).
+
+    The whole confidence decision in one pure-ish place so it can be tested
+    without driving the model: read the claim, clamp it by the evidence, and
+    below the floor prepend the admission. Extracted from the finish branch
+    because inline it was untestable - there is no way to inject a step into
+    _advance_inner."""
+    claimed = _parse_confidence(step)
+    ceiling, why = _evidence_ceiling(session)
+    effective = min(claimed, ceiling) if claimed is not None else ceiling
+    if effective >= _CONFIDENCE_FLOOR:
+        return answer, effective
+    user_text = next((m.get("content", "") for m in getattr(session, "messages", [])
+                      if isinstance(m, dict) and m.get("role") == "user"), "")
+    ukrainian = bool(_CYRILLIC_RE.search(user_text or ""))
+    reason = why or ("модель не впевнена" if ukrainian else "the model itself was unsure")
+    logger.info("orna: low confidence %s (claimed=%s ceiling=%s) - %s",
+                effective, claimed, ceiling, why or "model-reported")
+    return _low_confidence_banner(effective, reason, ukrainian) + "\n\n" + answer, effective
+
+
+def _low_confidence_banner(pct: Optional[int], why: str, ukrainian: bool) -> str:
+    """The "I don't know" lead-in. The partial answer is kept BELOW it rather
+    than discarded: the user asked for the bot to say it does not know, and a
+    clearly-labelled partial beats a blank refusal - but the label has to come
+    first so it cannot be skim-read past."""
+    shown = f"~{pct}%" if pct is not None else "низька" if ukrainian else "low"
+    if ukrainian:
+        tail = f" Причина: {why}." if why else ""
+        return (f"⚠️ <b>Не можу відповісти впевнено</b> (впевненість {shown}, "
+                f"поріг {_CONFIDENCE_FLOOR}%).{tail} Нижче — лише те, що вдалося зібрати; "
+                "це не перевірена відповідь.")
+    tail = f" Reason: {why}." if why else ""
+    return (f"⚠️ <b>I don't know this reliably</b> (confidence {shown}, bar is "
+            f"{_CONFIDENCE_FLOOR}%).{tail} Below is only what I could gather - treat it as "
+            "unverified.")
+
+
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 
@@ -2660,6 +2804,7 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_AGGREGATE_RULE}\n\n"
         f"{_COMPLETENESS_RULE}\n\n"
         f"{_REASONING_RULE}\n\n"
+        f"{_CONFIDENCE_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
@@ -3065,7 +3210,12 @@ async def _advance_inner(sid: str, message) -> None:
                 markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton(f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")
                 ]])
-            await _reply_markdown(message, action_input or "Не вдалося сформувати відповідь.", reply_markup=markup)
+            # CONFIDENCE GATE. The model's own number, clamped by what the loop
+            # actually verified, and below the floor the answer LEADS with an
+            # admission instead of stating itself flatly.
+            answer, effective = _confidence_gate(
+                session, step, action_input or "Не вдалося сформувати відповідь.")
+            await _reply_markdown(message, answer, reply_markup=markup)
             # The model often states what it still needs as an ANSWER rather
             # than as an ask(), which ENDS the request - and the user's reply
             # then falls through to the other handlers and vanishes ("Bot
@@ -3732,6 +3882,50 @@ def _demo() -> None:
         "one celestial + one ordinary weapon is a legal dual wield"
     assert _check_loadout([cel("Celestial Archistaff")]) == ([], False)
     assert _DUAL_WIELD_FACTOR == 0.65
+
+    # Confidence gate: the model's number is clamped by what the loop verified,
+    # so a confident answer built on nothing cannot present itself as one.
+    assert _parse_confidence({"confidence": 90}) == 90
+    assert _parse_confidence({"args": {"confidence": "82%"}}) == 82, "nested + percent sign"
+    assert _parse_confidence({"confidence": 0.9}) == 90, "a 0-1 float means a fraction"
+    assert _parse_confidence({"confidence": "not a number"}) is None
+    assert _parse_confidence({}) is None
+    assert _parse_confidence({"confidence": 140}) == 100 and _parse_confidence({"confidence": -5}) == 0
+
+    class _S:
+        def __init__(self, calls):
+            self.seen_calls = calls
+    assert _evidence_ceiling(_S({}))[0] == 40, "no tool call means nothing was verified"
+    assert _evidence_ceiling(_S({"a": "0 results for 'x'"}))[0] == 60, "all dead ends"
+    assert _evidence_ceiling(_S({"a": "open_entry did NOT run: bad url"}))[0] == 60
+    assert _evidence_ceiling(_S({"a": "0 results", "b": "Vritra Charm: Tier 6"}))[0] == 100
+    # a real observation must not be mistaken for a dead end
+    assert _evidence_ceiling(_S({"a": "posted a stats estimate [base+items]"}))[0] == 100
+    banner_uk = _low_confidence_banner(40, "no tool was called", True)
+    banner_en = _low_confidence_banner(40, "no tool was called", False)
+    assert "Не можу відповісти впевнено" in banner_uk and "поріг" in banner_uk
+    assert "I don't know this reliably" in banner_en and str(_CONFIDENCE_FLOOR) in banner_en
+    assert _CYRILLIC_RE.search(banner_uk) and not _CYRILLIC_RE.search(banner_en)
+
+    # the gate itself: claim vs evidence, and which language the admission takes
+    class _Sess:
+        def __init__(self, calls, text="what is X?"):
+            self.seen_calls = calls
+            self.messages = [{"role": "system", "content": "s"}, {"role": "user", "content": text}]
+    fin = lambda c: {"action": "finish", "action_input": "The answer is 42.", "confidence": c}
+    real = {"a": "Vritra Charm: Tier 6; Rarity: Legendary"}
+    out, eff = _confidence_gate(_Sess({}), fin(95), "The answer is 42.")
+    assert eff == 40 and "I don't know this reliably" in out and out.endswith("The answer is 42."), out[:80]
+    out, eff = _confidence_gate(_Sess({"a": "0 results for 'x'"}), fin(95), "A.")
+    assert eff == 60 and "I don't know" in out, (eff, out[:60])
+    out, eff = _confidence_gate(_Sess(real), fin(95), "A.")
+    assert eff == 95 and out == "A.", "good evidence + high claim passes through untouched"
+    out, eff = _confidence_gate(_Sess(real), fin(50), "A.")
+    assert eff == 50 and "I don't know" in out, "the model's own low claim is honoured"
+    out, eff = _confidence_gate(_Sess(real), {"action": "finish"}, "A.")
+    assert eff == 100 and out == "A.", "no number + real evidence must not be penalised"
+    out, eff = _confidence_gate(_Sess({}, "що таке X?"), fin(90), "Відповідь.")
+    assert "Не можу відповісти впевнено" in out, "the admission follows the user's language"
 
     # open_entry only opens playorna codex pages, and the model twice invented
     # something else - a path built from an item name (space included) and a

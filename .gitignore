@@ -18,3 +18,4 @@ usage_stats.json
 .knowledge_cache/
 .bonuses_cache/
 orna_model_compare.json
+.qa_cache/
