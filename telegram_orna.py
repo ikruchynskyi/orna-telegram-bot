@@ -1204,6 +1204,20 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
     bundle = await asyncio.to_thread(build_supergraph, names, cap)
     codex_text = _render_supergraph(bundle)
 
+    # Backstop for the prompt's "not for a class/specialization" rule: a class or
+    # specialization name is NOT a codex entity - it collides with a same-named
+    # boss (research "Gilgamesh" -> the boss Fallen Gilgamesh). If one was sent
+    # anyway, say so on top of the (wrong-entity) codex result and point at the
+    # tools that actually know classes/specs. find_class matches real class/spec
+    # names one-directionally, so a plain item/monster query does not trip it.
+    class_hits = sorted({n for n in names
+                         if await asyncio.to_thread(orna_classes.find_class, n)})
+    if class_hits:
+        codex_text = ("NB: " + ", ".join(class_hits) + " is a class/specialization, not a codex entity - any "
+                      "codex result below is a DIFFERENT same-named boss/monster. A class/spec's stats, "
+                      "modifiers and whether it is a class vs a specialization come from estimate_stats / "
+                      "knowledge_search (orna_classes), never from the codex.\n\n") + codex_text
+
     # record entities for finish() buttons + cite aussies (playorna url shape)
     for ent in bundle.get("entities", []):
         url = f"/codex/{ent['category']}/{ent['id']}/"
@@ -2623,7 +2637,12 @@ _TOOLS_TEXT = (
     "from the local codex (the entity, plus its drops/skills/upgrade-materials with EACH one's stats, useable_by "
     "and effects) PLUS the community knowledge (incl. Monster-Data elemental immunities). Call it ONCE with every "
     "entity you need (pass several in args.entities), read the whole result, then finish - do NOT open_entry each "
-    "drop one by one; that is the slow path this replaces. It also satisfies the STRATEGY rule below.\n"
+    "drop one by one; that is the slow path this replaces. It also satisfies the STRATEGY rule below. "
+    "NOT for a CLASS, SPECIALIZATION or CLASS LINE (Gilgamesh/Heretic Ara/Ranger/Sequencer/Mage/Thief/...): "
+    "those are not codex entities here - a class name usually collides with a same-named BOSS (research "
+    "\"Gilgamesh\" returns the boss Fallen Gilgamesh, not the class), and class/spec stats/modifiers live in "
+    "orna_classes, not the codex. For anything about a class/specialization use estimate_stats (stats) or "
+    "knowledge_search (what it gives, and whether a name is a class vs a specialization).\n"
     "- calculate(action_input=<numeric expression, e.g. \"1.5 * 1.2 * 1.1\">): evaluates + - * / ** % and "
     "parentheses. Use this for ANY arithmetic beyond trivial single-step math - ESPECIALLY combining several "
     "numbers gathered across multiple earlier tool calls (e.g. multiplying several items' bonus percentages "
@@ -2644,7 +2663,8 @@ _TOOLS_TEXT = (
     "quality 200%/level 13 if not given - effectively \"fully forged\", since a comparison is normally about a "
     "build's ceiling), diffed against the first item in the list. Use this for \"which is better, X or Y\" - never "
     "open_entry both and compare by eye, the raw codex numbers aren't upgrade-projected and aren't a fair "
-    "comparison. POSTS the table directly - finish() just needs a short closing line.\n"
+    "comparison. POSTS the table directly - finish() just needs a short closing line. ITEMS only - to compare "
+    "two classes or specializations use estimate_stats (per character), not this.\n"
     "- build_optimize(args={\"stat\":\"<a STACKING bonus stat - orn_bonus/exp_bonus/gold_bonus/luck_bonus/...>\","
     "\"slots\":[\"head\",\"weapon\",\"off-hand\",\"torso\",\"legs\",\"accessory\",\"accessory\"] (optional - this "
     "full 7-slot loadout, with accessory TWICE for Orna's 2 accessory slots, is the default if omitted),"
@@ -4764,6 +4784,11 @@ def _demo() -> None:
     sessU = _RSess()
     obsR3 = asyncio.run(_run_tool(_RSpy(), "research", "zzzptqx nothing here", {}, sessU.sources, sessU))
     assert "could not resolve" in obsR3.lower(), obsR3[:200]
+    # a class/spec name sent to research (it collides with a same-named boss:
+    # "Gilgamesh" -> the boss) is flagged and redirected, not answered as codex.
+    sessG = _RSess()
+    obsG = asyncio.run(_run_tool(_RSpy(), "research", "Gilgamesh", {}, sessG.sources, sessG))
+    assert "class/specialization" in obsG and "estimate_stats" in obsG, obsG[:200]
     # a real entity name can contain "," or "and" - resolve the WHOLE string
     # first, don't shred it (live bug: "Arisen Thor, the Storm God" split into a
     # wrong item + an unresolved half; "Sword and Shield" was never found).

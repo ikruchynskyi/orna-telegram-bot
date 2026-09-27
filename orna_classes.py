@@ -220,12 +220,23 @@ def estimate(name: str, ascension_level: int = 0, pvp: bool = False,
     }
 
 
+# orna_classes.json's pool names are aussiescodex's and INVERTED from the game
+# (see CLAUDE.md): the spec_stats pool (find_class kind "specialization") is
+# really the tier-10 CLASS, and the classes pool (kind "class") is really the
+# SPECIALIZATION. find_class keeps the pool name (estimate_stats' pool logic
+# needs it), but anything shown to the model states the GAME term - the same
+# inversion estimate_stats' tool keys do - so knowledge_search stops
+# contradicting _TAXONOMY_RULE (it used to print "Ranger (class)" /
+# "Gilgamesh (specialization)", exactly backwards).
+_GAME_KIND = {"specialization": "class", "class": "specialization"}
+
+
 def format_entry(name: str, ascension_level: int = 0, pvp: bool = False) -> str:
     """Human/model-readable summary, or "" if the name is unknown."""
     est = estimate(name, ascension_level, pvp)
     if est is None:
         return ""
-    head = f"{est['name']} ({est['kind']}, tier {est['tier']})"
+    head = f"{est['name']} ({_GAME_KIND.get(est['kind'], est['kind'])}, tier {est['tier']})"
     if est["ascension_level"] or est["pvp"]:
         head += f" — AL {est['ascension_level']}" + (", PVP" if est["pvp"] else "")
     lines = [head]
@@ -341,6 +352,13 @@ def _demo() -> None:
     by_bonus = search("weapon_power")
     assert "Duelist" in by_bonus, by_bonus[:200]
     assert search("zzz no such thing") == ""
+
+    # The DISPLAYED kind is the GAME term, not aussies' inverted pool name: a
+    # tier-10 name is a CLASS, Ranger/Sequencer are SPECIALIZATIONS. Pinned
+    # because knowledge_search shows this and it used to contradict _TAXONOMY_RULE.
+    assert "Gilgamesh (class, tier 10)" in format_entry("Gilgamesh"), format_entry("Gilgamesh")[:60]
+    assert "Ranger (specialization, tier 7)" in format_entry("Ranger"), format_entry("Ranger")[:60]
+    assert "Sequencer (specialization" in format_entry("Sequencer"), format_entry("Sequencer")[:60]
 
     # scale() is the ONE copy of the AL/PVP rules - telegram_orna's
     # estimate_stats tool calls it with the summed gear as the base, so these
