@@ -2689,6 +2689,45 @@ forecast date (year-1900 non-leap parse). See
 `.claude/skills/verifying-orna-changes/references/common-pitfalls.md` for
 the ten patterns these cluster into.
 
+### Reviewing an outside research document (2026-09-26)
+
+A Gemini Deep Research report on Orna's mechanics was reviewed and its genuinely
+new material merged into `orna_mechanics.txt` - NOT added as a seventh
+`knowledge_search` block, because that tool already composes six and one call had
+to be capped at 8KB. Filling a gap in an existing corpus beats another source.
+The raw document is committed as `gemini_research_2026-09-26.txt` for provenance.
+
+**The headline gain: the universal damage formula**, which existed nowhere in the
+repo. Guild-confirmed:
+`Damage = ((Stat_off × M1) − (Stat_def × Buff_def) / 2) × M2 × N_strikes × Buff_off × Faction`
+It is a THRESHOLD system - if the bracket resolves to <= 0 the damage is exactly
+zero regardless of M2, offensive buffs or elemental weakness - which is why
+offensive buffs on a non-penetrating skill do nothing, and it finally explains
+"why does my skill do zero damage" as a mechanic rather than a mystery. Also new:
+DoT bypassing Second Chance, Demonworking Tools, Tower Shard -> Sky Shard
+economics, and the multi-strike "debuff rolls once" rule.
+
+**How to treat a document like this, learned from its errors:**
+- **It had at least one wrong cited number.** It asserted dual wielding reduces
+  main stats to 45% (and world bonuses to 50%), with a citation. The guild
+  reconfirmed **0.65 of the combined stats**, which is what the code implements.
+  So its prose is CLAIMS TO CHECK, not data - recorded in the corpus itself so a
+  future reader does not re-import the 45%.
+- **Two of its numbers independently CONFIRMED existing sources**, which is the
+  useful signal: `Ward = (HP + Mana) / 2` matches `orna_echo`, and hybrid skills
+  using 65% ATT + 65% MAG matches `orna_echo`'s own table. Agreement between
+  sources that did not copy each other is worth more than either alone.
+- **Its quality bands side with the community guides against our port** (Superior
+  110-119, Famed 120-130 vs `get_quality_code`'s 101-119 / 120-139). That is now
+  two independent sources against the port; the repo stays authoritative for code
+  and the prescribed check is a live playorna assess page.
+- **Equations do not survive a Google Docs text export.** Every formula was an
+  image/LaTeX, so the export reads "the formula is defined as follows:" followed
+  by nothing - including the central damage equation, which had to be supplied
+  separately. Ask for equations as text or images when requesting such a doc.
+- Its 62 sources named **`blog.ornarpg.com`**, the official dev blog, which no
+  corpus here uses yet - a real candidate if another source is ever wanted.
+
 ### The player Q&A corpus - the only source indexed by the QUESTION
 
 `orna_qa.py` / `orna_qa.txt` / `orna_scrape_qa.py`, added 2026-09-26 on ask.

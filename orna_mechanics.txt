@@ -57,6 +57,15 @@ Quality is a percentage roll that multiplies an item's base stats. The tiers
 (170-200%); 170% is a Legendary/Ornate crossover. Higher quality = higher
 stats and more adornment slots.
 
+A 2026-09-26 research document independently gives the quality bands as Ornate
++70..+100%, Legendary +40..+69%, Famed +20..+30%, Superior +10..+19%, Regular
++0%, Poor -1..-25%, Broken -26..-50%. Converted to the absolute percentages the
+bot uses, that agrees with the COMMUNITY GUIDES (Superior 110-119, Famed 120-130)
+and NOT with orna_assess.get_quality_code's ported boundaries (Superior 101-119,
+Famed 120-139). That is now two independent sources against the port. The repo's
+version stays authoritative for code; settling it needs a live playorna assess
+page, which is the check CLAUDE.md already prescribes for this exact boundary.
+
 === Upgrading and forging ===
 Items upgrade through levels: 1-10 at the Blacksmith (costs time, gold and
 materials, increasing per level). Beyond 10 the upgrades are instant but
@@ -84,6 +93,77 @@ and customised with Celestial Augments at the Titan Workshop - these come from
 the Titans/Towers of Olympia and are endgame. "Arisen" is NOT a rarity: it is a
 SOURCE tag for gear dropped by Arisen superbosses, and an Arisen item can be an
 ordinary rarity like Famed. So do not treat "Arisen" as a quality level.
+
+=== Combat: the universal damage formula ===
+Every offensive interaction resolves through one equation (guild-confirmed
+2026-09-26):
+    Damage = ((Stat_off × M1) − (Stat_def × Buff_def) / 2) × M2 × N_strikes × Buff_off × Faction
+Stat_off is Attack against the target's Defense for physical skills, or Magic
+against Resistance for magical ones. M1 is the skill's PENETRATION multiplier and
+M2 its raw damage multiplier (M2 usually rolls within a per-skill min/max range).
+A basic attack has M1 = M2 = 1.
+This is a THRESHOLD system, not a subtraction: if the bracketed part resolves to
+zero or below, total damage is exactly ZERO no matter how large M2, the offensive
+buffs or an elemental weakness are. That is why a high-M1 skill is mandatory
+against heavily-defended endgame targets, and why multi-strike skills with large
+cumulative M2 are better against low-defense targets.
+Buffs are ASYMMETRIC, which follows from where they sit in the equation:
+defensive buffs/debuffs change the target's defensive stat BEFORE the threshold,
+while offensive buffs multiply only AFTER it. So buffing Attack or Magic on a
+skill that cannot already penetrate adds nothing - any multiplier on zero is
+zero. Single-tier and double-tier buffs stack with each other, and temporary
+buffs add another independent layer.
+Multi-strike skills roll M2 independently per strike, but the chance to apply a
+status/debuff is rolled ONCE, on the first successful hit - a miss forfeits the
+debuff entirely, which is what makes evasion valuable against multi-hit enemies.
+The basic attack is the one exception to the buff rule: offensive buffs raise its
+M1 (penetration) rather than multiplying after the threshold, and crit buffs
+stack additively on it.
+Hybrid skills use 65% of Attack PLUS 65% of Magic as the combined offensive stat,
+against the mean of the target's Defense and Resistance - so they are worth
+recommending against an enemy with a lopsided defensive profile. (orna_echo's
+guide tables state the same: "Natural Hybrid | (ATT × 0.65) + (MAG × 0.65)".)
+
+=== Dual wielding ===
+Two one-handed weapons contribute 65% of their COMBINED stats - guild-stated and
+then explicitly reconfirmed 2026-09-26. This is `_DUAL_WIELD_FACTOR` in
+telegram_orna and is pinned by its self-check. Despite the penalty it can still
+beat a two-hander: measured on a real request, a legal one-handed pair totalled
+13,743 magic against the Celestial Archistaff's 12,445.
+Only ONE celestial weapon may be equipped, one- or two-handed, so a "best in
+every slot" pick can never be two celestials.
+NOTE a 2026-09-26 research document asserted 45% for main stats and 50% for
+passive world bonuses (exp/orn multipliers) instead, with a citation. The guild
+rejected that figure. Recorded because it also means that document's cited
+numbers are not automatically reliable - treat its prose as claims to check, not
+as data.
+
+=== Survivability: Second Chance, DoT and Steadfast ===
+"Second Chance" (and class variants such as the Heretic's "Mana Rush") gives a
+high chance to survive an otherwise lethal hit at exactly 1 HP.
+Damage-over-time BYPASSES it completely: Bleed, Burn, Poison, Blight and Rot
+resolve at the END of the turn, and lethal DoT damage kills through Second
+Chance. That is what makes "Steadfast"/"Steadfast II" (which lower the chance of
+a status landing at all) the real defence against DoT execution rather than a
+nice-to-have. Some classes push the other way - the Assassin's "Annwn
+Subterfuge" raises both the chance of inflicting a status and its duration.
+
+=== Demonworking Tools (Anguish) ===
+Demonworking Tools raise an item's Anguish Level by exactly 1, boosting its stats
+for PvE Anguish content only (worth nothing in PvP). They apply only to a
+Masterforged, Demonforged or Godforged item, and applying one RESETS the item to
+level 10, stripping that forge status - so each use costs a full re-forge. The
+material cost of re-Masterforging/Demonforging an Anguished item is permanently
+reduced on later cycles, which is the only thing that makes the loop affordable.
+
+=== Tower Shards and Celestial forging costs ===
+Tower climbs yield Tower Shards, converted to Sky Shards at 10:1. Starting a
+level-1 Celestial Weapon costs 5,000 Sky Shards (= 50,000 Tower Shards), and
+taking one to its maximum level 20 costs a cumulative 148,800 Tower Shards. The
+20-level ceiling matches orna_assess.CELESTIAL_WEAPON_SLOTS, which has exactly 20
+entries. Titan Augments then redistribute a celestial weapon's stats - e.g.
+socketing Ward augments onto a Celestial Axe to inject Ward into a Gilgamesh
+build - so a celestial's printed stat line is not its ceiling.
 
 === Elements and factions ===
 There are four factions, each tied to an element: Earthen Legion (Earth),

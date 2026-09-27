@@ -1,0 +1,355 @@
+﻿Systems Analysis and Mechanics Documentation for Orna RPG Knowledge-Base Integration
+System Architecture and Core Combat Mathematics
+The foundational combat architecture within the Orna RPG ecosystem operates on a deterministic mathematical model that is heavily reliant on hidden penetration and amplification multipliers. Comprehending this framework is paramount for predicting damage outputs, optimizing gear setups, and programming automated combat agents capable of dispensing accurate mechanical advice. The engine calculates combat outcomes through a rigid sequence of operations that govern how base statistical attributes interact with defensive mitigations, status effects, and external modifiers.
+The universal damage equation governs every offensive interaction in the game, structuring the threshold required to bypass enemy defenses. The core mathematical formula is defined by the engine as follows:
+  
+
+This mathematical equation dictates that damage generation is not a simple linear subtraction, but rather a heavily weighted threshold system that penalizes insufficient offensive investment1. The variables operate under specific, non-negotiable mechanical constraints. The equation utilizes either the Attack statistic against the target's Defense for physical skills, or the Magic statistic against the target's Resistance for magical skills1. For hybrid abilities, the system introduces a unique calculation paradigm. While initial mathematical models suggested hybrid skills utilize the arithmetic mean of the user's Attack and Magic, more precise engine testing indicates that hybrid spells and attacks utilize exactly 65% of the user's Attack and 65% of the user's Magic as the combined base stat1. This combined offensive value is then pitted against the arithmetic mean of the target's Defense and Resistance, allowing intelligent agents to recommend hybrid skills when encountering opponents with heavily skewed defensive profiles1.
+The hidden variables    and    dictate the viability of every skill in the game.    represents the penetration multiplier, dictating the skill's intrinsic ability to overcome raw defensive attributes before raw damage scaling is applied1. A high    value ensures that the initial bracketed calculation yields a positive integer. If the result of this initial calculation is zero or negative, the entire mathematical output resolves to exactly zero damage, completely regardless of any subsequent offensive multipliers or elemental weaknesses3.    functions as the raw damage multiplier, often rolling within a predefined minimum and maximum variance range per individual strike1.
+A critical mechanical nuance in the combat architecture is the asymmetrical application of buff modifiers. Defensive buffs and debuffs directly modify the target's base defensive statistics prior to the damage threshold calculation1. In stark contrast, offensive buffs act strictly as damage multipliers applied only after the penetration threshold has been successfully resolved1. This indicates that if a low-penetration skill fails to breach an opponent's augmented defense, applying additional Attack or Magic buffs will mathematically result in zero damage, as any multiplier applied to a base of zero remains zero2. Furthermore, single-tier buffs and double-tier buffs actively stack with one another, and temporary buffs provide an additional, independent layer of statistical modification7.
+Multi-strike abilities and the universal "Basic Attack" command introduce further mechanical anomalies into the combat engine. Multi-strike abilities calculate the    multiplier independently for each successive strike in the animation sequence1. However, the algorithmic chance to apply a status effect or debuff is only rolled a single time upon the initial successful hit; any missed attacks instantly forfeit the opportunity to trigger debuffs entirely, thereby elevating the value of evasion statistics against multi-hit combatants1. The standard "Basic Attack" command possesses an    and    value of exactly   . However, unlike all other abilities in the game ecosystem, offensive buffs applied to the basic attack directly modify its    penetration value rather than serving as a post-mitigation multiplier1. Additionally, while critical hit rates are fixed for all standard skills, critical hit buffs actively stack and apply additively to the basic attack, allowing specialized builds to force basic attacks to penetrate extreme defenses through guaranteed critical scaling1.
+The implications of this formula dictate distinct meta-strategies that an automated agent must recognize. When confronting end-game targets with nearly impenetrable defenses, utilizing abilities with exceedingly high    values—such as "Annwn Fury" (  ) or "Neutra Eventualus" (  )—is mechanically mandatory to ensure the initial threshold exceeds zero6. Conversely, against targets with negligible defense values, utilizing multi-strike abilities with high cumulative    multipliers yields vastly superior raw damage outputs, rendering high-penetration single strikes mathematically inefficient6.
+Evasion Protocols, Survivability, and Mitigation Mechanics
+Survivability in advanced combat scenarios relies heavily on damage mitigation thresholds, dynamic evasion algorithms, and the precise management of status ailments. The game utilizes a "Second Chance" mechanic (and class-specific variations such as the Heretic's "Mana Rush"), which provides a high statistical probability for a character to survive an otherwise lethal blow, leaving them with exactly one health point remaining7.
+However, damage-over-time (DoT) effects circumvent the Second Chance algorithm entirely. Ailments such as Bleed, Burn, Poison, Blight, and Rot apply their damage calculations at the conclusion of the combat turn. If a target afflicted by a DoT takes lethal damage from the status effect itself, the Second Chance mechanic is explicitly bypassed, resulting in guaranteed termination7. This creates a mechanical necessity for high-level combatants to employ the "Steadfast" or "Steadfast II" passive abilities. These passives significantly reduce the mathematical probability of status afflictions taking hold, serving as the primary defense against unmitigated DoT execution10. Furthermore, the application of status effects is heavily dependent on specific class identities; the Assassin's "Annwn Subterfuge" passive mathematically increases the probability of inflicting status effects while simultaneously extending their turn duration on the opponent11.
+The Ward Mitigation System
+Ward functions as a secondary, regenerating health pool that intercepts a predetermined percentage of incoming damage before it affects the primary health pool. A character's absolute base Ward capacity is mathematically derived from a strict combination of their maximum Health and Mana pools. The formula dictates that base Ward is equal to the sum of maximum HP and maximum Mana, divided by two10.
+Equipment, specialized adornments, and specific shield modifiers subsequently multiply this base value through sequential percentage increases12. Passive abilities and active skills, such as "Divine Bastion," temporarily override the default Ward absorption rate, allowing the Ward pool to absorb 100% of incoming damage until it is completely depleted10. The mechanic known strictly as "Ward Power" explicitly enhances the efficacy of abilities that consume Ward for damage scaling, effectively acting as a direct 20% multiplier to the Ward's functional output value during offensive calculations13.
+Class Progression Routing and Optimal Unlock Pathways
+For an automated agent to guide users effectively, it must understand the optimal progression routing through the game's class tiers. Resource acquisition (specifically Orns) in the early game dictates that players must unlock specific classes solely for their persistent utility skills, while ignoring mathematically inferior options.
+The optimal class progression strategy dictates unlocking all Tier 1 classes immediately, as the achievement rewards yield a net positive Orn gain14. Moving into Tier 2, players should unlock all available classes with the explicit exception of the Knight, which should be bypassed until the player requires the "Threaten" ability for end-game tanking configurations14. In Tier 3, the BattleMaster is the mathematically optimal choice due to its superior raw skill multipliers, while the Centurion and Sorcerer should be temporarily ignored until the player possesses enough skill slots in higher tiers to utilize their defensive buffs14.
+Tier 4 introduces the Adept class, which is mechanically necessary for unlocking the "Barrier II" skill, a highly efficient defensive buff that conserves consumable potions14. Tier 5 represents a major mechanical divergence. Dedicated players capable of logging in repeatedly should acquire the Dragoon to access "Dragon Vengeance II," a powerful ability that maintains its charge scaling based on dragons defeated in the overworld14. Casual players are advised to select the Majestic class for raw statistical stability. Regardless of the primary combat choice, every single player must acquire the Tier 5 Druid class. The Druid provides the most mathematically potent suite of offensive and defensive buffs in the mid-game ecosystem, rendering it a mandatory acquisition for all physical and magical builds14.
+Progression through Tier 6 favors the Blademaster for physical builds due to the high    multipliers of "Horizontal Slash" and "Coup de Grace," while the Grand Mystic and BattleMage classes are considered mechanically inefficient and should be bypassed14. Tier 7 players transition into the Majistrate, utilizing "Osmostrike III" for sustained self-healing and elemental strike abilities to exploit enemy weaknesses14.
+Tier 10 Archetypes and Mechanical Frameworks
+At the absolute pinnacle of player progression (Tier 10), class mechanics diverge into highly specialized archetypes. Each Tier 10 class manipulates the game's core mathematical engines through unique passive traits and specialized resource scaling, demanding completely different gear optimization strategies10.
+Gilgamesh: Ward Scaling and Physical Mitigation
+The Gilgamesh archetype functions as the definitive physical tank, possessing the highest innate Defense, Resistance, and base HP modifiers in the game's ecosystem10. The class's mechanical identity revolves entirely around maximizing and subsequently weaponizing the Ward pool, relying heavily on items like the Arisen Shield or the Celestial Axe to artificially inflate their base defensive metrics15.
+The Gilgamesh utilizes the "Spiked Shield" ability suite, which completely bypasses standard Attack and Magic calculations1. Instead, Spiked Shield utilizes the raw numerical value of the Ward consumed during the ability's cast as the baseline offensive statistic, pitting it directly against the target's Defense1. Due to the mathematical requirements of breaching high-end enemy armor via the    penetration threshold, a Gilgamesh typically requires a localized Ward pool exceeding 120,000 to 200,000 to achieve functional damage outputs15. The underlying damage formula for Spiked Shield was uniquely adjusted by the developers to provide superior penetration multipliers when cast specifically by a Gilgamesh, severely punishing cross-class implementations of the skill17.
+Heretic: Mana Depletion and Magical Amplification
+The Heretic operates as the premier magical damage dealer, utilizing a high-risk, high-reward mechanical framework centered around the "Iconoclast" passive ability. Iconoclast directly ties the Heretic's statistical power to their missing Mana pool, forcing players to intentionally deplete their resources to maximize damage11.
+This amplification scales linearly. At maximum Mana, the Iconoclast bonus yields zero statistical augmentation. As Mana approaches zero, the passive yields up to a +100% statistical multiplier across all primary attributes11. When combined with the "Maji" specialization's "Depletion" passive, an additional +25% stat multiplier is achieved. This allows for a theoretical +125% enhancement to base Attack, Magic, Defense, and Resistance when the Heretic fights at near-zero Mana reserves18. To sustain this highly vulnerable state without perishing, Heretics rely on the "Mana Siphon" and "Life Siphon" passives, which dynamically restore resources upon critical strikes or taking damage, alongside "Steadfast II" to prevent lethal DoT effects from executing them while they hover at critical health thresholds10. Automated agents advising Heretic players should highly recommend utilizing lesser mana potions to keep mana artificially low, rather than restoring it entirely to full capacity18.
+Realmshifter: Evasion Algorithms and Critical Thresholds
+The Realmshifter relies exclusively on physical critical strikes and extreme evasion protocols to survive. The core defensive mechanic is "Mystic Feather," a dynamic evasion algorithm that inversely correlates dodge probability with the player's current health pool10. As the Realmshifter's HP drops from 50% down to exactly 1%, the evasion probability scales upward, hard-capping at a 70% mathematical chance to completely evade any direct physical or magical attack10.
+This creates a precarious gameplay loop where the Realmshifter must intentionally take damage or inflict self-damage (via mechanics like the Berserk status) to reach optimal offensive and evasive states10. However, successfully executing a critical strike triggers a passive restoration algorithm that recovers 10% to 50% of the Realmshifter's HP and Mana10. This forcibly raises their HP, which subsequently deactivates their statistical damage buffs and instantly reduces their dodge chance. Therefore, Realmshifter optimization requires a constant, turn-by-turn manipulation of the health pool10. The class also heavily relies on the "Avidity" and "Avidity II" passives, which grant a statistical probability to immediately execute consecutive, uncounterable turns21.
+Beowulf: Valhallan Follower Synergies
+The Beowulf archetype relinquishes direct player-driven damage generation to artificially inflate the action probability and raw statistics of their equipped follower10. Beowulfs benefit from the intrinsic ability to equip any weapon or armor type without penalty, allowing for highly defensive itemization frameworks that prioritize survival while the autonomous entity handles offensive output10.
+Through specific "Call" abilities introduced in recent balance patches—such as Call of Skadi, Call of Jord, Call of Brynhild, and Call of Idun—the Beowulf can dynamically alter the artificial intelligence weighting of their follower. This forces the AI to heavily prioritize offensive attacks, defensive wards, buffs, or healing spells respectively11. The Beowulf's personal statistics gain massive amplification as their HP falls below 50%, maximizing at 1% HP. This synergizes flawlessly with Valhallan passive traits that allow the follower to physically intercept fatal blows directed at the player10.
+Deity: The Apex Accumulation System
+The Deity classline, representing the culmination of the "Old Gods" progression path, operates as an incredibly flexible hybrid combatant that scales through a unique combat mechanic known as "Apex." Apex functions as a limit-break meter that charges dynamically during the course of a battle, enabling the use of devastating exclusive abilities8.
+The Apex accumulation algorithm is strictly defined by the combat engine:
+* A maximum of 20% charge is generated per single-target attack successfully executed by the player8.
+* Direct damage taken from enemy combatants generates exactly 1% Apex charge for every 1% of total HP lost8.
+* Self-inflicted damage (from skills or Berserk status effects) generates 1% charge for every 1% of total HP lost8.
+* The total accumulation is hard-capped at 50% generation per turn from all combined sources, and subsequent encounters can begin with a maximum of 95% pre-charged Apex8.
+Upon reaching 100% Apex charge, the "Unstable Omnimancy" passive activates, rendering the Deity completely immune to all elemental weaknesses, effectively neutralizing opponent elemental strategies8. The accumulated Apex is then expended to cast exclusive "Eventualus" abilities, which utilize a "Dynamic Hybrid" damage profile. These skills algorithmically sample the higher of the user's Attack or Magic stats and utilize it for the base calculation, rendering the class completely agnostic to specific physical or magical builds8.
+Autonomous Entity Systems and Follower Artificial Intelligence
+The interaction between the player and their equipped follower (pet) is dictated by complex probability algorithms. Follower mechanics operate on a sequential probability distribution rather than a flat percentage-based activation model. Each follower possesses a distinct repertoire of offensive skills, basic attacks, defensive wards, and buffs, each assigned an independent mathematical activation probability7.
+The follower's artificial intelligence processes these potential actions sequentially rather than simultaneously. If a follower possesses a 10% activation chance for six distinct abilities, the system does not calculate a flat 10% action rate7. Instead, the engine calculates the probability of the follower performing any action by determining the exact complement of the probability that all sequential skill checks fail. The mathematical probability    of a follower acting in a given combat turn is expressed as:
+  
+
+For a follower with six skills, each holding a 10% chance to trigger, the probability of acting is calculated as   , representing a 46.8% chance per turn7.
+This base probability can be artificially augmented through specific equipment and class passives. Items such as the Dragoon's Charm directly elevate the base probability of each individual skill in the follower's repertoire, exponentially increasing the final output probability7. Followers such as the Fey Cactus possess multiple distinct physical attack skills that inherently draw upon higher probability pools, virtually guaranteeing offensive output each turn and making them highly sought after for physical damage builds23. Similarly, the Fey Yeti possesses high inherent probabilities to cast Ward-generating defensive spells, rendering it an optimal defensive companion26.
+Grand Summoner Algorithms and Entity Inheritance
+The Grand Summoner class entirely bypasses standard follower mechanics, instead introducing multiple autonomous entities onto the battlefield that execute independent turns in the action economy. The statistical inheritance of these summons relies on a strict mathematical formula that combines additive gear modifiers with a singular, incredibly potent multiplicative scalar28.
+The statistical inheritance formula for a Grand Summoner's entity is calculated as follows:
+  
+
+Because equipment bonuses (such as those found on specialized Summoner armor) are strictly additive, they suffer from severe mathematical diminishing returns as the player unlocks higher innate class passives28. For example, a 37% stat bonus from a piece of armor may only functionally increase the summon's overall performance by 8.6% due to the massive additive baseline28. Consequently, analytical consensus dictates that Grand Summoners must forsake raw summon-stat gear entirely in favor of maximizing personal defense, HP, and Ward scaling28. The player relies entirely on their Ascension Levels to provide the multiplicative scalar necessary for their summons to scale into the end-game28.
+The action economy of these summoned entities is governed by specific augmentation interactions. The "Benefactor" specialization provides a 50% mathematical probability to reduce the cast time of any multi-turn summon by exactly one turn28. This passive stacks directly with "Sturdy Feet of Eos" augments, allowing players to instantly cast multi-turn summons with high reliability28. Furthermore, the "Omega Riftlock" accessory provides an independent 25% chance to instantly bypass all summoning turn requirements entirely; this stacks additively with multiple equipped Riftlocks, yielding up to a 50% or 75% instant-cast probability28.
+The protective AI of these summons also follows specific diminishing return algorithms. The "Battalions III" passive allows summons to intercept damage intended for the player, but this protection chance is mathematically hard-capped at 50% in PvE content28. Furthermore, the individual probability to be protected per summon is subject to diminishing returns; every consecutive summon placed on the field possesses a lesser statistical chance to protect the player than the previous entity28.
+Recent mechanical updates introduced the "Charon's Pact" passive for the Hydrus variant of the Grand Summoner. This shifts the class paradigm entirely by causing summons to automatically populate the field each turn at the cost of significantly lessened base statistics17. These rapidly regenerating entities bypass the standard action-economy casting requirements and can be continuously sacrificed to generate immediate burst damage, or utilized to passively intercept lethal blows via the protection algorithm17.
+Autonomous Entity Data Metrics
+To provide accurate recommendations, an automated agent must possess a structured database of the primary entities available to the Grand Summoner classline28.
+
+
+Summon Designation
+	Unlock Level
+	Acquisition Method
+	Turn Cost
+	Mana Cost
+	Mechanical Notes
+	Warg
+	150
+	Arcanist (75k Gold)
+	1
+	75
+	Basic physical combatant28.
+	Dragon
+	155
+	Arcanist (50k Gold)
+	2
+	90
+	Base elemental damage28.
+	Slime
+	155
+	Attuner Class
+	2
+	90
+	Standard entity28.
+	Colossus
+	170
+	Attuner Class
+	3
+	120
+	Heavy physical mitigation28.
+	Hydra
+	175
+	Attuner Class
+	3
+	170
+	Multi-elemental magical strikes28.
+	Garm
+	175
+	Attuner Class
+	1
+	100
+	High agility physical combatant28.
+	Basilisk
+	180
+	Attuner Class
+	1
+	120
+	Highly efficient 1-turn summon; inflicts permanent debuffs28.
+	Bear
+	190
+	Grand Attuner Class
+	2
+	150
+	Heavy physical damage28.
+	Cockatrice
+	200
+	Grand Attuner Class
+	3
+	190
+	Capable of inflicting Petrify status28.
+	Guivre
+	200
+	Arcanist (1.25m Gold)
+	2
+	170
+	High-tier elemental damage28.
+	Golem
+	205
+	Summoner Class
+	2
+	180
+	Supreme physical defense28.
+	Gazer
+	210
+	Summoner Class
+	2
+	210
+	Magical combatant28.
+	Kelpie
+	220
+	Summoner Class
+	3
+	240
+	High-tier water physical damage28.
+	Troll
+	225
+	Summoner Class
+	2
+	210
+	Rapid physical striking28.
+	Chimera
+	225
+	Summoner Class
+	2
+	240
+	Inflicts Miasma; possesses extremely high penetration (  )28.
+	Equipment Engineering, Quality Variance, and Forging Protocols
+Equipment within the Orna ecosystem possesses a hidden quality percentage that fundamentally alters its baseline statistics. All unidentified items drop with a numerical variance dictating their structural tier. Assessing the exact quality of an item requires dividing the primary stat of the obtained item by the stat of its exact "Normal" quality counterpart30.
+
+
+Quality Designation
+	Statistical Multiplier
+	Algorithmic Assessment
+	Ornate
+	+70% to +100%
+	Maximum potential yield; optimal for end-game forging investments31.
+	Legendary
+	+40% to +69%
+	Highly viable for mid-tier progression and temporary slot-filling31.
+	Famed
+	+20% to +30%
+	Moderate statistical enhancement31.
+	Superior
+	+10% to +19%
+	Slight statistical enhancement31.
+	Regular
+	+0%
+	Baseline mathematical standard31.
+	Poor
+	-1% to -25%
+	Degraded statistics; optimal for Swashbuckler defense manipulation31.
+	Broken
+	-26% to -50%
+	Maximum degradation; optimal for Swashbuckler defense manipulation31.
+	The Forging Progression Pathway
+The enhancement of gear requires escalating material investments and progresses through strict, non-linear categorical tiers32. An automated agent must understand this timeline to accurately guide resource expenditure.
+1. Standard Upgrading (Levels 1-10): Conducted exclusively at a Blacksmith facility. Material costs escalate linearly. This process imposes real-time wait restrictions, forcing the player to wait for the item to complete its upgrade cycle32.
+2. Masterforging (Level 11): Conducted at an Alchemist building. Requires an item to be exactly Level 10. This progression bypasses real-time wait restrictions entirely and executes instantly. Masterforging significantly increases the available adornment slots on the item, exponentially increasing its customizable potential32.
+3. Demonforging (Level 12): Conducted at a Demonforge facility. Requires a previously Masterforged item. Imposes exorbitant material costs (often requiring hundreds of specialized materials) but completes instantaneously32.
+4. Godforging (Level 13): This final tier cannot be executed at a physical building or through standard resource expenditure. The player must have the Demonforged item actively equipped while defeating specific overworld or dungeon bosses possessing a distinct "Golden Aura" (e.g., Mammon, Arisen Gods, Tower Titans). The mathematical probability of a successful Godforge trigger upon victory is estimated at 1 in 300 (  )32.
+Anguish Mechanics and Demonworking Tools
+End-game players interacting with the Anguish difficulty system can utilize "Demonworking Tools" to artificially augment item power beyond traditional Godforging constraints33. Demonworking Tools can only be applied to items that are Masterforged, Demonforged, or Godforged. Upon application, the item's intrinsic "Anguish Level" increases by exactly 1, enhancing its base statistics exclusively for PvE Anguish content (these bonuses are entirely invalid in standard PvP environments)33.
+However, utilizing a Demonworking Tool structurally resets the item back to Level 10, actively stripping its Masterforged or Demonforged status33. This forces the player into a continuous resource loop, requiring them to reinvest the material costs to Masterforge and Demonforge the item back to its peak state before applying another tool33. To mathematically mitigate this punishing loop, the engine permanently reduces the material costs for Masterforging and Demonforging an Anguished item on subsequent upgrade cycles33.
+Dual Wielding Penalty Mathematics
+Equipping a weapon in both the primary and off-hand slots invokes the game's Dual Wielding penalty framework. The primary statistical attributes (Attack, Magic) of both weapons are severely reduced to exactly 45% of their total maximum value35. Furthermore, passive world attributes natively attached to the weapons—such as experience augmentation, Orn multipliers, or secondary statistical buffs—are strictly halved to 50%35. Therefore, a weapon that natively grants a 10% Orn bonus will only yield a 5% bonus while dual-wielded, requiring two identical weapons to mathematically match the passive output of a single unpenalized weapon35.
+Specialized Build Configurations
+Advanced gameplay requires abandoning standard progression mechanics in favor of highly specialized loadouts designed to exploit specific mathematical interactions within the engine.
+The Swashbuckler Defense Inversion Strategy
+The Swashbuckler specialization (and its magical equivalent, the Theurgist) inverses standard survival paradigms by converting defensive vulnerability directly into raw offensive output37. The Swashbuckler passive mathematically scales the player's base Attack power inversely to their equipped Defense statistic37.
+To optimize this mathematical conversion, players must proactively reduce their absolute Defense value derived from gear to zero or below37. Achieving a net-zero defense threshold reportedly yields a staggering 50% absolute increase to the player's base Attack output derived from their weaponry37. Any defensive values that register above zero rapidly degrade this damage bonus, necessitating the intentional use of "Poor" or "Broken" quality gear, or specific itemization that provides negative Defense to offset the natural armor values generated by necessary accessories37. Because negative Defense values do not incur a mathematical penalty beyond zero mitigation, an optimal Swashbuckler minimizes physical mitigation while utilizing items like the "Arch-rune" armor set to maintain high Resistance against magical attacks38. The Theurgist specialization applies this exact inverse scaling mechanic to the Magic stat, utilizing reduced Resistance to amplify spellcasting power36.
+View Distance Stacking Algorithms
+The game's GPS interaction radius is strictly governed by the "View Distance" statistic, which operates on a base radius of exactly 180 meters39. Enhancements to this radius are applied as direct multiplicative scalars rather than additive bonuses, predominantly utilizing a standard 1.2x (20%) multiplier per equipped item or active buff39.
+Because these multipliers stack geometrically, a dedicated View Distance build can expand the player's physical interaction radius from 180 meters to approximately 1,700 meters, allowing for massive world interaction from a stationary physical location39. Optimizing this algorithm requires exploiting the dual-wielding mechanics despite the statistical penalties. Two standard view-distance weapons apply a    multiplier. However, utilizing specialized event items (such as the Surtr Swords or Menja Warstaves) fully socketed with "Symbols of War" adornments can push the mathematical weapon multiplier to a staggering 2.05x39.
+The optimal mathematical configuration for maximizing the GPS view radius includes:
+   * Weapons: Dual-wielding Godforged Arisen/Fey Helhests or Surtr Swords, socketed entirely with 18 Symbols of War (dropped from the Third Horsemen raid)39.
+   * Accessories: Two Unfelled Concords (which outperform early-game Lanterns by offering identical view distance alongside dungeon cooldown reduction)39.
+   * Armor: Fallen Sky Hood or Fallen Sky Helmet39.
+   * Consumables: Torch, Farsight, and Brazier active simultaneously in the overworld39.
+   * Class/Specialization: Majistrate, Realmshifter Dorado, or Argos, strictly equipped with the "Seeker" specialization39.
+   * Amity and Follower: A 5% View Distance Amity paired with a Level 1 Bestial Bond modifying a Gazer follower39.
+Optimal Orn Farming Configuration
+To maximize the acquisition of "Orns"—the primary currency required for class unlocks and Ascension scaling—players must mathematically stack passive item generation modifiers. The definitive loadout for maximizing Orn yield relies on negating combat efficacy entirely in favor of multiplier stacking40.
+
+
+Equipment Slot
+	Optimal Item Identification
+	Mechanical Purpose and Output
+	Weapon (Primary)
+	Questing Staff
+	Grants extensive simultaneous multipliers to Orn, Gold, and EXP generation41.
+	Weapon (Secondary)
+	Questing Staff
+	Dual-wielding applies a 50% penalty to the passive bonus, but two staffs mathematically stack for a higher net total36.
+	Head
+	Lost Helmet / Mighty Mimic Head
+	Possesses the maximum intrinsic Orn generation multipliers available for the head slot40.
+	Chest
+	Court Jester Outfit
+	Provides the highest passive Gold and Orn multipliers for the chest slot40.
+	Accessory 1
+	Band of Gods
+	Premier end-game accessory that provides massive triple-scaling (Orn/Gold/EXP)41.
+	Accessory 2
+	Band of Gods
+	Identical stacking effect, bypassing the usual accessory limitation algorithms41.
+	This specialized setup is frequently paired with Anguish Level 50 configurations, allowing players to generate immense, compounding currency loops while navigating localized endless dungeons45.
+End-Game Meta-Systems and Progression Loops
+Ascension Levels and Diminishing Returns
+Upon reaching the maximum standard character limit (Level 250), player progression shifts permanently to the Altar of Ascension47. Upgrading an Ascension Level (AL) requires vast, escalating quantities of Orns and randomized crafting materials48.
+Ascension Levels provide fractional percentage increases to a character's base statistics, including Attack, Magic, HP, Defense, and Resistance49. While the mathematical returns per individual level are slight and heavily subject to diminishing returns, accumulating 50 to 100+ Ascension Levels provides enough aggregate base statistics to fundamentally alter gameplay19. This base stat inflation allows end-game players to completely replace highly defensive gear with purely offensive or currency-farming loadouts without risking combat mortality19. Furthermore, Ascension Levels serve as the primary multiplicative scaling vector for Grand Summoner autonomous entities, as the AL multiplier is applied only after all additive gear calculations are resolved, making AL grinding mandatory for summoner viability28. However, the community notes that excessively high Ascension Levels create severe systemic imbalances in PvP territory control modes (such as Conqueror's Guild settlements), prompting recommendations for localized AL caps50.
+Towers of Olympia and Celestial Forging
+The "Towers of Olympia" system shifts the progression axis toward a rogue-lite, localized dungeon climbing experience51. Successfully navigating a Tower yields "Tower Shards," which serve as the primary currency for the Celestial Forging system. Tower Shards can be mathematically converted at a rigid 10:1 ratio into "Sky Shards"52.
+These shards are used exclusively to construct and enhance "Celestial Weapons," the premier armaments in the end-game ecosystem. Initiating the construction of a Level 1 Celestial Weapon demands an upfront cost of 5,000 Sky Shards (equating to exactly 50,000 raw Tower Shards)52. Fully upgrading a Celestial Weapon to its absolute maximum structural potential (Level 20) requires a cumulative total of 148,800 Tower Shards53. Once forged, these weapons feature modular "Titan Augments." These augments allow players to fundamentally rewrite the weapon's statistical distribution, moving beyond linear upgrades. For example, a player may utilize a Celestial Axe and socket it entirely with Ward augments to artificially inject massive base Ward capacity into a Gilgamesh build, completely bypassing the weapon's intended physical constraints16.
+Guild Infrastructure and Daily Operational Loops
+The game features several interwoven "Guilds," which act as autonomous daily progression loops rewarding specific vectors of gameplay interaction54. An automated agent must map player activities to the correct guild to optimize their progression.
+
+
+Guild Designation
+	Interaction Protocol
+	Primary Output & Rewards
+	Traveler's Guild
+	Utilizes device GPS and health-tracking APIs to measure physical real-world movement and step counts55.
+	Unlocks non-monster cosmetic aspects, Guild Trials, and unique step-based Amity traits55.
+	Spelunking Guild
+	Requires the active completion of localized Exploration (Deep) Dungeons54.
+	Offers Skeleton Keys and specific subterranean crafting materials54.
+	Monumental Guild
+	Requires interaction with randomly seeded Overworld Monuments, functioning as localized mini-dungeons54.
+	Grants Proofs of Felling; allows players to purchase out-of-rotation event followers and Hallowed gear54.
+	Blade of Finesse
+	Engages players in highly constrained PvP scenarios or specialized combat trials with normalized stats58.
+	Yields specialized competitive currencies and Skeleton Keys for continued dungeon access56.
+	Conqueror's Guild
+	A geographic territory control system requiring the physical construction of a Guild Hall in the Origin Town58.
+	Players claim and defend real-world Landmarks for continuous daily taxation rewards, including Guild XP and Proofs of Conquering58.
+	Seer's Guild
+	Requires active "Memory Hunting" via the Diluted Mnemonic consumable, locking interaction to a fixed 200m radius39.
+	Functions as the exclusive provider of Amity traits, the game's primary mechanism for altering base combat algorithms54.
+	Amity Parameterization and Engine Overrides
+Amities, obtained exclusively through the memory hunts facilitated by the Seer's Guild, provide passive, permanent overrides to the game's core mathematical rules54. Highly optimized combat agents rely entirely on specific Amity rolls to ensure build viability, as gear alone cannot replicate these systemic alterations.
+Critical end-game Amities that alter base engine functions include:
+   * Resource Automation: Amities that recover exactly 5% of maximum Mana or Ward per combat turn. This entirely negates the necessity to sacrifice a combat turn to utilize a consumable potion, drastically increasing sustained damage per second (DPS) for Heretics and Summoners60.
+   * Damage Mitigation: Amities that increase total Ward absorption by a flat 5%. This is mathematically massive; pushing an 85% absorption shield to 90% effectively mitigates an additional one-third of the remaining HP damage taken through the Ward buffer60.
+   * Buff Prolongation: Amities that extend the duration of positive status effects by 50%. This is mechanically crucial for maintaining the "Deific Channel" buff (which requires 3 turns to cast) without constant, vulnerable recasting windows60.
+   * Evasion Algorithms: Amities that provide a flat 20% mathematical probability to entirely survive any attack that would otherwise deal 100% or more of the player's maximum HP in a single strike, bypassing standard defense calculations60.
+   * Offensive Scaling: Amities that grant a flat 40% increase to standard critical damage (vital for Realmshifter optimizations), a 40% damage increase to simple basic attacks, or a 30% flat scaling increase to autonomous Summon entity power60.
+The Astraltree Daily and Weekly Protocol
+The "Astraltree" functions as the game's centralized daily and weekly task-resolution engine, designed to organize player activity loops61. By completing scaling daily challenges—which adapt algorithmically to the player's current tier—players acquire a currency known as "Astralseeds." Completing 10 daily quests within a rolling 8-day cycle yields a secondary, premium currency known as a "Constellationseed"61.
+These currencies are expended within five distinct structural branches on the Astraltree interface, allowing players targeted control over their rewards:
+   1. Constellation of Wealth: Injects the player's inventory with raw Gold, Orns, and various Guild Proofs, acting as the primary baseline economy injection61.
+   2. Constellation of Ascension: Disburses highly sought-after Ascension materials, Demonworking Tools, and Anguished Pathspurs necessary for end-game refining loops61.
+   3. Constellation of Avarice: Functions as a targeted loot mechanic, allowing players to expend seeds to roll for guaranteed Ornate-quality item drops. Crucially, this branch allows players to acquire out-of-rotation event gear tailored precisely to their current tier61.
+   4. Constellation of Power: Yields consumable buffs, exclusive Monument shrines, and unlocks secondary Activity Slots to increase simultaneous processing capabilities61.
+   5. Constellation of Speed: Expends seeds to act as a 12-hour environmental movement and processing buff61.
+Architectural Directives for Automated Agent Integration
+To successfully construct and deploy an automated question-answering agent designed to interpret and guide users through the Orna ecosystem, the underlying logic architecture must strictly separate offensive multiplicative scaling from defensive base augmentations.
+The agent must be explicitly programmed to comprehend the    penetration threshold. If the calculation of    is mathematically inferior to   , the agent must recognize that no amount of external Attack percent modifiers or elemental exploitation will render the attack viable1. The agent's logic protocols must further recognize that all end-game optimization is an exercise in extreme threshold manipulation, rather than balanced statistical growth. The agent must recommend manipulating Ward pools past 120,000 for Gilgamesh outputs15, depressing Mana to exactly zero to unlock the Heretic's +125% statistical peaks18, or dropping HP to 1% to force the Realmshifter's evasion algorithm into its 70% hard-cap10.
+By structuring the agent's internal knowledge base around these precise mathematical thresholds, probability equations, and resource loops, the system will possess the capability to provide unerringly accurate optimizations, loadout recommendations, and systemic analysis for any user inquiry within the Orna ecosystem.
+Works cited
+   1. Orna Combat system Explained in detail. : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/gbged8/orna_combat_system_explained_in_detail/
+   2. damage question? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/169w3zy/damage_question/
+   3. Base stats, do they include equipment bonuses? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/jj6axf/base_stats_do_they_include_equipment_bonuses/
+   4. Doubt in the damage calculation : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/pfb177/doubt_in_the_damage_calculation/
+   5. What is the actual functional difference between something with 300, https://www.reddit.com/r/OrnaRPG/comments/vkkpls/what_is_the_actual_functional_difference_between/
+   6. How come Inferno 2 dealt 0 damage, but regular Inferno hit for ~1.5k, https://www.reddit.com/r/OrnaRPG/comments/hpux7x/how_come_inferno_2_dealt_0_damage_but_regular/
+   7. Honestly, what are chances in this game? opponents always get, https://www.reddit.com/r/OrnaRPG/comments/ww61x4/honestly_what_are_chances_in_this_game_opponents/
+   8. DEITY - God of Orna | PDF - Scribd, https://www.scribd.com/document/1020865611/DEITY-God-of-Orna-1
+   9. 0 damage with ornate max level weapon of my tier, and strongest skill., https://www.reddit.com/r/OrnaRPG/comments/1lba5r0/0_damage_with_ornate_max_level_weapon_of_my_tier/
+   10. State of Realmshifter : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/x2ph9t/state_of_realmshifter/
+   11. 2021 H2 Mechanical/Balance Patch : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/rgkw5o/2021_h2_mechanicalbalance_patch/
+   12. Grand Summoner with 90.000 ward? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/13y5bhu/grand_summoner_with_90000_ward/
+   13. What is Ward Power? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1l70hwo/what_is_ward_power/
+   14. Melee Progression Guide : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/d9lg1c/melee_progression_guide/
+   15. Gilgamesh - Spiked Shield Question : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/17a0yxi/gilgamesh_spiked_shield_question/
+   16. r/OrnaRPG - If you are pproaching or brand new to t10 and need, https://www.reddit.com/r/OrnaRPG/comments/1b8rnye/if_you_are_pproaching_or_brand_new_to_t10_and/
+   17. Updates & Release Notes / Orna RPG Series | New Old RPGs, https://playorna.com/releases/?p=5
+   18. Maji Depletion Question : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/zy45im/maji_depletion_question/
+   19. Orna / Aethric Balance Survey - H1 2023 : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/12in871/orna_aethric_balance_survey_h1_2023/
+   20. Which T10 Class is the best if you don't want to think while playing?, https://www.reddit.com/r/OrnaRPG/comments/w06xlh/which_t10_class_is_the_best_if_you_dont_want_to/
+   21. Updates on the H1 Balance & Mechanics Patch : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/13k1pyl/updates_on_the_h1_balance_mechanics_patch/
+   22. Updates & Release Notes - Orna, https://playorna.com/releases/1.147.0/
+   23. Valhallan class are broken because it go against the game ideologies, https://www.reddit.com/r/OrnaRPG/comments/vmqt4g/valhallan_class_are_broken_because_it_go_against/
+   24. Followers | Orna RPG Wiki - Fandom, https://ornarpg.fandom.com/wiki/Followers
+   25. Do I need melee and magic when reaching T8 or higher in the long, https://www.reddit.com/r/OrnaRPG/comments/1dxxpp7/do_i_need_melee_and_magic_when_reaching_t8_or/
+   26. Monsters Strategy | Orna RPG, https://rplus.github.io/orna-lookup/monster/
+   27. Fey Chimera, Fey Yeti and Mighty Mimic for anyone interested. IGN, https://www.reddit.com/r/OrnaRPG/comments/qk9kr0/fey_chimera_fey_yeti_and_mighty_mimic_for_anyone/
+   28. Orna Summoner Class Guide | PDF - Scribd, https://www.scribd.com/document/815308093/Ultimate-Circle-of-Grand-Summoners
+   29. Updates & Release Notes / Orna RPG Series | New Old RPGs, https://beta.aethric.com/releases/?p=5
+   30. Quality percentages : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/o24e75/quality_percentages/
+   31. Ask A Question, Get An Answer Megathread : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/f4gx2i/ask_a_question_get_an_answer_megathread/
+   32. Carl Better Appreciate What I Have Done : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/om5n4k/carl_better_appreciate_what_i_have_done/
+   33. What would happen if i used demonworking tools on this weapon, https://www.reddit.com/r/OrnaRPG/comments/1l5gucu/what_would_happen_if_i_used_demonworking_tools_on/
+   34. My personal thoughts on the new Anguish System : r/OrnaRPG, https://www.reddit.com/r/OrnaRPG/comments/1kyfb1j/my_personal_thoughts_on_the_new_anguish_system/
+   35. Incoming changes to dual-wielding : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/j88glz/incoming_changes_to_dualwielding/
+   36. Community Event #3 - Design a Specialization : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/uxnf4k/community_event_3_design_a_specialization/
+   37. Orna Swashbuckling Guide 3.0 | PDF | Dragon - Scribd, https://www.scribd.com/document/586251445/Orna-Guide-to-Swashbuckling-v2
+   38. Swashbuckler passive : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/d1cr7j/swashbuckler_passive/
+   39. What is View Distance? [GPS] : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1d2bxnt/what_is_view_distance_gps/
+   40. Orns and Exp at level 250 : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1c7veio/orns_and_exp_at_level_250/
+   41. Rate my Orna farming set : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/vsny8c/rate_my_orna_farming_set/
+   42. Orns are raining : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1dqi3op/orns_are_raining/
+   43. Helpful insight : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1v25dvi/helpful_insight/
+   44. Are there any staffs that increase orn gathering : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/pvvm15/are_there_any_staffs_that_increase_orn_gathering/
+   45. Farming Orns and Class Opinions : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1hruurm/farming_orns_and_class_opinions/
+   46. How's everyone feeling about 2.0? Specifically in regards to orn, https://www.reddit.com/r/OrnaRPG/comments/1l85l4q/hows_everyone_feeling_about_20_specifically_in/
+   47. Idea - How T11 *could* be integrated into current state of the game, https://www.reddit.com/r/OrnaRPG/comments/vr3fu2/idea_how_t11_could_be_integrated_into_current/
+   48. Odie Chimed in on ALs: : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1hsy3kk/odie_chimed_in_on_als/
+   49. Why is my damage flat? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1j0i96q/why_is_my_damage_flat/
+   50. High Ascension-Level players are suffocating the Conqueror's Guild, https://www.reddit.com/r/OrnaRPG/comments/1hqj84e/high_ascensionlevel_players_are_suffocating_the/
+   51. Towers of Olympia: revealing the new endgame system for Orna and, https://blog.ornarpg.com/towers-of-olympia-revealing-the-new-endgame-system-for-orna-and-hero-of-aethric/
+   52. How many tower shards : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1f3u490/how_many_tower_shards/
+   53. Just hit T9, what to use shards on? : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1g4uddt/just_hit_t9_what_to_use_shards_on/
+   54. Orna v3.9 : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/186tbmm/orna_v39/
+   55. Orna: 奇幻RPG & GPS MMO - App Store, https://apps.apple.com/us/app/orna-%E5%A5%87%E5%B9%BB-rpg-gps-mmo/id1451775309?l=zh-Hans-CN&platform=vision
+   56. Great Monuments - Mechanic Rework...Now with Dashboard! - Reddit, https://www.reddit.com/r/OrnaRPG/comments/1rpdotg/great_monuments_mechanic_reworknow_with_dashboard/
+   57. Travellers Guild feedback : r/OrnaRPG - Reddit, https://www.reddit.com/r/OrnaRPG/comments/16sz6t2/travellers_guild_feedback/
+   58. Updates & Release Notes / Orna RPG Series | New Old RPGs, https://beta.aethric.com/releases/?p=10
+   59. Updates & Release Notes - Orna: The GPS RPG, https://playorna.com/releases/
+   60. What are the best/ Most desirable Amity I should get asap. : r/OrnaRPG, https://www.reddit.com/r/OrnaRPG/comments/1j8jef6/what_are_the_best_most_desirable_amity_i_should/
+   61. Exploring Astraltrees: Our New Daily/Weekly Reward System - Blog, https://blog.ornarpg.com/exploring-astraltrees-our-new-daily-weekly-reward-system/
+   62. The Orna RPG Blog – An inside look at the whats, whys and hows of, https://blog.ornarpg.com/
