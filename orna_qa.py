@@ -43,7 +43,7 @@ CORPUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_qa.
 _TITLE_WEIGHT = 3
 _QUESTION_WEIGHT = 2
 _MIN_WORD_LEN = 3
-_MAX_BLOCK_CHARS = 1100
+_MAX_BLOCK_CHARS = 6000
 # Words are WEIGHTED by inverse document frequency, not kept-or-dropped. A hard
 # cutoff cannot work on a single-topic corpus: at 0.06 it discarded "summoner"
 # (>45 of 751 threads mention it) and so could not answer "how do I get the
@@ -82,7 +82,7 @@ _MIN_SCORE = 2.5
 # than recall here: a thread that is not about the question is worse than no
 # thread at all, because the model may build an answer on it. Recall improves as
 # the corpus grows - see the note in orna_scrape_qa about resuming the crawl.
-_MAX_BLOCK_CHARS = 1100
+_MAX_BLOCK_CHARS = 6000
 # A thread must match the QUESTION side (title or Q: line), not merely share a
 # word with one of its answers. Without this, a long answer that happens to
 # contain "immunity" surfaced a thread about a completely different subject -
@@ -177,7 +177,7 @@ def _idf() -> dict:
     return _IDF
 
 
-def search(query: str, limit: int = 3) -> list:
+def search(query: str, limit: int = 6) -> list:
     """Threads whose QUESTION best matches `query`, best first.
 
     Distinct-word overlap rather than whole-query substring, for the reason
@@ -221,7 +221,7 @@ def search(query: str, limit: int = 3) -> list:
     return [th for _s, _u, th in scored[:limit]]
 
 
-def search_text(query: str, limit: int = 3) -> str:
+def search_text(query: str, limit: int = 6) -> str:
     """`search` rendered as one labelled block for a tool observation."""
     hits = search(query, limit)
     if not hits:

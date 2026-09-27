@@ -1932,11 +1932,21 @@ reasons over everything on the first iteration - fewer paid LLM calls, and no
 - **Effects are humanized via `translations['status']`** (`t__crit_u` → "T.
   Crit ↑", `blind` → "Blind"), falling back to the raw code so an unknown one
   degrades to text rather than crashing.
-- **Honest caps:** each relation is capped (`per_relation_cap`, default 12) and
-  an over-cap relation is marked `PARTIAL` with the true total - the same
-  "never let a truncation look complete" rule as `_names_observation`. A
-  dangling edge target (id not in the dump) degrades to an empty leaf, no
-  crash.
+- **Generous caps, and truncation is NEVER silent.** Every leaf shows ALL its
+  stats/effects (real items have up to 18 stats / 21 effects; a silent per-leaf
+  cap quietly made "which class benefits" answers wrong). `per_relation_cap`
+  defaults to 80 - larger than the biggest real relation (a 76-drop raid) - so
+  it effectively never truncates; when a ceiling IS hit it is marked `PARTIAL`
+  with the true total (`_names_observation`'s rule) and the whole-observation
+  cut (`_RESEARCH_CODEX_MAX`, 40000) happens only at a LINE boundary
+  (`_truncate_lines`), never mid-value - a "244" clipped to "24" is a WRONG
+  number, worse than a marked-short list. A dangling edge target degrades to an
+  empty leaf, no crash. **The caps are ceilings for the 256k-context model, not
+  tight budgets: populating the context with what the model needs to reason is
+  the goal - do NOT re-introduce a stingy cap.** The same principle was applied
+  across the corpora feeding `knowledge_search`/`web_search`
+  (`_KNOWLEDGE_OBS_MAX` 40000, per-corpus content caps raised ~4-6x, web_search
+  snippets 200→1200) - see the observation-honesty note below.
 - **The knowledge half reuses `_gather_knowledge`** - the exact 7-corpus
   aggregation `knowledge_search` uses, extracted so there is no second copy -
   driven by the resolved subject, so a "how do I beat X" `research` call

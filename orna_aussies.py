@@ -664,7 +664,7 @@ def _entity_facts(rec: dict) -> dict:
     return facts
 
 
-def build_supergraph(names, per_relation_cap: int = 24) -> dict:
+def build_supergraph(names, per_relation_cap: int = 80) -> dict:
     """One-level subgraph for one or more entity names, built entirely from
     codex.json + translations (no network). Returns
       {"entities": [entity, ...], "unresolved": [name, ...]}
@@ -673,10 +673,11 @@ def build_supergraph(names, per_relation_cap: int = 24) -> dict:
           relation = {"field","title","total","partial","members":[leaf,...]},
           leaf     = see _leaf.
     per_relation_cap bounds each relation; an over-cap relation is truncated
-    with partial=True and the true total kept. The default of 24 covers every
-    boss (max 19 drops) and monster (max 16) whole; only big raids (up to 76
-    drops) truncate, and that is flagged PARTIAL. Which edges are walked is
-    fixed per category by _DEFAULT_EXPAND. Pure/in-memory; call via
+    with partial=True and the true total kept. The default of 80 covers EVERY
+    real relation whole (the largest in the data is a raid with 76 drops), so it
+    effectively never truncates - it is a runaway guard, not a normal bound; the
+    256k-context model should see the whole set to reason over it. Which edges
+    are walked is fixed per category by _DEFAULT_EXPAND. Pure/in-memory; call via
     asyncio.to_thread."""
     if isinstance(names, str):
         names = [names]

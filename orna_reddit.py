@@ -79,7 +79,7 @@ def _load() -> list:
     return entries
 
 
-def search(query: str, limit: int = 4) -> list:
+def search(query: str, limit: int = 6) -> list:
     """Entries mentioning `query`, best first. Scored by how many distinct
     query words appear, so a multi-word ask still ranks the entry that
     covers most of it - the same shape orna_knowledge._search_words uses,
@@ -103,7 +103,7 @@ def search(query: str, limit: int = 4) -> list:
     return [e for _s, e in scored[:limit]]
 
 
-def format_entries(entries: list, max_chars: int = 2000) -> str:
+def format_entries(entries: list, max_chars: int = 8000) -> str:
     """Entries as text for the model, truncated as a whole rather than per
     entry so one long comment can't crowd the rest out silently."""
     out, used = [], 0

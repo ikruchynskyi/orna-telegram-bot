@@ -43,7 +43,7 @@ SITE_URL = "https://playerecho.com/orna"
 _HEADING_WEIGHT = 3
 _TITLE_WEIGHT = 2
 _MIN_WORD_LEN = 3
-_MAX_BODY_CHARS = 1400
+_MAX_BODY_CHARS = 6000
 
 _ARTICLE_RE = re.compile(r"^=== (?P<title>.+?) \((?P<url>[^)]+)\) ===$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -110,7 +110,7 @@ def _load() -> list:
     return _SECTIONS
 
 
-def search(query: str, limit: int = 3) -> list:
+def search(query: str, limit: int = 6) -> list:
     """Sections mentioning `query`, best first, scored by how many DISTINCT
     query words appear - heading and title hits weighted above body hits.
 
@@ -138,7 +138,7 @@ def search(query: str, limit: int = 3) -> list:
     return [sec for _score, _len, sec in scored[:limit]]
 
 
-def search_text(query: str, limit: int = 3) -> str:
+def search_text(query: str, limit: int = 6) -> str:
     """`search` rendered as one labelled block for a tool observation."""
     hits = search(query, limit)
     if not hits:

@@ -205,7 +205,7 @@ def refetch_now() -> dict:
     return {"amities": len(data["amities"]), "crucibles": len(data["crucibles"])}
 
 
-def search(query: str, limit: int = 12) -> str:
+def search(query: str, limit: int = 40) -> str:
     """Matching lines, grouped under their section header, or "" if nothing
     matches. Exact substring first, then a word-overlap fallback - the same
     two-stage shape orna_knowledge.search uses, and for the same reason: a

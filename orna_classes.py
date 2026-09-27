@@ -211,7 +211,7 @@ def format_entry(name: str, ascension_level: int = 0, pvp: bool = False) -> str:
     return "\n".join(lines)
 
 
-def search(query: str, limit: int = 4) -> str:
+def search(query: str, limit: int = 6) -> str:
     """Entries matching `query` - by name, by a bonus stat, or by a passive
     effect - as text for the model. Empty string if nothing matches."""
     q = (query or "").strip().lower()

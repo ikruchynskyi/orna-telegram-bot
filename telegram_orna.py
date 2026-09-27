@@ -520,7 +520,11 @@ def _format_entry(detail: dict) -> str:
     return "\n".join(lines)
 
 
-_MAX_NAMES_IN_OBSERVATION = 25
+# A generous ceiling, not a normal bound: query_records already caps its own
+# results at 50, so this shows every one of them (and then some) rather than
+# hiding names the model needs to reason over - the 256k context has room. Still
+# marked PARTIAL beyond it, so a truncation is never silent.
+_MAX_NAMES_IN_OBSERVATION = 100
 
 
 def _names_observation(entries: list, fmt=None) -> str:
@@ -1078,18 +1082,20 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
         entries = section.get("entries") or []
         if not entries:
             continue
-        names = ", ".join(e.get("name", "?") for e in entries[:10])
-        if len(entries) > 10:
-            names += f" (+{len(entries) - 10} more)"
+        names = ", ".join(e.get("name", "?") for e in entries[:100])
+        if len(entries) > 100:
+            names += f" (+{len(entries) - 100} more)"
         digest += f" | {section.get('title', '?')}: {names}"
     return digest
 
 
-# Char budget for the codex half of the observation. Sized for a whole entity
-# at per_relation_cap=24 with FULL per-leaf stats/effects (~5.5KB worst case);
-# only a big multi-entity call or a >24-member relation trims, and then only at
-# a line boundary (see _truncate_lines).
-_RESEARCH_CODEX_MAX = 7000
+# Char budget for the codex half of the observation - a generous CEILING for a
+# pathological multi-entity call, not a normal bound. The model has a 256k
+# context, so populating it with the data it needs to reason is the goal; the
+# biggest single entity (a 76-drop raid with full per-leaf stats) is ~15KB, well
+# under this. Anything past it trims only at a line boundary (see
+# _truncate_lines), never silently mid-value.
+_RESEARCH_CODEX_MAX = 40000
 
 
 def _truncate_lines(text: str, limit: int, marker: str) -> str:
@@ -1186,7 +1192,7 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
     names = [n for n in names if n]
     if not names:
         return "research needs an entity name in action_input"
-    cap = args.get("per_relation_cap", 24)
+    cap = args.get("per_relation_cap", 80)
     bundle = await asyncio.to_thread(build_supergraph, names, cap)
     codex_text = _render_supergraph(bundle)
 
@@ -1871,7 +1877,7 @@ async def _run_calculate_tool(message, expression: str) -> str:
     return out
 
 
-_GUIDE_EXCERPT_CHARS = 6000
+_GUIDE_EXCERPT_CHARS = 20000
 
 
 async def _run_class_guide_tool(message, topic: str, query: str) -> str:
@@ -1902,8 +1908,16 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
 
 
 # knowledge_search can compose six source blocks; capped in TOTAL, not just
-# per block - see the note where they are joined.
-_KNOWLEDGE_OBS_MAX = 8000
+# per block - see the note where they are joined. A generous CEILING for the
+# 256k-context model, not a tight bound: real multi-corpus results run a few KB,
+# well under this, so the cap only bites a pathological query and then drops
+# WHOLE blocks (marked), never a silent mid-block cut.
+_KNOWLEDGE_OBS_MAX = 40000
+# Per-corpus ceiling. Also generous: a single corpus rarely returns this much,
+# but if one does it is trimmed at a LINE boundary with this marker, never
+# clipped mid-row/mid-formula (a half-row is worse than a marked-short one).
+_KN_BLOCK_MAX = 15000
+_KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question for the rest …]"
 
 
 async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
@@ -1934,7 +1948,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # orna_knowledge.search now (its word-scoring fallback) rather than by
     # splitting on punctuation here - the model writes those lists with
     # commas, with "and", or with nothing at all between them.
-    result = await asyncio.to_thread(orna_knowledge.search, query)
+    result = await asyncio.to_thread(orna_knowledge.search, query, "", 60)
     # Cite the sheet+tab each matched section came from. search() prefixes
     # every block with "[<section title>]", and that title is the key
     # orna_knowledge.source_url resolves, so the citation is per-TAB rather
@@ -1980,7 +1994,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
 
     blocks = []
     if result:
-        blocks.append(result[:3000])
+        blocks.append(_truncate_lines(result, _KN_BLOCK_MAX, _KN_TRIM))
     if mechanics:
         if sources is not None:
             _add_source(sources, orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
@@ -1990,7 +2004,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     if bonuses:
         if sources is not None:
             _add_source(sources, "Amities / Crucibles (aussiescodex)", orna_bonuses.AMITIES_URL)
-        blocks.append("AMITY / CRUCIBLE DATA (aussiescodex):\n" + bonuses[:2000])
+        blocks.append("AMITY / CRUCIBLE DATA (aussiescodex):\n" + _truncate_lines(bonuses, _KN_BLOCK_MAX, _KN_TRIM))
 
     # Class/specialization stat modifiers, bonus stats and passives. Not in
     # the codex either - see orna_classes.
@@ -2004,7 +2018,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "CLASS / SPECIALIZATION DATA (aussiescodex stats estimator). Stat modifiers are PERCENTAGES "
             "applied to your gear-derived stats; a tier-10 specialization also has absolute base stats. "
             "Ascension Level adds +1% per level to every stat (AL 100 doubles them), and PVP doubles HP "
-            "only:\n" + classes[:2000])
+            "only:\n" + _truncate_lines(classes, _KN_BLOCK_MAX, _KN_TRIM))
     # Written guides that state the MECHANICS AND FORMULAS outright - the one
     # thing no other source here has (the codex gives an entry's numbers and
     # never a formula; the sheets tabulate results). Rides on this tool rather
@@ -2023,7 +2037,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "GUIDE MECHANICS / FORMULAS (playerecho.com community guides - the source to quote for a "
             "FORMULA or a mechanic the codex has no field for: Ward capacity, Ascension altar costs, "
             "dungeon cooldowns and godforging, anguish proofs, per-event tier gates. Indented lines are "
-            "verbatim formulas - use them as written rather than reasoning one out):\n" + echo[:3000])
+            "verbatim formulas - use them as written rather than reasoning one out):\n" + _truncate_lines(echo, _KN_BLOCK_MAX, _KN_TRIM))
     # Player Q&A, indexed by the QUESTION rather than by an answer's wording -
     # the one axis none of the other corpora have, and the only source carrying
     # a CORRECTED PREMISE ("those are summons, not followers").
@@ -2041,7 +2055,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "upvotes - a heavily-upvoted answer is strong evidence and a 2up one is weak; DEV marks Orna's own "
             "developers. Read these for a CORRECTED PREMISE too: the top answer often says the question itself is "
             "based on a misunderstanding, which is worth more than answering it as asked. Each block carries its "
-            "DATE - an old answer may predate a patch, so releases() outranks it on numbers):\n" + qa[:3000])
+            "DATE - an old answer may predate a patch, so releases() outranks it on numbers):\n" + _truncate_lines(qa, _KN_BLOCK_MAX, _KN_TRIM))
     if reddit_hits:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "

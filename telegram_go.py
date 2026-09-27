@@ -484,7 +484,9 @@ async def _tavily_search(query: str) -> dict:
         lines.append(answer)
     for r in results:
         title = r.get("title") or r.get("url", "Untitled")
-        snippet = (r.get("content") or "")[:200]
+        # 1200, not 200: the model has a 256k context, and a "how do I beat X"
+        # web fallback needs the actual snippet to reason over, not a teaser.
+        snippet = (r.get("content") or "")[:1200]
         lines.append(f"{title} ({r.get('url', '')}): {snippet}")
     text = "\n".join(lines) if lines else f"No results for: {query}"
 
@@ -542,7 +544,7 @@ async def _ddg_search(query: str) -> dict:
             "content": snippet_el.get_text(strip=True) if snippet_el else "",
         })
 
-    lines = [f"{r['title']} ({r['url']}): {r['content'][:200]}" for r in results]
+    lines = [f"{r['title']} ({r['url']}): {r['content'][:1200]}" for r in results]
     text = "\n".join(lines) if lines else f"No results for: {query}"
     sources = [{"title": r["title"], "url": r["url"]} for r in results]
     return {"text": text, "images": [], "sources": sources}
