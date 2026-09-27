@@ -47,6 +47,13 @@ function not the symptom). They recur because this code is glue over fuzzy
 inputs; the "obvious" version is wrong at the fuzzy edge. Then check your diff
 against that list.
 
+**Also check `docs/` before changing the `/orna` loop.** CLAUDE.md's
+`## The /orna command` section is the short design summary + standing
+invariants; the FULL loop internals - the complete `query` condition
+vocabulary, every tool's design, and the incident history behind each rule -
+live in **`docs/orna-loop-internals.md`**. Read it before touching the loop,
+and record new `/orna` incidents/rationale there, not in CLAUDE.md.
+
 ## Follow this procedure in order. Do not skip steps.
 
 ### Step 0 - Establish ground truth (what SHOULD the answer be?)
