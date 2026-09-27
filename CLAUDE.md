@@ -581,6 +581,13 @@ missing":**
   **silently dropped** - that handler deliberately says nothing rather than
   answering every message in a guild chat, so the user saw the bot ignore them.
   The wait resumes the SAME session, so the whole accumulated context applies.
+  * **A bare closer ("thanks"/"ok"/"дякую"/emoji) does NOT resume the loop.**
+    Live 2026-09-27: a user said "thank you" (no `/orna`) after an answer; the
+    follow-up wait resumed the loop, which RAN TOOLS again and re-stated the
+    same answer - the prompt's "do NOT re-state" lost, as prompt-only guards do.
+    `handle_ask_text` now checks `_is_pleasantry` (whole message is closer/filler
+    tokens, or no words at all) BEFORE resuming and just acknowledges once. A
+    real follow-up that merely starts with "thanks," still resumes.
   Three things make it safe to widen:
   * **It is scoped to the user who asked**, via `OrnaSession.user_id`, so
     everyone else's messages in a group still fall straight through to the

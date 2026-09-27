@@ -247,6 +247,31 @@ _RESUME_STEPS = 8
 # question (see the finish branch) - it is a guess, so it should not sit on
 # the chat for the full ten minutes a real ask() gets.
 _FOLLOWUP_TTL_SECONDS = 180
+# A bare "thanks"/"ok"/"дякую" inside the follow-up window is a CLOSER, not a
+# new question. Live 2026-09-27: a user said "thank you" (no /orna) after an
+# answer; the follow-up wait resumed the loop, which RAN TOOLS again and
+# re-stated the same answer - the prompt's "do NOT re-state" lost. So this is
+# caught deterministically before the loop is ever resumed (tool guard, not a
+# prompt rule). Matched only when the WHOLE message is closer/filler tokens, so
+# "thanks, and when does the next one start" is still a real follow-up.
+_CLOSER_TOKENS = {
+    "thanks", "thank", "thankyou", "thx", "ty", "tysm", "tnx", "u", "you", "cheers",
+    "ok", "okay", "k", "kk", "cool", "nice", "great", "perfect", "awesome", "got",
+    "it", "gotit", "very", "much", "so", "a", "lot", "man", "mate", "bro", "dude",
+    "appreciate", "appreciated", "yw",
+    "дякую", "дяки", "дякс", "дяк", "спасибі", "спасиб", "дуже", "ок", "окей",
+    "круто", "супер", "зрозумів", "зрозуміла", "зрозуміло", "класно", "чудово",
+}
+
+
+def _is_pleasantry(text: str) -> bool:
+    """True if the message is only closer/filler words or has no words at all
+    (pure emoji/punctuation) - a "thanks"/"ok"/"дякую 🙏" that must not resume
+    the loop. False the moment a substantive word appears ("thanks, and when...")."""
+    tokens = re.sub(r"[^\w\s]", " ", (text or "").lower()).split()
+    return not tokens or all(w in _CLOSER_TOKENS for w in tokens)
+
+
 # Live 2026-09-24: the loop asked three times in a row. The user tapped
 # "I'll provide details", then "Specialization/Class" - options that name
 # WHAT to supply rather than answering anything - so each tap resumed the
@@ -4103,6 +4128,13 @@ async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     pending = _PENDING_ASK_TEXT.pop(message.chat_id, None)
     if pending is None:
         return  # the filter already checked, but stay defensive
+    said_raw = message.text.strip()
+    if _is_pleasantry(said_raw):
+        # A closer, not a question - acknowledge once and DON'T resume the loop
+        # (which re-ran tools and re-stated the same answer before). The wait is
+        # already popped, so the next message falls through normally.
+        await message.reply_text("Будь ласка! 🙂" if _CYRILLIC_RE.search(said_raw) else "You're welcome! 🙂")
+        return
     sid, expires = pending["sid"], pending["until"]
     if time.monotonic() > expires:
         await message.reply_text("Уточнення застаріло — спробуйте /orna ще раз.")
@@ -4803,6 +4835,14 @@ def _demo() -> None:
         "facts": {}, "alternatives": [], "relations": [],
         "bond": ["tier 1: orn bonus +50, grants Rainsong"]}], "unresolved": []})
     assert "Bestial Bond" in _rb and "orn bonus +50" in _rb, _rb
+    # a bare closer in the follow-up window must NOT resume the loop; a real
+    # follow-up (even one that starts with "thanks,") still must.
+    for _p in ("thank you", "thanks", "дякую", "thanks a lot", "ok cool",
+               "thank you very much", "ty!", "🙏", "спасибі 🙂"):
+        assert _is_pleasantry(_p), _p
+    for _q in ("when does the event end", "thanks, and when does it end",
+               "last martyr", "балоріт 100"):
+        assert not _is_pleasantry(_q), _q
     # a real entity name can contain "," or "and" - resolve the WHOLE string
     # first, don't shred it (live bug: "Arisen Thor, the Storm God" split into a
     # wrong item + an unresolved half; "Sword and Shield" was never found).
