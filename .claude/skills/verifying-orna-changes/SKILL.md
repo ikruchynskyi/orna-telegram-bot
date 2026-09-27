@@ -97,8 +97,9 @@ Reproduce the failure for real. Two flavors, cheapest first:
    ```
 
    `orna_guides`, `orna_assess`, `orna_proofs`, `orna_towers`,
-   `orna_aussies.query_records` and similar are pure/stdlib enough to probe
-   like this without any API keys.
+   `orna_aussies.query_records`, `orna_aussies.build_supergraph` (the
+   `research` tool's data builder - resolve+edges+leaves, all local) and
+   similar are pure/stdlib enough to probe like this without any API keys.
 
 2. **End-to-end against the real models** - for anything that depends on
    the LLM's choices (which tool the ReAct loop picks, what query it passes,

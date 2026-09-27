@@ -26,7 +26,11 @@ matters, the live game:
 
 - item stats/facts/effects/drops/rarity/place → the codex, via
   `orna_codex` (playorna) + `orna_aussies` (aussiescodex `codex.json`), i.e.
-  the `/orna` `search_codex`/`query`/`open_entry` tools.
+  the `/orna` `search_codex`/`query`/`open_entry` tools. To pull an entity AND
+  its cross-links in one shot (a monster/raid + every drop's stats/useable_by,
+  a boss + its skills), use the `research` tool
+  (`orna_aussies.build_supergraph`) - a single local pass over `codex.json`,
+  not a per-drop `open_entry` chain.
 - class & specialization base stats and % modifiers → `orna_classes.json`
   (`orna_classes.find_class`/`estimate`); the AL/PVP scaling rules live ONLY
   in `orna_classes.scale`, pinned by that module's `_demo`.
@@ -113,7 +117,9 @@ boundaries below are the standing example).
 9. **Per-boss elemental immunities/resistances are NOT in any structured data
    source** (not playorna's codex, not aussies) - only in `knowledge_search`'s
    community "Monster Data" and on the web. This is why `_STRATEGY_RULE`
-   forces `knowledge_search`/`web_search` for "how do I beat X".
+   forces `knowledge_search`/`web_search` for "how do I beat X" - though the
+   `research` tool now bundles the boss's codex facts AND that community
+   knowledge in one call, so prefer it for a "how do I beat X" question.
 
 ## Full verified reference
 
