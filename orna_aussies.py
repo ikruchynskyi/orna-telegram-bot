@@ -664,7 +664,7 @@ def _entity_facts(rec: dict) -> dict:
     return facts
 
 
-def build_supergraph(names, expand=None, per_relation_cap: int = 12) -> dict:
+def build_supergraph(names, per_relation_cap: int = 24) -> dict:
     """One-level subgraph for one or more entity names, built entirely from
     codex.json + translations (no network). Returns
       {"entities": [entity, ...], "unresolved": [name, ...]}
@@ -673,7 +673,10 @@ def build_supergraph(names, expand=None, per_relation_cap: int = 12) -> dict:
           relation = {"field","title","total","partial","members":[leaf,...]},
           leaf     = see _leaf.
     per_relation_cap bounds each relation; an over-cap relation is truncated
-    with partial=True and the true total kept. Pure/in-memory; call via
+    with partial=True and the true total kept. The default of 24 covers every
+    boss (max 19 drops) and monster (max 16) whole; only big raids (up to 76
+    drops) truncate, and that is flagged PARTIAL. Which edges are walked is
+    fixed per category by _DEFAULT_EXPAND. Pure/in-memory; call via
     asyncio.to_thread."""
     if isinstance(names, str):
         names = [names]
@@ -686,7 +689,7 @@ def build_supergraph(names, expand=None, per_relation_cap: int = 12) -> dict:
             continue
         cat, rid = res["category"], res["id"]
         rec = codex[cat][rid]
-        fields = expand if expand is not None else _DEFAULT_EXPAND.get(cat, ())
+        fields = _DEFAULT_EXPAND.get(cat, ())
         relations = []
         for field in fields:
             raw = rec.get(field) or []

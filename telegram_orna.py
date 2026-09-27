@@ -1085,24 +1085,47 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
     return digest
 
 
-_RESEARCH_CODEX_MAX = 4500  # char budget for the codex half of the observation
+# Char budget for the codex half of the observation. Sized for a whole entity
+# at per_relation_cap=24 with FULL per-leaf stats/effects (~5.5KB worst case);
+# only a big multi-entity call or a >24-member relation trims, and then only at
+# a line boundary (see _truncate_lines).
+_RESEARCH_CODEX_MAX = 7000
+
+
+def _truncate_lines(text: str, limit: int, marker: str) -> str:
+    """Trim `text` to about `limit` chars, cutting ONLY at newline boundaries so
+    a value is never clipped mid-number ("attack 244" -> "attack 24" would be a
+    WRONG number, worse than missing), then append `marker`. Unchanged if it
+    already fits."""
+    if len(text) <= limit:
+        return text
+    kept, used = [], 0
+    for line in text.split("\n"):
+        if kept and used + len(line) + 1 > limit:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return "\n".join(kept) + marker
 
 
 def _leaf_line(m: dict) -> str:
-    """One compact analysis line for a cross-linked record."""
+    """One compact analysis line for a cross-linked record. Shows ALL stats and
+    effects - they are short and few (max 18 stats / 21 effects in the data),
+    and a "which class benefits" answer reasons over them, so a silent cap here
+    would quietly make the answer wrong."""
     slot = "/".join(x for x in (m.get("place"), m.get("item_type")) if x)
     tr = " ".join(x for x in (f"t{m['tier']}" if m.get("tier") else "", m.get("rarity") or "") if x)
     meta = ", ".join(x for x in (slot,
                                  f"useable_by={m['useable_by']}" if m.get("useable_by") else "",
                                  tr) if x)
-    stats = ", ".join(f"{k} {v}" for k, v in list((m.get("stats") or {}).items())[:10])
+    stats = ", ".join(f"{k} {v}" for k, v in (m.get("stats") or {}).items())
     bits = [f"{m['name']} [{m['category']}]"]
     if meta:
         bits.append(meta)
     if stats:
         bits.append(stats)
     if m.get("effects"):
-        bits.append("effects: " + "; ".join(m["effects"][:6]))
+        bits.append("effects: " + "; ".join(m["effects"]))
     return " — ".join(bits)
 
 
@@ -1118,7 +1141,7 @@ def _render_supergraph(bundle: dict) -> str:
         if facts.get("stats"):
             out.append("  stats: " + ", ".join(f"{k} {v}" for k, v in facts["stats"].items()))
         if facts.get("effects"):
-            out.append("  effects: " + "; ".join(facts["effects"][:8]))
+            out.append("  effects: " + "; ".join(facts["effects"]))
         if ent.get("alternatives"):
             alt = ", ".join(f"{n} [{c}]" for c, _i, n in ent["alternatives"][:5])
             out.append(f"  (note: this name also matches: {alt})")
@@ -1135,10 +1158,9 @@ def _render_supergraph(bundle: dict) -> str:
     if bundle.get("unresolved"):
         out.append("\nCould not resolve: " + ", ".join(bundle["unresolved"])
                    + " (not in the codex dump; try search_codex or a different spelling).")
-    text = "\n".join(out)
-    if len(text) > _RESEARCH_CODEX_MAX:
-        text = text[:_RESEARCH_CODEX_MAX] + "\n[…codex section truncated - PARTIAL…]"
-    return text
+    return _truncate_lines("\n".join(out), _RESEARCH_CODEX_MAX,
+                           "\n[…codex section truncated at a line boundary - PARTIAL, "
+                           "research fewer entities for the rest…]")
 
 
 async def _run_research_tool(message, action_input: str, args: Optional[dict] = None,
@@ -1164,8 +1186,8 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
     names = [n for n in names if n]
     if not names:
         return "research needs an entity name in action_input"
-    cap = args.get("per_relation_cap", 12)
-    bundle = await asyncio.to_thread(build_supergraph, names, None, cap)
+    cap = args.get("per_relation_cap", 24)
+    bundle = await asyncio.to_thread(build_supergraph, names, cap)
     codex_text = _render_supergraph(bundle)
 
     # record entities for finish() buttons + cite aussies (playorna url shape)
@@ -4480,6 +4502,19 @@ def _demo() -> None:
     asyncio.run(_run_tool(_RSpy(), "research",
                           "Fallen King Centaurus and Judge Trifecta Maximus", {}, sT.sources, sT))
     assert len(sT.viewed_entries) == 2, sT.viewed_entries
+    # research must NOT silently drop leaf stats/effects - real items have up to
+    # 18 stats / 21 effects, and a "which class benefits" answer needs them all.
+    fat = {"category": "items", "id": "x", "name": "X", "useable_by": "all_classes",
+           "place": "weapon", "item_type": "weapon", "tier": 10, "rarity": "rare",
+           "stats": {f"s{i}": i for i in range(15)}, "effects": [f"gives:E{i}" for i in range(9)]}
+    line = _leaf_line(fat)
+    assert "s14" in line and "s9" in line, "all 15 stats must show (no silent [:10] cap)"
+    assert "E8" in line, "all 9 effects must show (no silent [:6] cap)"
+    # truncation cuts at a LINE boundary, never mid-stat: "attack 244" clipped to
+    # "attack 24" would be a WRONG number, worse than missing data.
+    _orig = "• a — attack 244\n• b — magic 300\n• c — hp 500"
+    _tr = _truncate_lines(_orig, 20, "\n[MORE]")
+    assert all(ln in _orig.split("\n") for ln in _tr.split("\n[MORE]")[0].split("\n")), _tr
 
     # research is advertised in the system prompt (a tool undescribed is unused)
     _p = _orna_system_prompt("what does Fallen King Centaurus drop")
