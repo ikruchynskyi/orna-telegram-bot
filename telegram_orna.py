@@ -1066,7 +1066,7 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
         entry = {"name": detail.get("name") or url, "url": url, "tier": detail.get("tier")}
         if not any(e.get("url") == url for e in session.viewed_entries):
             session.viewed_entries.append(entry)
-    facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or [])[:8])
+    facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or []))
     digest = f"{detail.get('name')}: {facts}"
     effects = detail.get("effects") or []
     if effects:
@@ -1678,7 +1678,7 @@ async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str
     # "need at least 2" guard cleanly).
     if isinstance(item_names, str):
         item_names = [item_names]
-    names = [str(n).strip() for n in (item_names or []) if str(n).strip()][:6]
+    names = [str(n).strip() for n in (item_names or []) if str(n).strip()][:12]
     if len(names) < 2:
         return "compare needs at least 2 item names in args"
 
@@ -2432,7 +2432,7 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     passive_note = ""
     if abilities:
         passive_note += (" [class/spec abilities (not in the table, mention any that change the answer): "
-                         + "; ".join(f"{a['name']}: {a['description'][:90]}" for a in abilities[:8]) + "]")
+                         + "; ".join(f"{a['name']}: {a['description'][:400]}" for a in abilities[:20]) + "]")
     if passives:
         passive_note += (f" [conditional passives NOT in the table: {'; '.join(passives)}]"
                         + (f" [dual-wield condition {hand_note}]" if hand_note else ""))
