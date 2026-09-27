@@ -1156,6 +1156,9 @@ def _render_supergraph(bundle: dict) -> str:
             out.append("  stats: " + ", ".join(f"{k} {v}" for k, v in facts["stats"].items()))
         if facts.get("effects"):
             out.append("  effects: " + "; ".join(facts["effects"]))
+        if ent.get("bond"):        # a follower's bestial_bond, per tier
+            out.append("  Bestial Bond (what it grants when bonded):")
+            out.extend("    " + t for t in ent["bond"])
         if ent.get("alternatives"):
             alt = ", ".join(f"{n} [{c}]" for c, _i, n in ent["alternatives"][:5])
             out.append(f"  (note: this name also matches: {alt})")
@@ -2840,6 +2843,12 @@ _CONDITION_RULES = (
     'name. E.g. "which follower gives earth sigil" -> category:"followers", kind:"ability", value:"earth sigil" '
     "(Earth Sigil is a SPELL, not a status effect - this exact phrasing was previously misread as an effect and "
     "found nothing).\n"
+    '  {"kind":"bond_bonus","field":"<a follower bestial-bond passive: orn_bonus/exp_bonus/gold_bonus/luck_bonus/'
+    'ward_start/crit_chance/...>","cmp":">","value":<number, OPTIONAL>} - a FOLLOWER\'s bestial_bond BONUS: the '
+    "passive %-stat it grants when bonded. This is the THIRD bond encoding, distinct from kind:\"ability\" (its "
+    "bond SPELL grants) and kind:\"effect\" (its BOND status procs). Use it for \"which follower gives orn bonus\" "
+    '(omit value for a presence check) or "which follower gives orn bonus over 30" (cmp/value threshold). Only '
+    "followers have these.\n"
     '"combinator": "and" (default) or "or". "sort_by"/"sort_dir": for a ranking ask ("biggest mag item", "weakest '
     'defense follower") instead of (or together with) a plain filter - sort_dir "desc" for biggest/highest/best, '
     '"asc" for smallest/lowest/worst; conditions may be empty for a pure-ranking ask.'
@@ -4789,6 +4798,11 @@ def _demo() -> None:
     sessG = _RSess()
     obsG = asyncio.run(_run_tool(_RSpy(), "research", "Gilgamesh", {}, sessG.sources, sessG))
     assert "class/specialization" in obsG and "estimate_stats" in obsG, obsG[:200]
+    # research renders a follower's bestial_bond (its defining data)
+    _rb = _render_supergraph({"entities": [{"category": "followers", "id": "x", "name": "X",
+        "facts": {}, "alternatives": [], "relations": [],
+        "bond": ["tier 1: orn bonus +50, grants Rainsong"]}], "unresolved": []})
+    assert "Bestial Bond" in _rb and "orn bonus +50" in _rb, _rb
     # a real entity name can contain "," or "and" - resolve the WHOLE string
     # first, don't shred it (live bug: "Arisen Thor, the Storm God" split into a
     # wrong item + an unresolved half; "Sword and Shield" was never found).

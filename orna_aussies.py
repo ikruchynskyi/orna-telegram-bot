@@ -219,9 +219,9 @@ def _reset_memory() -> None:
     _codex()/_translations() must be listed here, or /update_codex leaves it
     serving old data (that was the _CLASS_ABILITY_INDEX bug)."""
     global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache
-    global _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES, _CLASS_ABILITY_INDEX
+    global _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES, _CLASS_ABILITY_INDEX, _BOND_BONUS_NAMES
     _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = None
-    _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = _CLASS_ABILITY_INDEX = None
+    _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = _CLASS_ABILITY_INDEX = _BOND_BONUS_NAMES = None
 
 
 def refresh_cache() -> None:
@@ -694,10 +694,10 @@ _DEFAULT_EXPAND = {
     "classes": ("skills",),
     "buildings": (),
 }
-# ponytail: bestial_bond (a follower's spell/bond grants) is a nested
-# list-of-tiers, not [cat,id] pairs, so it is not expanded here. Add it in
-# phase 2 if a request needs "which follower grants X"; the drops/skills use
-# cases this tool targets don't touch it.
+# bestial_bond (a follower's spell/bond/bonus grants) is a nested list-of-tiers,
+# NOT [cat,id] pairs, so it isn't a _DEFAULT_EXPAND edge - build_supergraph
+# summarises it separately via _bond_summary (a follower's defining data), and
+# the query bond_bonus kind filters on its BONUS passives.
 
 
 def _effect_names(record: dict) -> list:
@@ -731,6 +731,68 @@ def _leaf(category: str, rid: str) -> dict:
         "stats": dict(r.get("stats") or {}),
         "effects": _effect_names(r),
     }
+
+
+def _bond_summary(record: dict) -> list:
+    """A follower's bestial_bond as per-tier human strings, or [] if it has
+    none. Each tier lists everything it grants when bonded: an ABILITY entry is
+    a spell/skill (shown by name), a BONUS entry is a passive stat + its value
+    (orn_bonus +50, ward_start +2 turns), and a BOND/BUFF entry is a status proc
+    + its chance. This is a follower's DEFINING data, and research showed only
+    its `skills` before - see build_supergraph."""
+    status = _translations().get("status", {})
+    out = []
+    for i, tier in enumerate(record.get("bestial_bond") or [], 1):
+        parts = []
+        for e in (tier if isinstance(tier, list) else []):
+            if not isinstance(e, dict) or not e.get("name"):
+                continue
+            t, name = e.get("type"), str(e["name"])
+            if t == "ABILITY":
+                parts.append("grants " + (display_name("spells", name) or name.replace("-", " ")))
+            elif t == "BONUS":
+                v = e.get("value")
+                parts.append(f"{name.replace('_', ' ')}{(' ' + str(v)) if v else ''}".strip())
+            else:  # BOND / BUFF - a status proc
+                human = status.get(name, name.replace("_", " "))
+                chance = e.get("chance")
+                parts.append(human + (f" ({chance})" if chance else ""))
+        if parts:
+            out.append(f"tier {i}: " + ", ".join(parts))
+    return out
+
+
+_BOND_BONUS_NAMES: Optional[set] = None
+
+
+def _bond_bonus_names() -> set:
+    """Every distinct bestial_bond BONUS name across followers (orn_bonus,
+    ward_start, crit_chance, ...) - the vocabulary a kind:"bond_bonus" field
+    resolves against, discovered from the data like the stat/attr vocabularies."""
+    global _BOND_BONUS_NAMES
+    if _BOND_BONUS_NAMES is None:
+        names = set()
+        for r in _codex()["main"].get("followers", {}).values():
+            for tier in (r.get("bestial_bond") or []):
+                for e in (tier if isinstance(tier, list) else []):
+                    if isinstance(e, dict) and e.get("type") == "BONUS" and e.get("name"):
+                        names.add(str(e["name"]).lower())
+        _BOND_BONUS_NAMES = names
+    return _BOND_BONUS_NAMES
+
+
+def _resolve_bond_bonus_field(field: str) -> str:
+    """The real BONUS name a query field means ("orn bonus" -> "orn_bonus"), or
+    "" for an empty field. Exact-normalized first, then difflib against the real
+    vocabulary - same exact-then-fuzzy shape as _resolve_stat_field/_attr."""
+    if not field:
+        return ""
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    vocab = _bond_bonus_names()
+    if norm in vocab:
+        return norm
+    close = difflib.get_close_matches(norm, list(vocab), n=1, cutoff=0.75)
+    return close[0] if close else norm
 
 
 def _entity_facts(rec: dict) -> dict:
@@ -789,11 +851,26 @@ def build_supergraph(names, per_relation_cap: int = 80) -> dict:
                 "partial": len(pairs) > per_relation_cap,
                 "members": members,
             })
+        # a follower's bestial_bond is its defining data and is NOT a [cat,id]
+        # edge, so it is summarised here rather than as a relation.
+        bond = _bond_summary(rec)
+        # ~200 follower names collide with a same-named monster/boss, which
+        # outranks the follower in resolution - so "what does follower X give"
+        # lands on the monster and the bond (the whole point) is missed. When
+        # the picked entity has no bond but a same-named FOLLOWER does, show its
+        # bond too; the "also matches" note tells the model whose it is.
+        if not bond:
+            for c, i, _n in res.get("alternatives") or []:
+                if c == "followers":
+                    bond = _bond_summary(codex["followers"].get(i) or {})
+                    if bond:
+                        break
         entities.append({
             "category": cat, "id": rid, "name": res["name"],
             "facts": _entity_facts(rec),
             "alternatives": res.get("alternatives") or [],
             "relations": relations,
+            "bond": bond,
         })
     return {"entities": entities, "unresolved": unresolved}
 
@@ -827,6 +904,8 @@ def unresolvable_condition_fields(conditions: list) -> list:
             vocab = _all_attr_fields()
         elif kind == "stat" and _resolve_stat_field(field) is None:
             vocab = _all_stat_fields()
+        elif kind == "bond_bonus" and _resolve_bond_bonus_field(field) not in _bond_bonus_names():
+            vocab = _bond_bonus_names()
         else:
             continue
         norm = field.lower().replace(" ", "_").replace("-", "_")
@@ -859,6 +938,9 @@ def _eval_condition(record: dict, cond: dict) -> bool:
       {"kind": "attr", "field": "<any flat record field - tier/rarity/useable_by/
        place/type/item_type/family/element/events/tags/exotic/new/hidden/price/...>",
        "cmp": "="|">"|"<"|">="|"<=", "value": <text, number, or true/false>}
+      {"kind": "bond_bonus", "field": "<a follower bestial_bond BONUS name e.g.
+       orn_bonus/ward_start/crit_chance>", "cmp": ">"|"<"|..., "value": <number,
+       optional - omit for a presence check>}
     An unrecognised kind/field never matches (fails closed, not open)."""
     kind = cond.get("kind")
     field = cond.get("field") or ""
@@ -939,17 +1021,39 @@ def _eval_condition(record: dict, cond: dict) -> bool:
             # real codes in the same status vocabulary resolve_codes just
             # used, just reached through a different record field than
             # items' own "gives" list. type "BONUS" entries (orn_bonus,
-            # crit_chance, ...) are deliberately NOT covered here - they're
-            # named % bonuses, not status codes, so resolve_codes can never
-            # match them.
-            # ponytail: no kind covers BONUS-type bond entries yet - add a
-            # kind:"bond_bonus" (field/value against translations['bestial_bond']
-            # vocabulary) if that's ever asked for.
+            # crit_chance, ...) are NOT covered here - they're named % bonuses,
+            # not status codes, so resolve_codes can never match them; they have
+            # their own kind:"bond_bonus" branch below.
             matched = any(
                 entry.get("type") == "BOND" and entry.get("name") in codes
                 for tier in (record.get("bestial_bond") or []) for entry in tier
             )
         return matched
+
+    if kind == "bond_bonus":
+        # A follower's bestial_bond BONUS entries - the passive stats it grants
+        # when bonded (orn_bonus, ward_start, crit_chance, ...). Distinct from
+        # the "ability" branch (its bond SPELL grants) and the "effect" branch
+        # (its BOND status procs); this is the third bond encoding, which had no
+        # kind before (the ponytail note in the effect branch). field names the
+        # bonus; an optional value/cmp thresholds its amount, else it is a
+        # presence check ("which follower gives orn bonus").
+        wanted = _resolve_bond_bonus_field(field)
+        target = _parse_number(cond.get("value"))
+        op = _CMP_OPS.get(cond.get("cmp", ">"))
+        for tier in (record.get("bestial_bond") or []):
+            for e in (tier if isinstance(tier, list) else []):
+                if not isinstance(e, dict) or e.get("type") != "BONUS":
+                    continue
+                nm = str(e.get("name", "")).lower()
+                if wanted and nm != wanted and wanted not in nm:
+                    continue
+                if target is None:            # presence of the named (or any) bonus
+                    return True
+                val = _parse_number(e.get("value"))
+                if val is not None and op is not None and op(val, target):
+                    return True
+        return False
 
     if kind == "attr":
         real_field = field if field in record else _resolve_attr_field(field)
@@ -1177,6 +1281,27 @@ def _demo() -> None:
     # effect code with no status entry falls back to the raw code
     assert _effect_names({"gives": [{"name": "totally_made_up_code"}]}) == ["gives:totally_made_up_code"]
     assert _effect_names({"immunities": [{"name": "blind"}]}) == ["immunities:Blind"]
+
+    # bestial_bond: the research summary + the query bond_bonus kind. Pick a
+    # follower (from live data, not hardcoded) that has a BONUS entry AND whose
+    # name resolves back to a follower, so the research assert is meaningful.
+    _fol = None
+    for _rid, _r in _codex()["main"]["followers"].items():
+        _bn = [e["name"] for tier in (_r.get("bestial_bond") or []) for e in tier
+               if isinstance(e, dict) and e.get("type") == "BONUS" and e.get("name")]
+        _nm = display_name("followers", _rid)
+        if _bn and resolve_entity(_nm).get("category") == "followers":
+            _fol = ({**_r, "id": _rid, "category": "followers"}, _bn[0], _nm)
+            break
+    assert _fol, "no follower with a BONUS bond entry resolves cleanly"
+    _rec, _bonus, _nm = _fol
+    assert _bond_summary(_rec) and any(s.startswith("tier ") for s in _bond_summary(_rec)), _bond_summary(_rec)
+    assert _eval_condition(_rec, {"kind": "bond_bonus", "field": _bonus})            # presence
+    assert not _eval_condition(_rec, {"kind": "bond_bonus", "field": "zzz_no_such_bonus"})
+    assert unresolvable_condition_fields([{"kind": "bond_bonus", "field": "zzz_no_such_bonus"}])
+    assert unresolvable_condition_fields([{"kind": "bond_bonus", "field": _bonus}]) == []
+    _sg = build_supergraph(_nm)
+    assert _sg["entities"] and _sg["entities"][0].get("bond"), "research must bundle a follower's bestial_bond"
 
     # /update_codex safety: an empty/partial dump is REJECTED (never cached), a
     # real one passes, and refresh drops EVERY derived cache (a missing one -
