@@ -598,6 +598,121 @@ def resolve_entity(name: str) -> dict:
     }
 
 
+# Every one of these edge fields is a list of [category, id] cross-links in
+# codex.json (verified live). The default expand set is category-aware.
+_GRAPH_EDGES = ("drops", "skills", "dropped_by", "upgrade_materials",
+                "used_by", "learned_by")
+_DEFAULT_EXPAND = {
+    "raids": ("drops", "skills"),
+    "bosses": ("drops", "skills"),
+    "monsters": ("drops", "skills"),
+    "dungeons": ("drops",),
+    "items": ("dropped_by", "upgrade_materials"),
+    "followers": ("skills",),
+    "spells": ("learned_by", "used_by"),
+    "classes": ("skills",),
+    "buildings": (),
+}
+# ponytail: bestial_bond (a follower's spell/bond grants) is a nested
+# list-of-tiers, not [cat,id] pairs, so it is not expanded here. Add it in
+# phase 2 if a request needs "which follower grants X"; the drops/skills use
+# cases this tool targets don't touch it.
+
+
+def _effect_names(record: dict) -> list:
+    """Human effect labels from a record's causes/gives/immunities/cures
+    lists. Each entry is {"name": <status-code>, "chance"?: "10%"}; the code
+    is humanized via translations['status'], falling back to the raw code so
+    an unknown code degrades to text rather than crashing."""
+    status = _translations().get("status", {})
+    out = []
+    for field in ("causes", "gives", "immunities", "cures"):
+        for e in record.get(field) or []:
+            code = e.get("name") if isinstance(e, dict) else e
+            if not code:
+                continue
+            human = status.get(code, code)
+            chance = e.get("chance") if isinstance(e, dict) else None
+            out.append(f"{field}:{human}" + (f"({chance})" if chance else ""))
+    return out
+
+
+def _leaf(category: str, rid: str) -> dict:
+    """Compact analysis view of one cross-linked record. A dangling id (not in
+    the dump) degrades to just its id as the name, empty everything else."""
+    r = _codex()["main"].get(category, {}).get(rid) or {}
+    return {
+        "category": category, "id": rid,
+        "name": display_name(category, rid) or rid,
+        "useable_by": r.get("useable_by"),
+        "place": r.get("place"), "item_type": r.get("item_type"),
+        "tier": r.get("tier"), "rarity": r.get("rarity"),
+        "stats": dict(r.get("stats") or {}),
+        "effects": _effect_names(r),
+    }
+
+
+def _entity_facts(rec: dict) -> dict:
+    facts = {}
+    for k in ("tier", "rarity", "hp", "place", "item_type", "useable_by", "events"):
+        v = rec.get(k)
+        if v not in (None, "", [], {}):
+            facts[k] = v
+    if rec.get("stats"):
+        facts["stats"] = dict(rec["stats"])
+    eff = _effect_names(rec)
+    if eff:
+        facts["effects"] = eff
+    return facts
+
+
+def build_supergraph(names, expand=None, per_relation_cap: int = 12) -> dict:
+    """One-level subgraph for one or more entity names, built entirely from
+    codex.json + translations (no network). Returns
+      {"entities": [entity, ...], "unresolved": [name, ...]}
+    where entity = {"category","id","name","facts":dict,
+                    "alternatives":[(cat,id,name)],"relations":[relation,...]},
+          relation = {"field","title","total","partial","members":[leaf,...]},
+          leaf     = see _leaf.
+    per_relation_cap bounds each relation; an over-cap relation is truncated
+    with partial=True and the true total kept. Pure/in-memory; call via
+    asyncio.to_thread."""
+    if isinstance(names, str):
+        names = [names]
+    entities, unresolved = [], []
+    codex = _codex()["main"]
+    for name in names:
+        res = resolve_entity(name)
+        if "id" not in res:
+            unresolved.append(name)
+            continue
+        cat, rid = res["category"], res["id"]
+        rec = codex[cat][rid]
+        fields = expand if expand is not None else _DEFAULT_EXPAND.get(cat, ())
+        relations = []
+        for field in fields:
+            raw = rec.get(field) or []
+            pairs = [(x[0], x[1]) for x in raw
+                     if isinstance(x, (list, tuple)) and len(x) == 2]
+            if not pairs:
+                continue
+            members = [_leaf(c, i) for c, i in pairs[:per_relation_cap]]
+            relations.append({
+                "field": field,
+                "title": field.replace("_", " ").title(),
+                "total": len(pairs),
+                "partial": len(pairs) > per_relation_cap,
+                "members": members,
+            })
+        entities.append({
+            "category": cat, "id": rid, "name": res["name"],
+            "facts": _entity_facts(rec),
+            "alternatives": res.get("alternatives") or [],
+            "relations": relations,
+        })
+    return {"entities": entities, "unresolved": unresolved}
+
+
 def unresolvable_condition_fields(conditions: list) -> list:
     """Which of `conditions`' field names resolve to nothing, as
     [(kind, field, [suggestions])].
@@ -943,6 +1058,40 @@ def _demo() -> None:
     assert any(c == "followers" for c, _i, _n in amb.get("alternatives", [])), amb
     # nothing resolvable -> unresolved, no crash
     assert resolve_entity("zzzptqx no such entity").get("unresolved"), resolve_entity("zzzptqx no such entity")
+
+    # --- research supergraph: builder ---
+    g = build_supergraph("Fallen King Centaurus")
+    ent = g["entities"][0]
+    assert ent["category"] == "raids" and not g["unresolved"], g
+    assert ent["facts"].get("hp") and ent["facts"].get("tier") == 10, ent["facts"]
+    rels = {r["field"]: r for r in ent["relations"]}
+    drops = rels["drops"]
+    assert drops["total"] >= 6 and not drops["partial"], drops
+    assert all(m["useable_by"] for m in drops["members"]), drops["members"]
+    assert all(m["stats"] for m in drops["members"]), "each drop must carry stats"
+    bow = next(m for m in drops["members"] if m["name"] == "Cretan Compound Bow")
+    assert "attack" in bow["stats"], bow
+    assert any("Crit" in e for e in bow["effects"]), bow["effects"]      # gives:T. Crit ↑
+    helm = next(m for m in drops["members"] if m["name"] == "Horned Corinthian Helmet")
+    assert any("Blind" in e for e in helm["effects"]), helm["effects"]   # immunities:Blind
+    assert rels["skills"]["total"] >= 6, rels["skills"]
+    # oversized relation -> capped + PARTIAL with the true total
+    capped = build_supergraph("Fallen King Centaurus", per_relation_cap=2)
+    cdrops = {r["field"]: r for r in capped["entities"][0]["relations"]}["drops"]
+    assert cdrops["partial"] and cdrops["total"] >= 6 and len(cdrops["members"]) == 2, cdrops
+    # multi-entity bundles both
+    two = build_supergraph(["Fallen King Centaurus", "Cretan Compound Bow"])
+    assert len(two["entities"]) == 2, two
+    # not in the dump -> unresolved, no crash
+    miss = build_supergraph("zzzptqx no such entity")
+    assert miss["unresolved"] == ["zzzptqx no such entity"] and not miss["entities"], miss
+    # malformed edge / missing target must not crash: a dangling id degrades to
+    # an empty leaf (display_name titleizes the unknown id, stats/effects empty)
+    dangling = _leaf("items", "does-not-exist")
+    assert dangling["stats"] == {} and dangling["effects"] == [] and dangling["name"], dangling
+    # effect code with no status entry falls back to the raw code
+    assert _effect_names({"gives": [{"name": "totally_made_up_code"}]}) == ["gives:totally_made_up_code"]
+    assert _effect_names({"immunities": [{"name": "blind"}]}) == ["immunities:Blind"]
 
     print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
 
