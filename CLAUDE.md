@@ -57,7 +57,7 @@ glue around three live, unmocked external services.
   instead of guessing. Also cached to disk (`.aussies_cache/`), 24h TTL.
   See the `/orna` section.
 - `telegram_orna.py` — `/orna <text>`, a real ReAct loop (today/next/need/
-  search_codex/query/events/open_entry/calculate/assess/compare/
+  search_codex/query/events/open_entry/research/calculate/assess/compare/
   build_optimize/towers/class_guide/knowledge_search/web_search/ask/finish
   tools) over Orna's data. See its own section below — this is now the
   second most complex module in the repo after `telegram_go.py`, and
@@ -1897,6 +1897,67 @@ explicit ask 2026-09-24. What gets cited, and why not everything:
 - `_SOURCES` is keyed by sid but kept OUT of `_ORNA_SESSIONS`, which is
   pruned after `SESSION_TTL_SECONDS` (15 min) while a posted answer stays in
   the chat forever - tapping the button an hour later should still work.
+
+### `research` - one-call supergraph, `codex.json`-first
+
+The loop used to gather a subgraph one entity per tool call: to answer "what
+does Fallen King Centaurus drop and which class benefits from those items?" it
+`open_entry`'d the raid (1 network call), read the six drop names, then
+`open_entry`'d each of the six items (six more network calls) for their stats -
+~7 network round-trips and ~7 LLM steps, which blew the step/wall-clock budget
+so the bot **failed to answer a question whose data it already had on disk**.
+`research` (`_run_research_tool` → `orna_aussies.build_supergraph` +
+`_render_supergraph`) returns the whole subgraph in ONE call so the model
+reasons over everything on the first iteration - fewer paid LLM calls, and no
+"answer assembled datum-by-datum" degradation (the design ask, 2026-09-27; see
+`docs/superpowers/specs|plans/2026-09-27-orna-research-supergraph*`).
+
+- **It is built entirely from the local `codex.json` + `translations.en.json`,
+  zero network.** The dump holds every entity BY ID (including event raids like
+  Fallen King Centaurus), and every cross-link edge (`raids.drops`,
+  `monsters.skills`, `items.dropped_by`/`upgrade_materials`, `spells.used_by`/
+  `learned_by`) is a list of `[category, id]` pairs. `build_supergraph`
+  resolves a name → `(category, id)`, walks that category's default edge set
+  (`_DEFAULT_EXPAND`) one level, and joins each target to a compact leaf
+  (`_leaf`: name, `useable_by`, place/item_type, tier/rarity, stats, effects).
+- **Records carry NO `name` in `codex.json` - names live in
+  `translations.en.json`** (the same reason a name-grep of the dump "misses"
+  an entry that is really there). `resolve_entity` therefore builds a reverse
+  `name→[(cat,id)]` index over `display_name`, falls back to `fuzzy_codex_name`
+  for a typo/transliteration, and for a name that spans categories (200 do,
+  e.g. "aaru cobra" is a monster AND a follower) returns the priority-ordered
+  pick (`_CATEGORY_PRIORITY`, fightable-thing first) with the rest in
+  `alternatives` - surfaced in the observation, never a silent mispick and
+  never a second round-trip.
+- **Effects are humanized via `translations['status']`** (`t__crit_u` → "T.
+  Crit ↑", `blind` → "Blind"), falling back to the raw code so an unknown one
+  degrades to text rather than crashing.
+- **Honest caps:** each relation is capped (`per_relation_cap`, default 12) and
+  an over-cap relation is marked `PARTIAL` with the true total - the same
+  "never let a truncation look complete" rule as `_names_observation`. A
+  dangling edge target (id not in the dump) degrades to an empty leaf, no
+  crash.
+- **The knowledge half reuses `_gather_knowledge`** - the exact 7-corpus
+  aggregation `knowledge_search` uses, extracted so there is no second copy -
+  driven by the resolved subject, so a "how do I beat X" `research` call
+  carries the Monster-Data elemental immunities and **satisfies
+  `_STRATEGY_RULE` in one call** (the prompt says to prefer it there over
+  `knowledge_search` + N `open_entry`).
+- **Posts no per-entity cards** (same `post=False` spirit as `open_entry`
+  today); the touched entities are recorded on `session.viewed_entries` so
+  `finish()` offers buttons to open any of them. Multi-entity requests bundle
+  every subject in one observation (`args.entities`, or a comma/"and"/"та"
+  split of `action_input`).
+- **Added alongside** `open_entry`/`search_codex`/`query`, not replacing them -
+  they still serve browsing and single lookups; `research` is the prompt's
+  DEFAULT for analytical/comparative/"how to beat" questions.
+- **`# ponytail:` phase-2 gaps** (deliberately not built): `bestial_bond`
+  (follower spell/bond grants, a nested list-of-tiers not `[cat,id]` pairs) is
+  not expanded; depth is fixed at 1; there is no playorna fallback for an
+  entity genuinely absent from the dump (it is reported unresolved instead).
+  Pinned by `orna_aussies._demo` (the centaurus raid: ≥6 drops each with stats
+  + useable_by, ≥6 skills, the cap/PARTIAL and ambiguity cases) and Tier-0
+  `research-supergraph` in `orna_test_suite.py`.
 
 ### `knowledge_search` and `web_search` - the codex genuinely doesn't know everything
 
