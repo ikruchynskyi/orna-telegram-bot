@@ -281,6 +281,17 @@ def _check_mechanics_wired_into_loop() -> None:
     assert "+1%" in T.orna_mechanics.search("ascension level"), "AL scaling must be findable"
 
 
+def _check_research_supergraph() -> None:
+    """The reported failure: a raid's drops WITH their stats must come back in
+    ONE local call (no per-drop open_entry), and the tool must be wired into
+    the loop's action set."""
+    g = orna_aussies.build_supergraph("Fallen King Centaurus")
+    ent = g["entities"][0]
+    drops = {r["field"]: r for r in ent["relations"]}["drops"]
+    assert drops["total"] >= 6 and all(m["useable_by"] and m["stats"] for m in drops["members"]), drops
+    assert "research" in T._ACTIONS and "research" in [t["function"]["name"] for t in T._STEP_TOOLS]
+
+
 def _check_ban_guard() -> None:
     """Ban/unban round-trip, persistence, and the pre-dispatch guard.
 
@@ -344,6 +355,7 @@ TIER0 = [
     ("towers-consistent", _check_towers_are_self_consistent),
     ("corpora-vs-towers", _check_corpora_do_not_contradict_towers),
     ("mechanics-wired", _check_mechanics_wired_into_loop),
+    ("research-supergraph", _check_research_supergraph),
     ("echo-corpus", lambda: orna_echo._demo()),
     ("ban-guard", _check_ban_guard),
 ]
