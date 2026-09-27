@@ -1061,7 +1061,12 @@ request from a stuck one. `_Status` sends ONE message on the first update
 ("🤔 Думаю…"), EDITS it in place for each step ("🔎 Шукаю в кодексі…",
 "📚 Читаю гайд…", from `_ACTION_LABELS`), and DELETES it when the request
 ends, so a finished conversation reads exactly as it did before this
-existed. Added 2026-09-24 on ask.
+existed. Added 2026-09-24 on ask. Each step's line also shows the tool's key
+ARGUMENT (`_status_detail`): "🔎 Шукаю в кодексі… «Fallen King Centaurus»",
+"🔎 Підбираю за характеристиками… «followers, orn_bonus»" - so the user (and an
+admin reading over their shoulder) sees WHAT is being looked up, not just that
+something is. `research`/`estimate_stats` got their own labels here too (they
+fell to the generic "⏳ Працюю…" before).
 - **Edit one message, never send per step.** A line per step is precisely
   the scrollback spam that dead-end tool messages already had to be removed
   for (see the loop's session notes above).

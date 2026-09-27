@@ -3616,8 +3616,49 @@ _ACTION_LABELS = {
     "knowledge_search": "📚 Шукаю в базі знань…",
     "releases": "🆕 Перевіряю патч-ноти…",
     "web_search": "🌐 Шукаю в інтернеті…",
+    "research": "🔗 Збираю дані з кодексу…",
+    "estimate_stats": "📊 Рахую характеристики…",
 }
 _THINKING_LABEL = "🤔 Думаю…"
+
+
+def _status_detail(action: str, action_input: str, args: dict) -> str:
+    """A short, human summary of WHAT a step is doing - its key argument(s) - to
+    append to the action label in the ephemeral status, so the user (and an
+    admin watching the log) sees the tool AND what it was called with, not just
+    "searching…". Best-effort and capped; purely cosmetic (the status message is
+    deleted when the request ends), so it never needs to be exhaustive."""
+    args = args or {}
+
+    def clip(s, n=64):
+        s = " ".join(str(s).split())
+        return s if len(s) <= n else s[:n - 1] + "…"
+
+    if action == "query":
+        conds = args.get("conditions") or []
+        first = conds[0] if conds and isinstance(conds[0], dict) else {}
+        cond = " ".join(str(first.get(k)) for k in ("field", "cmp", "value")
+                        if first.get(k) not in (None, ""))
+        extra = f" +{len(conds) - 1}" if len(conds) > 1 else ""
+        return clip(", ".join(p for p in (args.get("category"), cond + extra) if p))
+    if action == "assess":
+        return clip(" ".join(str(args.get(k)) for k in ("item", "quality") if args.get(k)))
+    if action == "compare":
+        items = args.get("items") or []
+        return clip(", ".join(map(str, items)) if isinstance(items, list) else items)
+    if action == "build_optimize":
+        return clip(args.get("stat", ""))
+    if action == "estimate_stats":
+        return clip(" ".join(str(args.get(k)) for k in ("specialization", "class", "ascension_level")
+                             if args.get(k) not in (None, "")))
+    if action == "research":
+        ents = args.get("entities")
+        return clip(", ".join(map(str, ents)) if isinstance(ents, list) and ents else action_input)
+    if action == "class_guide":
+        return clip(" ".join(str(args.get(k)) for k in ("topic", "query") if args.get(k)))
+    # search_codex / open_entry / knowledge_search / web_search / releases /
+    # need / next / calculate: the free-text input carries the argument.
+    return clip(action_input)
 
 
 async def _advance(sid: str, message, with_status: bool = True) -> None:
@@ -3904,7 +3945,9 @@ async def _advance_inner(sid: str, message) -> None:
             return
 
         if session.status is not None:
-            await session.status.update(_ACTION_LABELS.get(action, "⏳ Працюю…"))
+            _label = _ACTION_LABELS.get(action, "⏳ Працюю…")
+            _detail = _status_detail(action, action_input, args)
+            await session.status.update(f"{_label} «{_detail}»" if _detail else _label)
         session.messages.append({"role": "assistant", "content": json.dumps(step)})
         sig = json.dumps([action, action_input, args], sort_keys=True, ensure_ascii=False)
         if sig in session.seen_calls:
@@ -4843,6 +4886,13 @@ def _demo() -> None:
     for _q in ("when does the event end", "thanks, and when does it end",
                "last martyr", "балоріт 100"):
         assert not _is_pleasantry(_q), _q
+    # ephemeral status shows the tool's key argument, not just "searching…"
+    assert _status_detail("search_codex", "Judge Trifecta Falx", {}) == "Judge Trifecta Falx"
+    assert _status_detail("research", "", {"entities": ["Fallen King Centaurus", "X"]}).startswith("Fallen King Centaurus")
+    assert _status_detail("query", "", {"category": "items",
+        "conditions": [{"field": "magic", "cmp": ">", "value": 250}]}) == "items, magic > 250"
+    assert _status_detail("assess", "", {"item": "Lost Helmet", "quality": "185%"}) == "Lost Helmet 185%"
+    assert _status_detail("towers", "", {}) == ""       # no args -> label only
     # a real entity name can contain "," or "and" - resolve the WHOLE string
     # first, don't shred it (live bug: "Arisen Thor, the Storm God" split into a
     # wrong item + an unresolved half; "Sword and Shield" was never found).
