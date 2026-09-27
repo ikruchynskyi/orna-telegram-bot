@@ -144,8 +144,8 @@ def refetch_now() -> dict:
 
 def refresh_cache() -> None:
     """Force a re-download next time either file is needed."""
-    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache, _attr_field_cache
-    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = _attr_field_cache = None
+    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES
+    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = None
     for name in ("codex.json", "translations.en.json"):
         _cache_path(name).unlink(missing_ok=True)
 
@@ -548,6 +548,56 @@ def fuzzy_codex_name(query: str, cutoff: float = 0.72) -> str:
     return ""
 
 
+_NAME_INDEX: Optional[dict] = None  # name.lower() -> [(category, id), ...]
+
+# For a name that spans categories, a bare mention most often means the
+# fightable thing ("how do I beat / what drops X") over an item of the same
+# name; items next; the rest after.
+_CATEGORY_PRIORITY = ("raids", "bosses", "monsters", "items", "followers",
+                      "spells", "classes", "dungeons", "buildings")
+
+
+def _name_index() -> dict:
+    """name.lower() -> [(category, id), ...], built once from codex.json +
+    translations. Records carry no name in codex.json (names live in
+    translations), so this is the reverse of display_name over every record."""
+    global _NAME_INDEX
+    if _NAME_INDEX is None:
+        idx: dict = {}
+        for category, records in _codex()["main"].items():
+            for rid in records:
+                nm = display_name(category, rid)
+                if nm:
+                    idx.setdefault(nm.lower(), []).append((category, rid))
+        _NAME_INDEX = idx
+    return _NAME_INDEX
+
+
+def resolve_entity(name: str) -> dict:
+    """Resolve a display name to a codex (category, id), entirely from the
+    local dump (no network). Exact name first, then fuzzy_codex_name for a
+    typo/transliteration. A name in several categories returns the
+    priority-ordered pick with the rest in `alternatives`, so the caller can
+    note them without a second round-trip. Nothing resolvable -> {"unresolved": name}."""
+    q = (name or "").strip()
+    if not q:
+        return {"unresolved": name}
+    hits = _name_index().get(q.lower())
+    if not hits:
+        fuzzy = fuzzy_codex_name(q)
+        if fuzzy:
+            hits = _name_index().get(fuzzy.lower())
+    if not hits:
+        return {"unresolved": name}
+    ordered = sorted(hits, key=lambda ci: _CATEGORY_PRIORITY.index(ci[0])
+                     if ci[0] in _CATEGORY_PRIORITY else 99)
+    cat, rid = ordered[0]
+    return {
+        "category": cat, "id": rid, "name": display_name(cat, rid) or rid,
+        "alternatives": [(c, i, display_name(c, i) or i) for c, i in ordered[1:]],
+    }
+
+
 def unresolvable_condition_fields(conditions: list) -> list:
     """Which of `conditions`' field names resolve to nothing, as
     [(kind, field, [suggestions])].
@@ -880,6 +930,19 @@ def _demo() -> None:
     # ...while an explicit all_classes item still does
     assert _eval_condition({"category": "items", "id": "y", "name": "Y", "useable_by": "all_classes"},
                            {"kind": "attr", "field": "useable_by", "cmp": "=", "value": "mage"})
+
+    # --- research supergraph: name resolution ---
+    r = resolve_entity("Fallen King Centaurus")
+    assert r.get("category") == "raids" and r.get("id") == "fallen-king-centaurus", r
+    # typo/transliteration recovered via fuzzy_codex_name
+    assert resolve_entity("Fallen King Centaurs").get("id") == "fallen-king-centaurus", \
+        resolve_entity("Fallen King Centaurs")
+    # a name spanning categories picks by priority and surfaces the rest
+    amb = resolve_entity("aaru cobra")
+    assert amb.get("category") == "monsters", amb          # monsters outranks followers
+    assert any(c == "followers" for c, _i, _n in amb.get("alternatives", [])), amb
+    # nothing resolvable -> unresolved, no crash
+    assert resolve_entity("zzzptqx no such entity").get("unresolved"), resolve_entity("zzzptqx no such entity")
 
     print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
 
