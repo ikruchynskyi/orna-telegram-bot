@@ -74,6 +74,7 @@ from orna_aussies import has_aussies_page
 from orna_aussies import fuzzy_codex_name
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
 from orna_aussies import unresolvable_condition_fields
+from orna_aussies import build_supergraph
 from orna_aussies import class_abilities as orna_aussies_class_abilities
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
@@ -135,8 +136,8 @@ MAX_CLOUD_CALLS = 20
 ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
-_ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "calculate", "assess",
-            "compare", "build_optimize", "estimate_stats", "towers", "class_guide", "knowledge_search",
+_ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "research", "calculate",
+            "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide", "knowledge_search",
             "releases", "web_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
@@ -1082,6 +1083,101 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
             names += f" (+{len(entries) - 10} more)"
         digest += f" | {section.get('title', '?')}: {names}"
     return digest
+
+
+_RESEARCH_CODEX_MAX = 4500  # char budget for the codex half of the observation
+
+
+def _leaf_line(m: dict) -> str:
+    """One compact analysis line for a cross-linked record."""
+    slot = "/".join(x for x in (m.get("place"), m.get("item_type")) if x)
+    tr = " ".join(x for x in (f"t{m['tier']}" if m.get("tier") else "", m.get("rarity") or "") if x)
+    meta = ", ".join(x for x in (slot,
+                                 f"useable_by={m['useable_by']}" if m.get("useable_by") else "",
+                                 tr) if x)
+    stats = ", ".join(f"{k} {v}" for k, v in list((m.get("stats") or {}).items())[:10])
+    bits = [f"{m['name']} [{m['category']}]"]
+    if meta:
+        bits.append(meta)
+    if stats:
+        bits.append(stats)
+    if m.get("effects"):
+        bits.append("effects: " + "; ".join(m["effects"][:6]))
+    return " — ".join(bits)
+
+
+def _render_supergraph(bundle: dict) -> str:
+    """One structured observation from build_supergraph's dict. Honest about
+    caps (PARTIAL) and unresolved names; bounded to _RESEARCH_CODEX_MAX."""
+    out = ["RESEARCH SUPERGRAPH (from local codex.json, zero network):"]
+    for ent in bundle.get("entities", []):
+        facts = ent.get("facts", {})
+        fbits = [f"{k}={facts[k]}" for k in
+                 ("tier", "rarity", "hp", "place", "item_type", "useable_by", "events") if k in facts]
+        out.append(f"\n{ent['name']} [{ent['category']}]" + (" — " + ", ".join(fbits) if fbits else ""))
+        if facts.get("stats"):
+            out.append("  stats: " + ", ".join(f"{k} {v}" for k, v in facts["stats"].items()))
+        if facts.get("effects"):
+            out.append("  effects: " + "; ".join(facts["effects"][:8]))
+        if ent.get("alternatives"):
+            alt = ", ".join(f"{n} [{c}]" for c, _i, n in ent["alternatives"][:5])
+            out.append(f"  (note: this name also matches: {alt})")
+        for rel in ent.get("relations", []):
+            head = f"  {rel['title']} ({rel['total']}"
+            head += f", showing first {len(rel['members'])}, PARTIAL" if rel["partial"] else ""
+            head += "):"
+            out.append(head)
+            # skills are spells with no useable_by/stats worth a full line -> names only
+            if rel["field"] == "skills":
+                out.append("    " + ", ".join(m["name"] for m in rel["members"]))
+            else:
+                out.extend("    • " + _leaf_line(m) for m in rel["members"])
+    if bundle.get("unresolved"):
+        out.append("\nCould not resolve: " + ", ".join(bundle["unresolved"])
+                   + " (not in the codex dump; try search_codex or a different spelling).")
+    text = "\n".join(out)
+    if len(text) > _RESEARCH_CODEX_MAX:
+        text = text[:_RESEARCH_CODEX_MAX] + "\n[…codex section truncated - PARTIAL…]"
+    return text
+
+
+async def _run_research_tool(message, action_input: str, args: Optional[dict] = None,
+                             sources: Optional[list] = None, session=None) -> str:
+    """One-call supergraph for analytical questions: the entity, its drops/
+    skills/upgrade-materials with each leaf's stats/useable_by/effects, PLUS
+    the related community knowledge - so the model reasons over the whole
+    subject in one step instead of chaining open_entry per drop. The codex
+    half is fully local (build_supergraph reads only codex.json/translations).
+    Posts no per-entity cards; finish() offers buttons to open any of them."""
+    args = args or {}
+    names = args.get("entities")
+    if not names:
+        raw = (action_input or "").strip()
+        # a comma / "and" / "та" separated subject is several entities
+        names = [p.strip() for p in re.split(r",| and | та ", raw) if p.strip()] or [raw]
+    names = [n for n in names if n]
+    if not names:
+        return "research needs an entity name in action_input"
+    cap = args.get("per_relation_cap", 12)
+    bundle = await asyncio.to_thread(build_supergraph, names, None, cap)
+    codex_text = _render_supergraph(bundle)
+
+    # record entities for finish() buttons + cite aussies (playorna url shape)
+    for ent in bundle.get("entities", []):
+        url = f"/codex/{ent['category']}/{ent['id']}/"
+        if session is not None and isinstance(getattr(session, "viewed_entries", None), list):
+            if not any(e.get("url") == url for e in session.viewed_entries):
+                session.viewed_entries.append({"name": ent["name"], "url": url,
+                                               "tier": ent["facts"].get("tier")})
+        if sources is not None and has_aussies_page(ent["category"]):
+            _add_source(sources, ent["name"], build_aussies_url(ent["category"], ent["id"]))
+
+    # knowledge half - the same aggregation knowledge_search uses (best effort)
+    subject = action_input or names[0]
+    knowledge = await _gather_knowledge(subject, sources)
+    if knowledge:
+        return codex_text + "\n\nCOMMUNITY KNOWLEDGE:\n" + knowledge
+    return codex_text
 
 
 _QUALITY_NAME_TO_PERCENT = {
@@ -3207,6 +3303,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_events_tool(message, action_input)
         if action == "open_entry":
             return await _run_open_entry_tool(message, action_input, sources, session)
+        if action == "research":
+            return await _run_research_tool(message, action_input, args, sources, session)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
         if action == "estimate_stats":
@@ -4322,6 +4420,35 @@ def _demo() -> None:
     kg = asyncio.run(_gather_knowledge("factions"))
     assert "GAME MECHANICS" in kg, kg[:200]                 # mechanics corpus still wired
     assert asyncio.run(_gather_knowledge("xyzzy plugh frobnicate")) == ""   # honest empty
+
+    # --- research tool: wiring + one-call observation ---
+    # Self-contained stubs (the _Spy/_Sess names above are shadowed by later
+    # redefinitions in this _demo, so define fresh ones here).
+    class _RSpy:
+        def __init__(self): self.sent = []
+        def __getattr__(self, name):
+            async def rec(*a, **k): self.sent.append(name); return None
+            return rec
+    class _RSess:
+        def __init__(self): self.viewed_entries = []; self.sources = []
+
+    assert "research" in _ACTIONS
+    assert "research" in [t["function"]["name"] for t in _STEP_TOOLS]
+    spyR, sessR = _RSpy(), _RSess()
+    obsR = asyncio.run(_run_tool(spyR, "research", "Fallen King Centaurus", {}, sessR.sources, sessR))
+    assert "Cretan Compound Bow" in obsR and "useable_by=all_classes" in obsR, obsR[:400]
+    assert "Drops" in obsR and "Skills" in obsR, obsR[:400]
+    assert spyR.sent == [], f"research must post nothing, sent {spyR.sent}"
+    assert sessR.viewed_entries, "research must record entities for finish() buttons"
+    # capped relation is marked PARTIAL, never reads complete
+    sessC = _RSess()
+    obsR2 = asyncio.run(_run_tool(_RSpy(), "research", "Fallen King Centaurus",
+                                  {"per_relation_cap": 2}, sessC.sources, sessC))
+    assert "PARTIAL" in obsR2, obsR2[:400]
+    # unresolved subject is honest, no crash
+    sessU = _RSess()
+    obsR3 = asyncio.run(_run_tool(_RSpy(), "research", "zzzptqx nothing here", {}, sessU.sources, sessU))
+    assert "could not resolve" in obsR3.lower(), obsR3[:200]
 
     print("telegram_orna: all checks passed")
 
