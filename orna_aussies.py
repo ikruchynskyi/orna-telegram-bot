@@ -84,26 +84,87 @@ def _cache_path(name: str) -> Path:
     return CACHE_DIR / name
 
 
-def _fetch_json(url: str, cache_name: str) -> dict:
-    path = _cache_path(cache_name)
-    if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL_SECONDS:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            # A cache file truncated by a crash/kill mid-write (this repo
-            # reloads via launchctl often) would otherwise raise an uncaught
-            # JSONDecodeError on every call until the week-long TTL expires -
-            # treat an unreadable cache as a miss and re-fetch instead.
-            logger.warning("aussies: cache %s unreadable, refetching", cache_name)
+def _sane_codex(data: object) -> bool:
+    """A codex.json dump is usable only if it has the category dicts the whole
+    module indexes into, with the big one populated. Guards against a patch-day
+    HTTP 200 that returns an empty or half-written {"main": {}} - which would
+    make resolve/research/query/estimate all silently find nothing and, if
+    cached, stay broken for a WEEK. ~2764 items live; the floor catches a gutted
+    dump while allowing the roster to grow or shrink with a patch."""
+    main = data.get("main") if isinstance(data, dict) else None
+    if not isinstance(main, dict):
+        return False
+    needed = ("items", "monsters", "bosses", "raids", "followers", "classes", "spells")
+    if not all(isinstance(main.get(c), dict) and main.get(c) for c in needed):
+        return False
+    return len(main.get("items") or {}) >= 1000
+
+
+def _sane_translations(data: object) -> bool:
+    """translations.en.json is usable only with its name table plus the stats
+    and status vocabularies - display_name, effect resolution and the stat/attr
+    field resolvers all read these."""
+    if not isinstance(data, dict):
+        return False
+    return all(isinstance(data.get(k), dict) and data.get(k) for k in ("main", "stats", "status"))
+
+
+def _download(url: str) -> dict:
     resp = httpx.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
-    data = resp.json()
+    return resp.json()
+
+
+def _read_cache(cache_name: str) -> Optional[dict]:
+    """The on-disk cache, or None if absent/unreadable (a file truncated by a
+    crash/kill mid-write - this repo reloads via launchctl often)."""
+    path = _cache_path(cache_name)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        logger.warning("aussies: cache %s unreadable", cache_name)
+        return None
+
+
+def _write_cache(cache_name: str, data: dict) -> None:
+    """Atomic write (temp then rename), so a crash mid-write can't leave a
+    half-written, unparseable cache file behind for the read path."""
     CACHE_DIR.mkdir(exist_ok=True)
-    # Atomic write (temp then rename) so a crash mid-write can't leave a
-    # half-written, unparseable cache file behind for the read path above.
+    path = _cache_path(cache_name)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data), encoding="utf-8")
     tmp.replace(path)
+
+
+def _fetch_json(url: str, cache_name: str, validate=None) -> dict:
+    """Fresh cache -> live fetch (validated before it is cached) -> whatever is
+    on disk. A fetch that fails the network OR the sanity check NEVER overwrites
+    a good cache and NEVER caches a bad dump: it falls back to the existing
+    on-disk copy (stale beats bricked) and only raises if there is nothing to
+    fall back to. Same 'an empty/partial refresh must not be cached' rule
+    orna_releases/orna_bonuses/orna_knowledge already follow."""
+    path = _cache_path(cache_name)
+    if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL_SECONDS:
+        cached = _read_cache(cache_name)
+        if cached is not None:
+            return cached
+    try:
+        data = _download(url)
+    except Exception as e:
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            logger.warning("aussies: fetch %s failed (%s), serving the cached copy", cache_name, e)
+            return stale
+        raise
+    if validate is not None and not validate(data):
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            logger.warning("aussies: fetched %s failed the sanity check, keeping the cached copy", cache_name)
+            return stale
+        raise ValueError(f"fetched {cache_name} failed the sanity check and there is no cache to fall back to")
+    _write_cache(cache_name, data)
     return data
 
 
@@ -116,36 +177,58 @@ _stem_directions_cache: Optional[dict] = None
 def _codex() -> dict:
     global _codex_cache
     if _codex_cache is None:
-        _codex_cache = _fetch_json(CODEX_URL, "codex.json")
+        _codex_cache = _fetch_json(CODEX_URL, "codex.json", _sane_codex)
     return _codex_cache
 
 
 def _translations() -> dict:
     global _translations_cache
     if _translations_cache is None:
-        _translations_cache = _fetch_json(TRANSLATIONS_URL, "translations.en.json")
+        _translations_cache = _fetch_json(TRANSLATIONS_URL, "translations.en.json", _sane_translations)
     return _translations_cache
 
 
 def refetch_now() -> dict:
-    """Force a fresh download right now, ignoring the TTL, and return
-    small stats about what came back (record count per category, size of
-    the stats/status vocabularies) - for a status reply to whoever
-    triggered it, e.g. /update_codex."""
-    refresh_cache()
-    codex = _codex()["main"]
-    translations = _translations()
+    """Download both dumps NOW (ignoring the TTL) and commit them ONLY if BOTH
+    pass the sanity check - so /update_codex on a patch day can never replace
+    good data with an empty/partial fetch. On any failure the current cache and
+    in-memory data are left exactly as they were and the error propagates to the
+    caller (which reports it). Returns record/vocab counts for the reply."""
+    codex = _download(CODEX_URL)
+    if not _sane_codex(codex):
+        raise ValueError("refetched codex.json failed the sanity check (empty or partial) - kept the current data")
+    translations = _download(TRANSLATIONS_URL)
+    if not _sane_translations(translations):
+        raise ValueError("refetched translations.en.json failed the sanity check - kept the current data")
+    # both good -> commit atomically, then drop every derived cache so the bot
+    # rebuilds from the new data on next use.
+    _write_cache("codex.json", codex)
+    _write_cache("translations.en.json", translations)
+    _reset_memory()
+    main = codex["main"]
     return {
-        "categories": {cat: len(records) for cat, records in codex.items()},
+        "categories": {cat: len(records) for cat, records in main.items()},
         "stats_vocab": len(translations.get("stats", {})),
         "status_vocab": len(translations.get("status", {})),
     }
 
 
+def _reset_memory() -> None:
+    """Drop every in-memory cache derived from the two dumps, so the next call
+    rebuilds from whatever is now on disk. EVERY cache computed from
+    _codex()/_translations() must be listed here, or /update_codex leaves it
+    serving old data (that was the _CLASS_ABILITY_INDEX bug)."""
+    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache
+    global _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES, _CLASS_ABILITY_INDEX
+    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = None
+    _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = _CLASS_ABILITY_INDEX = None
+
+
 def refresh_cache() -> None:
-    """Force a re-download next time either file is needed."""
-    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache, _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES
-    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = None
+    """Force a re-download next time either file is needed (drops the in-memory
+    caches AND the on-disk files). refetch_now is the safe, validated path for
+    /update_codex; this stays for a plain 'invalidate everything' need."""
+    _reset_memory()
     for name in ("codex.json", "translations.en.json"):
         _cache_path(name).unlink(missing_ok=True)
 
@@ -1094,6 +1177,19 @@ def _demo() -> None:
     # effect code with no status entry falls back to the raw code
     assert _effect_names({"gives": [{"name": "totally_made_up_code"}]}) == ["gives:totally_made_up_code"]
     assert _effect_names({"immunities": [{"name": "blind"}]}) == ["immunities:Blind"]
+
+    # /update_codex safety: an empty/partial dump is REJECTED (never cached), a
+    # real one passes, and refresh drops EVERY derived cache (a missing one -
+    # _CLASS_ABILITY_INDEX - left class abilities stale after an update).
+    assert not _sane_codex({"main": {}}) and not _sane_codex({"main": {"items": {}}}) and not _sane_codex({})
+    assert _sane_codex(_codex()), "the live codex must pass its own sanity check"
+    assert not _sane_translations({"main": {"x": 1}, "stats": {}, "status": {}})  # empty stats
+    assert _sane_translations(_translations())
+    class_abilities("Gilgamesh")            # populates _CLASS_ABILITY_INDEX
+    assert _CLASS_ABILITY_INDEX is not None
+    _reset_memory()
+    assert _CLASS_ABILITY_INDEX is None and _NAME_INDEX is None and _codex_cache is None, \
+        "refresh must drop every derived cache or /update_codex serves stale data"
 
     print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
 
