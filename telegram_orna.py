@@ -1780,8 +1780,14 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
 _KNOWLEDGE_OBS_MAX = 8000
 
 
-async def _run_knowledge_tool(message, query: str, sources: Optional[list] = None) -> str:
-    """Curated community reference (orna_knowledge.txt, see
+async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
+    """The shared community-knowledge aggregation both knowledge_search and
+    research reuse (extracted so there is no second copy). Returns "" when
+    nothing matched, for the caller to report. Every corpus below is a
+    different PROVENANCE of answer, not a different question, which is why they
+    ride one call rather than one tool each. Original notes preserved:
+
+    Curated community reference (orna_knowledge.txt, see
     orna_scrape_knowledge.py) for exactly the gap web_search exists for -
     most notably per-monster/boss elemental damage resistances/immunities,
     which the live codex doesn't track at all (verified: not even an empty
@@ -1793,8 +1799,6 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     semi-structured data (see orna_knowledge.py), not something to show
     the user verbatim - the model reads this observation and writes the
     real answer in finish()."""
-    if not query:
-        return "knowledge_search needs a query in action_input"
     # asyncio.to_thread: same reasoning as _run_assess_tool's aussies
     # lookup - _load()'s first call does a synchronous disk read (306KB),
     # and a fuzzy-correction miss runs difflib over a ~3500-word
@@ -1920,7 +1924,7 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
             + await asyncio.to_thread(orna_reddit.format_entries, reddit_hits)
         )
     if not blocks:
-        return f"no knowledge-base matches for {query!r} - try web_search instead"
+        return ""
     # TOTAL cap, not just a per-block one. Each block was capped individually
     # (3000, 2000, ...) but knowledge_search now composes up to SIX of them -
     # sheets, player Q&A, guide formulas, mechanics, class data, dev comments -
@@ -1942,6 +1946,16 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
         out.append(f"[{dropped} further source block(s) omitted to keep this observation readable - "
                    "ask a NARROWER question if you need them.]")
     return "\n\n".join(out)
+
+
+async def _run_knowledge_tool(message, query: str, sources: Optional[list] = None) -> str:
+    """knowledge_search tool: the shared community-knowledge aggregation
+    (_gather_knowledge), with the empty case reported so the model falls
+    through to web_search."""
+    if not query:
+        return "knowledge_search needs a query in action_input"
+    out = await _gather_knowledge(query, sources)
+    return out or f"no knowledge-base matches for {query!r} - try web_search instead"
 
 
 # Gear stats ADD together; the class/AL/PVP layer multiplies on top. Keeping
@@ -4303,6 +4317,11 @@ def _demo() -> None:
     # a gendered-pair name resolves from either side ("Beowulf / Bestla")
     assert _aussies.class_abilities("Bestla"), "the second name of a gendered pair must resolve"
     assert _aussies.class_abilities("no such class at all") == []
+
+    # --- shared knowledge aggregator (research + knowledge_search reuse it) ---
+    kg = asyncio.run(_gather_knowledge("factions"))
+    assert "GAME MECHANICS" in kg, kg[:200]                 # mechanics corpus still wired
+    assert asyncio.run(_gather_knowledge("xyzzy plugh frobnicate")) == ""   # honest empty
 
     print("telegram_orna: all checks passed")
 
