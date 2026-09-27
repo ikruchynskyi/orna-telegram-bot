@@ -2498,6 +2498,13 @@ _TOOLS_TEXT = (
     'digest, don\'t query()/search monsters for the item\'s name (that searches monster DESCRIPTIONS, not their '
     "drop tables, and won't find it). Also use this to confirm an exact stat/fact before answering; not needed "
     "just for browsing (query/search_codex already show a result list with buttons the user can open themselves).\n"
+    "- research(action_input=<entity name(s)>, args={\"entities\":[...], \"per_relation_cap\":12}): the DEFAULT for "
+    "an analytical or comparative question about a monster/boss/raid/item/follower - \"what does X drop and which "
+    "class benefits\", \"how do I beat X\", \"compare what these bosses drop\". ONE call returns the whole subgraph "
+    "from the local codex (the entity, plus its drops/skills/upgrade-materials with EACH one's stats, useable_by "
+    "and effects) PLUS the community knowledge (incl. Monster-Data elemental immunities). Call it ONCE with every "
+    "entity you need (pass several in args.entities), read the whole result, then finish - do NOT open_entry each "
+    "drop one by one; that is the slow path this replaces. It also satisfies the STRATEGY rule below.\n"
     "- calculate(action_input=<numeric expression, e.g. \"1.5 * 1.2 * 1.1\">): evaluates + - * / ** % and "
     "parentheses. Use this for ANY arithmetic beyond trivial single-step math - ESPECIALLY combining several "
     "numbers gathered across multiple earlier tool calls (e.g. multiplying several items' bonus percentages "
@@ -2749,7 +2756,10 @@ _STRATEGY_RULE = (
     "immunities for a boss (that field doesn't exist there at all) - a complete-looking codex page is exactly the "
     "situation this rule is for, not a reason to skip the extra step. Live-verified failure: skipping straight to "
     "finish with only codex facts produced \"no known weaknesses, just hit it hard\" for a boss that is actually "
-    "immune to every element except one - confidently wrong instead of checking."
+    "immune to every element except one - confidently wrong instead of checking. "
+    "PREFER research(<boss name>) here: its one call carries both the boss's codex facts AND the community "
+    "knowledge half (the Monster-Data immunities), so it satisfies this rule without a separate knowledge_search "
+    "plus N open_entry calls."
 )
 
 # Below this, finish() must SAY it does not know rather than answer flatly
@@ -4449,6 +4459,10 @@ def _demo() -> None:
     sessU = _RSess()
     obsR3 = asyncio.run(_run_tool(_RSpy(), "research", "zzzptqx nothing here", {}, sessU.sources, sessU))
     assert "could not resolve" in obsR3.lower(), obsR3[:200]
+
+    # research is advertised in the system prompt (a tool undescribed is unused)
+    _p = _orna_system_prompt("what does Fallen King Centaurus drop")
+    assert "research(action_input=" in _p, "research must be described in the prompt or the model won't use it"
 
     print("telegram_orna: all checks passed")
 
