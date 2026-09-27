@@ -796,11 +796,9 @@ no answer anywhere in the bot.
   `orna_knowledge.txt`: irregular scraped data that a fuzzy search plus a
   reading model handles better than per-field parsing, and a page tweak
   then degrades to messier text instead of a crash.
-- **An empty parse is never cached** (same guard as `orna_releases`) -
-  aussiescodex is a JS app and pinning "there are no crucibles" for a week
-  would be worse than retrying.
-- Re-crawl: automatic on the 1-week TTL, and `/update_codex` forces it now
-  alongside the codex, patch notes and sheets.
+- Caches per the shared convention (empty parse never cached - pinning "there
+  are no crucibles" for a week would be worse than retrying); re-crawls on the
+  1-week TTL, and `/update_codex` forces it alongside the codex/notes/sheets.
 - Surfaced through `knowledge_search`, not a 19th tool - the prompt is
   ~30KB and this is another *provenance* of answer, not another question
   to ask. Verified end to end: "які слоти можуть мати crucible на avidity
@@ -982,13 +980,10 @@ playorna's own patch notes are the one source that does hint it (e.g.
 gear"), so the loop can read them and qualify an answer it would otherwise
 state flatly. Added 2026-09-24 on explicit ask.
 
-- `orna_releases.py` mirrors `orna_aussies.py`'s cache exactly: disk cache
-  in a gitignored dir, 1-week TTL, atomic temp-then-rename write, an
-  unreadable cache treated as a miss (a file truncated by one of this
-  repo's frequent `launchctl` reloads would otherwise raise on every call
-  until the TTL expired). One addition: **an empty parse is never cached** -
-  that would pin a silent "no patch notes exist" for a week if playorna's
-  markup changed, so it raises instead.
+- `orna_releases.py` follows the shared cache convention (see "Things that
+  aren't obvious"): gitignored dir, 1-week TTL, atomic write, unreadable =
+  miss, and an empty parse is never cached (it would pin a silent "no patch
+  notes exist" for a week if playorna's markup changed, so it raises instead).
 - The page carries ~15 notes with no pagination, about three months at the
   observed cadence. That is the window where "did a patch change this?" is
   a live question, so there is nothing to page through - but it also means
@@ -1679,6 +1674,17 @@ HTTP call not already wrapped by an async client, or any CPU-heavy loop,
 wrap it in `asyncio.to_thread` - this class of bug won't show up in quick
 manual testing (a single request looks fine), it only surfaces as
 "everything hangs" once two real users' requests overlap in production.
+
+**The shared cache convention (aussies / releases / bonuses / knowledge) -
+one rule, four copies.** Every scraped/fetched source: keeps a gitignored disk
+cache on a TTL (1 week, except `orna_calendar`'s 6h), writes it atomically
+(temp then rename, so a `launchctl` reload mid-write can't leave a torn file),
+treats an unreadable cache as a miss, and - the load-bearing part - **NEVER
+caches an empty or partial parse** (that would pin "there is nothing here" for
+the whole TTL). `orna_aussies` additionally sanity-checks the dump before
+committing, and `/update_codex` is transactional (see its section). When adding
+a fetched source, follow this; each module's own section below notes only what
+is specific to it (its TTL, its sanity check).
 
 **`"think": False` was the actual cause of `gpt-oss:20b`'s flakiness, not
 the model itself.** This section used to warn that the same input to
