@@ -226,6 +226,37 @@ def _check_quality_spec_axes() -> None:
     assert T._parse_quality_spec("100") == (100, 1)
 
 
+def _check_corpora_do_not_contradict_taxonomy() -> None:
+    """The hand-maintained mechanics corpus must not call the tier-10 CLASSES
+    "specializations".
+
+    Live 2026-09-27: it said "The six tier-10 specializations are Gilgamesh,
+    Heretic, ...". Asked the difference between Heretic and Sequencer, the loop
+    read that line back and answered "Heretic is a tier-10 specialization" -
+    the exact conflation the whole taxonomy fix exists to stop, and the same
+    shape as the tower-reset case above: our own prose outvoting the rule.
+    In the game a tier-10 name (Gilgamesh, Heretic) is a CLASS and a
+    specialization is the passive package on top (Ranger, Sequencer).
+
+    Scoped to the corpus we maintain. Deliberately NOT applied to orna_echo.txt,
+    orna_reddit.txt or orna_qa.txt - those are scraped from other people, and
+    they DO use the loose wording (41/101/51 hits of "specialization"), which is
+    not ours to police. That half is handled by _TAXONOMY_RULE telling the loop
+    its own taxonomy outranks a community source's wording."""
+    path = os.path.join(REPO_ROOT, "orna_mechanics.txt")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fh:
+        body = " ".join(fh.read().split())
+    # the corpus names the wrong wording in order to correct it, so the
+    # correcting sentence is excluded before looking for the claim itself
+    claim = re.sub(r"Community guides and aussiescodex frequently call.*?2026-09-27\.", "", body)
+    bad = re.search(r"tier-10 specializations?", claim, re.I)
+    assert not bad, f"tier-10 classes called specializations: {claim[max(0, bad.start() - 90):bad.end() + 40]}"
+    # and it must still make the positive statement, or the check passes vacuously
+    assert re.search(r"tier-10 CLASSES", body), "the corpus no longer states that these are CLASSES"
+
+
 def _check_corpora_do_not_contradict_towers() -> None:
     """The hand-maintained mechanics corpus must not claim a WEEKLY tower reset.
 
@@ -354,6 +385,7 @@ TIER0 = [
     ("quality-vs-level", _check_quality_spec_axes),
     ("towers-consistent", _check_towers_are_self_consistent),
     ("corpora-vs-towers", _check_corpora_do_not_contradict_towers),
+    ("corpora-vs-taxonomy", _check_corpora_do_not_contradict_taxonomy),
     ("mechanics-wired", _check_mechanics_wired_into_loop),
     ("research-supergraph", _check_research_supergraph),
     ("echo-corpus", lambda: orna_echo._demo()),

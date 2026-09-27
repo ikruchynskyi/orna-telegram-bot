@@ -380,6 +380,15 @@ structurally can't recover from.
   just the one slow request. Worst case per step is now 45s + 120s, so
   `LOOP_TIMEOUT_SECONDS` can be consumed by two pathological steps; that
   is the knob to raise if legitimately-long requests start getting cut.
+- **The CALL CHAIN is one `logger.info` per step** (`_advance_inner`, right
+  after `action_input` is parsed so it covers `finish` and `ask` too, not just
+  tool dispatch): `orna: step 1/35 sid=<sid> action=search_codex input=...`.
+  Grouped by sid, so `grep "sid=<x>" telegrambot_error.log` is one request's
+  whole trace and `grep "orna: step"` is all of them. Added 2026-09-27 on ask -
+  before it, production had ONLY the exception-path `orna:` lines (18 across
+  three days), so the ordered trace the harness prints for a request you run
+  yourself had no production equivalent. `action_input` is capped at 120 chars
+  and each arg value at 80, or a `class_guide` excerpt buries the log.
 - Logging is deliberately light (no `exc_info=True`) at every
   intermediate retry/fallback point, with the full traceback logged once
   — at the point the loop actually gives up — not at every layer.
@@ -1457,6 +1466,38 @@ missing":**
   `ask` with an observation telling the model to answer from what it has and
   state its assumptions. Verified both ways with stubs - chat pauses on the
   question, inline answers anyway.
+- **A FOLLOW-UP needs no `/orna` prefix - the same one-shot text wait now also
+  arms after a normal, answered request** (`_arm_text_wait`, `asked=False`,
+  `_FOLLOWUP_TTL_SECONDS` 180s). Live report 2026-09-27: a question about the
+  answer just given was typed without the command, fell through to
+  `telegram_resources.handle_free_text`, matched no material name, and was
+  **silently dropped** - that handler deliberately says nothing rather than
+  answering every message in a guild chat, so the user saw the bot ignore them.
+  The wait resumes the SAME session, so the whole accumulated context applies.
+  Three things make it safe to widen:
+  * **It is scoped to the user who asked**, via `OrnaSession.user_id`, so
+    everyone else's messages in a group still fall straight through to the
+    assess/resources flows. That id **cannot** be taken from the message
+    `_advance` was handed: on a button-resumed step `orna_callback` passes
+    `query.message`, whose `from_user` is the BOT. Pinned in `_demo`.
+  * **The observation says which of the two it is.** An answer to a question
+    and an unprompted follow-up read completely differently, so `asked` picks
+    the framing - a follow-up is introduced as a new turn that may correct or
+    narrow the previous answer, explicitly NOT as the missing half of one.
+  * **A follow-up does not count against `MAX_ASKS_PER_REQUEST`** (the loop
+    asked nothing) and gets the full `MAX_STEPS` rather than `_RESUME_STEPS`,
+    since it is a fresh question; `LOOP_TIMEOUT_SECONDS` still bounds it.
+  The accepted trade: for 180s after an answer, that user's free text goes to
+  `/orna` instead of the resources flow. Harmless in practice because `/orna`
+  has the `need` tool, which is the same `build_report` pipeline that flow uses.
+  The ONE path that does degrade is `telegram_assess`'s `AWAITING_NAME`
+  fallback: same user, a screenshot whose OCR could not name the item, inside
+  the 180s - their typed name goes to `/orna` and they get codex info instead of
+  an upgrade table. Left as a marked `ponytail:` ceiling because it needs all
+  three inside 180s, and the clean guard would be a CYCLE (`telegram_orna`
+  already imports `telegram_assess`). If it is ever reported, the acyclic fix is
+  for `telegram_assess` to expose the chats it has mid-flow and for
+  `_PendingAskTextFilter` to skip them.
 - **A typed answer works for EVERY ask, not just the escape hatch.** Live
   2026-09-24: the bot asked, the user typed the full answer, and nothing
   happened - `_PENDING_ASK_TEXT` was armed only when the "Своя відповідь"
@@ -1513,6 +1554,74 @@ missing":**
   Same wrong-shape drift as `action_input` arriving inside `args`.
 
 ### Class / specialization stats (`orna_classes.py`) - the player stats estimator
+
+**`orna_classes.json`'s two pool names are aussiescodex's and they are
+INVERTED from the game's own words - this was the bot calling Ranger a class
+for a year.** The game nests three things: a **CLASS LINE** (exactly six: Mage,
+Thief, Warrior, Valhallan, Summoner, Demigod - each holding a class at EVERY
+tier 1-10, so a line is not one class and its tier-10 class is only its last
+rung), a **CLASS** (one tier 1-10 step inside a line - tier 1 Mage/Thief/Warrior
+up to the 18 tier-10 ones: Heretic/Hera, Gilgamesh/Gallia, Beowulf/Bestla, Grand
+Summoner, Deity, Realmshifter, each with two Celestial variants), and one
+**SPECIALIZATION** on top (Ranger, Berserker, Sequencer, Duelist, ...). The dataset's `spec_stats` pool (19) is really the
+tier-10 CLASS and its `classes` pool (40) is really the SPECIALIZATION.
+Measured, not argued: **0 of the 40 appear in the codex's own `classes`
+category, and all 19 of the others do** (`Diety` being aussies' misspelling).
+- **Live failure 2026-09-27** that surfaced it: an answer offered "Ranger",
+  "Summoner" and "Dexterity-based classes (Ranger, Assassin, Tamer)" side by
+  side as classes. Only Summoner is one. It came straight from the
+  `estimate_stats` tool description, which interpolated the 40-name pool as
+  the valid `class` values and the 19-name pool as the valid `specialization`
+  values - so the prompt taught the inversion, and the stat table printed it
+  too ("клас: Sequencer · спеціалізація: Heretic Ara", exactly backwards).
+- **The pool names are LEFT as they are**; renaming them would desync this
+  module from its own scraper for no user-visible gain. The inversion stops at
+  the module edge instead: the `estimate_stats` tool's KEYS are now the game's
+  (`class`="Heretic Ara", `specialization`="Sequencer"), the reply and the
+  observation label them that way, and `_TAXONOMY_RULE` in the system prompt
+  states all three levels.
+- **The tolerance is `telegram_orna._reassign_class_pools`, and it works
+  because the two pools are fully DISJOINT** (0 overlapping names, asserted in
+  `_demo`) - so the NAME alone says which pool it belongs to and a crossed call
+  still lands right. Verified all four shapes produce identical output:
+  game-correct, fully inverted, class alone, and a specialization sent in the
+  `class` field. A name in NEITHER pool stays in the field the model filled, so
+  the existing "that is not a real name" refusal still points at the right one.
+- **A class's LINE is in no structured source, so nothing here claims to know
+  it.** A codex class record has `tier` and no line (checked across all 82), and
+  the official description's "can wield equipment of the thief" is cross-line
+  EQUIPMENT ACCESS rather than membership - `Heretic Corvus` is a Mage-line class
+  whose own description says "thief". The chains exist only as prose, in
+  `orna_echo`'s tier-by-tier progression guides, so `_TAXONOMY_RULE` tells the
+  model to get a line from `knowledge_search` or leave it out. **A
+  line -> tier-10-class table was written and then removed** (2026-09-27, same
+  session): it made "the Mage line" read as a synonym for Heretic, which is the
+  confusion it was supposed to fix. `orna_classes` keeps only a shape assert
+  (18 tier-10 names = 6 lines x 3).
+- **The fix needed THREE layers, because our own prose outvoted the rule.**
+  With the code and prompt fixed, 1 of 3 live runs still answered "Heretic is a
+  tier-10 specialization" - and the source was `orna_mechanics.txt`, a corpus we
+  maintain, which read "The six tier-10 specializations are Gilgamesh,
+  Heretic, ...". The loop retrieved it via `knowledge_search` and repeated it.
+  Same shape as the tower-reset case below, so the same three-layer answer:
+  * the corpus now states the three levels and says outright that these are
+    CLASSES (plus that a line holds a class at every tier);
+  * `_TAXONOMY_RULE` ends with **THIS RULE OUTRANKS A SOURCE'S WORDING** -
+    `orna_echo.txt`, `orna_reddit.txt` and `orna_qa.txt` use the loose wording
+    (41/101/51 hits of "specialization") and are scraped from other people, so
+    they are not ours to police; the rule names the exact sentence shape and
+    says to translate it, not repeat it. Same pattern as `towers` outranking
+    guide prose and `releases` outranking `knowledge_search`;
+  * tier-0 `corpora-vs-taxonomy` pins the corpus we DO own, scoped to it for
+    exactly the reason `corpora-vs-towers` is, and it excludes the corpus's own
+    correcting sentence before searching for the claim.
+- **Gear restrictions key on the LINE, not the class or the specialization** -
+  that is what an item's `useable_by` is (`all_classes`/`magic_users`/
+  `warrior_classes`/`thief_classes`/`valhallan_summoner_classes`/
+  `melee_classes`, the only six values in the live data). So a "which classes
+  is this for" answer reads that field; it never groups by specialization.
+  Verified after: the reported request answers with each drop's slot and its
+  real `useable_by`, where before it invented per-class recommendations.
 
 The data behind aussiescodex's own stats estimator, extracted from the
 Next.js chunk that feeds their UI. **Committed, and deliberately not on a

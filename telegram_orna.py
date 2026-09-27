@@ -230,7 +230,15 @@ _STATE_MAX = 200
 # real option may well type something unrelated next (a /need request, an
 # assess screenshot caption), and swallowing that would be worse than the bug
 # this fixes. Tapping "I want to type" is the unambiguous signal.
-_PENDING_ASK_TEXT: dict = {}  # chat_id -> (sid, expires_monotonic)
+# chat_id -> {"sid", "until", "user_id", "asked"}. "asked" distinguishes the
+# two reasons to listen: the loop asked a QUESTION (ask(), or a finish() that
+# was really one), or it just ANSWERED and a follow-up should not need the
+# /orna prefix again - live report 2026-09-27, a question about the answer
+# just given went to the free-text resource flow, matched no material, and was
+# silently dropped. "user_id" keeps that window to the person who was talking:
+# in a guild GROUP chat, everyone else's messages must still fall through to
+# the resources/assess flows exactly as before.
+_PENDING_ASK_TEXT: dict = {}
 ASK_TEXT_TTL_SECONDS = 600
 # Steps handed to a session resumed by a typed answer - enough to run the
 # tool the answer unblocks and finish, without restarting the whole budget.
@@ -2136,6 +2144,40 @@ _NO_VALUE_WORDS = {"none", "no", "n/a", "-", "немає", "нема", "ні", "
 _NEEDS_INPUT = "NEEDS_INPUT:"
 
 
+def _reassign_class_pools(spec: str, klass: str) -> tuple:
+    """Put each name in the slot its POOL says it belongs to, whichever key it
+    arrived under.
+
+    orna_classes' pool names are aussiescodex's and are INVERTED from the game's
+    (that module's docstring has the measurement): its `spec_stats` pool is
+    really the tier-10 **CLASS** (Gilgamesh, Heretic Ara, Beowulf) and its
+    `classes` pool is really the **SPECIALIZATION** (Ranger, Sequencer). Since
+    the model is now taught the game's vocabulary, it sends
+    class="Gilgamesh"/specialization="Sequencer" - the opposite of what this
+    function's callers index by. Both conventions have to work, and the name
+    itself settles it: the two pools are fully DISJOINT, so no name is ever
+    ambiguous.
+
+    Returns (spec, klass) in orna_classes' OWN terms, i.e. spec = the tier-10
+    class, klass = the specialization - the slots the caller then resolves.
+    A name in neither pool is left where it came from, so the caller's existing
+    "that is not a real name" message still names the slot the model filled.
+    """
+    def belongs(name: str, kind: str) -> bool:
+        return bool(name) and orna_classes.find_class(name, kind=kind) is not None
+
+    # "none" is a real ANSWER for the tier-10 class slot, never a misfiled name.
+    spec_none = bool(spec) and spec.lower() in _NO_VALUE_WORDS
+    if spec and klass and not spec_none and belongs(spec, "class") and belongs(klass, "specialization"):
+        return klass, spec                      # both filled, both in the other's pool
+    if spec and not klass and not spec_none and not belongs(spec, "specialization") \
+            and belongs(spec, "class"):
+        return "", spec                         # a specialization alone, in the class slot
+    if klass and not spec and not belongs(klass, "class") and belongs(klass, "specialization"):
+        return klass, ""                        # a tier-10 class alone, in the spec slot
+    return spec, klass
+
+
 async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
     """Estimate a character's stats. BASE stats (from the specialization + AL,
     optionally the class's modifiers) and ITEM stats (from worn gear) are
@@ -2171,9 +2213,18 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         items = [items]
     if not isinstance(items, (list, tuple)):
         items = []
-    spec = str(args.get("specialization") or "").strip()
-    klass = str(args.get("class") or args.get("klass") or "").strip()
+    # The KEYS are the game's words (class = the tier-10 class, specialization =
+    # the passive package on top); orna_classes' pools are named the other way
+    # round, so `spec` below is the tier-10 class and `klass` the
+    # specialization. See its docstring for the measurement, and
+    # _reassign_class_pools for the tolerance when the two arrive crossed.
+    spec = str(args.get("class") or args.get("klass") or "").strip()
+    klass = str(args.get("specialization") or "").strip()
     amities = args.get("amities") or {}
+
+    spec, klass = _reassign_class_pools(spec, klass)
+    if klass.lower() in _NO_VALUE_WORDS:
+        klass = ""      # "no specialization" is an answer, not an unknown name
 
     # Resolve each name in ITS OWN pool. Live bug: "Heretic Ara Sequencer"
     # was passed as specialization="Heretic Ara", class="Heretic", and the
@@ -2201,8 +2252,11 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     # assumption is stated in the reply, never silent.
     pvp = _as_bool(pvp_raw) if pvp_given else False
 
-    classes_list = "/".join(orna_classes.all_names("class"))
-    specs_list = "/".join(orna_classes.all_names("specialization"))
+    # NOTE the pool names are inverted (see _reassign_class_pools): the
+    # "specialization" pool holds the tier-10 CLASS names, so the list a message
+    # calls "class" is built from all_names("specialization") and vice versa.
+    specs_list = _class_names_text("class")
+    classes_list = _class_names_text("specialization")
     # REQUIRED: AL, and a base source (a real spec) or gear (items). class and
     # pvp are OPTIONAL - only a NAME the user actually typed but that doesn't
     # resolve is worth asking to fix (a typo), never a name they simply omitted.
@@ -2211,14 +2265,15 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         need.append("ascension_level: their AL as a plain number"
                     + (f" - {str(al_raw)[:20]!r} is not one" if al_raw is not None else ""))
     if klass and class_entry is None:
-        need.append(f"class: {klass!r} is not a class - use one of {classes_list}, or omit class")
+        need.append(f"specialization: {klass!r} is not a specialization - use one of {specs_list}, "
+                    "or omit it")
     if spec and not spec_none and spec_entry is None:
-        need.append(f"specialization: {spec!r} is not a specialization - use one of {specs_list}, or \"none\"")
+        need.append(f"class: {spec!r} is not a tier-10 class - use one of {classes_list}, or \"none\"")
     if spec_entry is None and not items and not (spec and not spec_none):
         # Nothing to compute from: no (valid) specialization for base stats and
         # no items for gear stats. (If they typed a spec that just didn't
         # resolve, the line above already tells them how to fix it.)
-        need.append("a specialization (for BASE stats - one of " + specs_list + ') and/or items (for GEAR '
+        need.append("a tier-10 class (for BASE stats - one of " + classes_list + ') and/or items (for GEAR '
                     "stats, as [{\"name\":\"<item>\",\"quality\":\"<quality or %>\"}]) - at least one is required. "
                     'If they named a BUILD rather than items ("the omniflask raid build"), call class_guide or '
                     "knowledge_search FIRST and pass the item names it lists")
@@ -2354,12 +2409,16 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
         return pre_table([["Стат", "Значення"]] + [[k, f"{block[k]:g}"] for k in _ESTIMATE_STATS if block.get(k)])
 
     detail = []
-    if class_entry:
-        detail.append(f"клас: {class_entry['name']}")
+    # spec_entry is the tier-10 CLASS and class_entry the SPECIALIZATION - the
+    # pools are named the other way round (see _reassign_class_pools). These
+    # two labels used to follow the POOL name, so the table read
+    # "клас: Sequencer / спеціалізація: Heretic Ara", exactly backwards.
     if spec_entry:
-        detail.append(f"спеціалізація: {spec_entry['name']}")
+        detail.append(f"клас: {_class_display(spec_entry['name'])}")
     elif spec_none:
-        detail.append("спеціалізація: немає")
+        detail.append("клас: немає")
+    if class_entry:
+        detail.append(f"спеціалізація: {_class_display(class_entry['name'])}")
     detail.append(f"AL {al}")
     detail.append("PVP (HP ×2)" if pvp else ("PVE — припущення (напишіть «pvp» для PVP)" if not pvp_given else "PVE"))
 
@@ -2439,7 +2498,8 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
     dual_note = (f" [dual wield: two one-handed weapons, their stats counted at "
                  f"x{_DUAL_WIELD_FACTOR} of the combined total]" if dual_wield else "")
     return (f"posted a stats estimate [{shown}] ({len(lines)} item(s); "
-            f"spec={spec_entry['name'] if spec_entry else 'none'}, class={class_entry['name'] if class_entry else '-'}, "
+            f"class={_class_display(spec_entry['name']) if spec_entry else 'none'}, "
+            f"specialization={_class_display(class_entry['name']) if class_entry else '-'}, "
             f"AL={al}, pvp={pvp}). Totals [{summary}].{note}{pvp_note}{dual_note}{passive_note} The table is already "
             "shown - finish() just needs a short closing line repeating WHICH inputs were used (class, spec, AL, "
             "PVE/PVP), plus any conditional passive above that the loadout does or does not satisfy, so the user can "
@@ -2499,6 +2559,21 @@ async def _run_web_search_tool(message, query: str, sources: Optional[list] = No
 # -----------------------------------------------------------------------------
 # the ReAct loop
 # -----------------------------------------------------------------------------
+
+def _class_display(name: str) -> str:
+    """How a class/specialization name is SPELLED for a human or the model.
+    aussiescodex misspells Deity as "Diety"; orna_classes keeps their spelling
+    (it is their data) and find_class resolves either, but printing the typo -
+    in a reply, or as the valid value in the prompt's own list - teaches it back
+    to the model and shows the user a class name the game does not use."""
+    return (name or "").replace("Diety", "Deity")
+
+
+def _class_names_text(kind: str) -> str:
+    """A class/specialization pool's names, for anything the MODEL reads.
+    `kind` is orna_classes' own, i.e. "specialization" is the tier-10 CLASS."""
+    return "/".join(_class_display(n) for n in orna_classes.all_names(kind))
+
 
 _TOOLS_TEXT = (
     "- today(): no input. Materials available today in the guild shops (Material Forecast sheet). Posts the list.\n"
@@ -2583,25 +2658,26 @@ _TOOLS_TEXT = (
     "breakdown - finish() just needs a short closing line.\n"
     "- estimate_stats(args={\"items\":[{\"name\":\"<item>\",\"quality\":\"<quality name or %>\","
     "\"level\":<upgrade level 1-13>}, ...],"
-    "\"specialization\":\"<one of: " + "/".join(orna_classes.all_names("specialization")) + ">\","
-    "\"class\":\"<one of: " + "/".join(orna_classes.all_names("class")) + ">\","
+    "\"class\":\"<the TIER-10 CLASS, one of: " + _class_names_text("specialization") + ">\","
+    "\"specialization\":\"<the SPECIALIZATION, one of: " + _class_names_text("class") + ">\","
     "\"ascension_level\":<the player's AL, any number>,\"pvp\":true|false,"
     "\"amities\":{\"<bonus>\":\"<value>\"}}): a character stat estimate. It computes BASE stats (from the "
-    "specialization + AL, plus the class's percent modifiers) and ITEM stats (from worn gear) SEPARATELY and "
+    "tier-10 CLASS + AL, plus the SPECIALIZATION's percent modifiers) and ITEM stats (from worn gear) SEPARATELY "
+    "and "
     "shows each as its own block plus a combined total. So there are TWO ways to use it: (a) BASE stats only - "
-    "the player asks \"what are my/a Gilgamesh's base stats at AL 100\" and gives just specialization + AL "
-    "(class optional); pass NO items. (b) FULL loadout - also pass the items to add gear on top. Use it for "
+    "the player asks \"what are my/a Gilgamesh's base stats at AL 100\" and gives just the class + AL "
+    "(specialization optional); pass NO items. (b) FULL loadout - also pass the items to add gear on top. Use it for "
     "\"which stats will I have\"/\"порахуй мої стати\"/\"базові стати\" questions. POSTS the table(s) - finish() "
-    "just needs a short closing line. REQUIRED: ascension_level, AND at least one of (a specialization -> base "
+    "just needs a short closing line. REQUIRED: ascension_level, AND at least one of (a tier-10 CLASS -> base "
     "stats, or items -> gear stats). OPTIONAL, so NEVER demand them: `items` (omit for a base-only estimate), "
-    "`pvp` (defaults to PVE - don't ask; the reply states the assumption), and `class` (its modifiers are "
-    "applied only if given). The tool REFUSES a call it can't compute anything from and hands back exactly "
+    "`pvp` (defaults to PVE - don't ask; the reply states the assumption), and `specialization` (its modifiers "
+    "are applied only if given). The tool REFUSES a call it can't compute anything from and hands back exactly "
     "what's missing. Item quality defaults to 100% and level to 1. QUALITY AND LEVEL ARE TWO DIFFERENT THINGS: "
     "quality is the % roll (100%, 185%, or a tier name like legendary), level is how far it is upgraded - 1 to "
     "10, then 11 masterforged, 12 demonforged, 13 godforged. \"godforged\" therefore means level 13, NOT a "
-    "quality; an item can be 185% quality AND level 10. specialization=\"none\" is a valid ANSWER for a player "
-    "with no tier-10 specialization (then items are required, since there's no base to compute). NEVER guess a "
-    "specialization, AL, or a loadout - a guessed input comes back as a confident WRONG number (live failures: "
+    "quality; an item can be 185% quality AND level 10. class=\"none\" is a valid ANSWER for a player "
+    "who has no tier-10 class yet (then items are required, since there's no base to compute). NEVER guess a "
+    "class, specialization, AL, or a loadout - a guessed input comes back as a confident WRONG number (live failures: "
     "a total built from three items the user never mentioned; a lone class that rendered an empty table). Ask "
     "instead. "
     "Pass the item names STRAIGHT THROUGH, exactly as the user wrote them - this tool resolves them "
@@ -2615,9 +2691,10 @@ _TOOLS_TEXT = (
     "FIRST and pass the item names it lists. The two lists above are the ONLY valid class/specialization "
     "values: never translate one, never invent one, and never offer a name outside them as an ask() option - "
     "live failure 2026-09-25, a class question rendered the buttons \"Дудар\", \"Орdinator\" and "
-    "\"Гільгармос\", none of which exist, so tapping one contributed nothing. Pass the specialization in "
-    "`specialization` and the CLASS in `class`; putting a specialization in `class` drops the real class's "
-    "modifiers. \"Heretic Ara Sequencer\" means specialization=\"Heretic Ara\", class=\"Sequencer\".\n"
+    "\"Гільгармос\", none of which exist, so tapping one contributed nothing. \"Heretic Ara Sequencer\" is a "
+    "CLASS plus a SPECIALIZATION: class=\"Heretic Ara\", specialization=\"Sequencer\" - two different levels "
+    "of one character (see the TAXONOMY rule). Each is looked up in its own pool, so a name in the wrong field "
+    "is still understood, but say them the right way round in the answer.\n"
     "- towers(): no input. Current floor (15-50, 50=cleared/at the top awaiting reset) of all 5 real-time \"Wild "
     "Towers of Olympia\" (Selene/Eos/Oceanus/Themis/Prometheus) - pure deterministic math from the current time, "
     "always available, never a dead end. Use for \"how tall is tower X now\"/\"which tower is at max\" etc. For "
@@ -2876,6 +2953,40 @@ _COMPLETENESS_RULE = (
     "which items of a 13-item set were useable by mages, the loop opened 5, and answered that the set was "
     "\"warrior or thief classes only\" - it had never seen the 4 valhallan_summoner pieces, and one filtered "
     "query() would have settled it in a single step."
+)
+
+_TAXONOMY_RULE = (
+    "CLASS vs SPECIALIZATION vs CLASS LINE - three different levels, never one word for two of them:\n"
+    "- a CLASS LINE is one of exactly six: Mage, Thief, Warrior, Valhallan, Summoner, Demigod. A character "
+    "belongs to one for its whole life. A line holds a class at EVERY tier, 1 through 10 - it is NOT a single "
+    "class, and its tier-10 class is only its last rung, so \"the Mage line\" is not a synonym for Heretic. "
+    "GEAR RESTRICTIONS key on the LINE: that is what an item's useable_by (all_classes / magic_users / "
+    "warrior_classes / thief_classes / valhallan_summoner_classes / melee_classes) means, and a \"which classes "
+    "is this for\" answer comes from that field, never from what a name sounds like.\n"
+    "- WHICH LINE a given class belongs to is NOT in any structured data here - a codex class record has its "
+    "tier but no line, and a class description's \"can wield equipment of the thief\" is cross-line EQUIPMENT "
+    "ACCESS, not membership (Heretic Corvus is a Mage-line class described as \"thief\"). So do not assert a "
+    "class's line from memory: get it from knowledge_search (the tier-by-tier progression guides), or leave it "
+    "out and answer what you can verify.\n"
+    "- a CLASS is one tier 1-10 step inside a line (tier 1 is Mage/Thief/Warrior; the tier-10 classes are "
+    + _class_names_text("specialization") + " - six line-ending classes plus two Celestial variants each). "
+    "Several have a gendered second name: Heretic/Hera, Gilgamesh/Gallia, Beowulf/Bestla.\n"
+    "- a SPECIALIZATION is the one passive package a class picks on top ("
+    + _class_names_text("class") + "). Ranger, Berserker and Sequencer are SPECIALIZATIONS, "
+    "NOT classes. A character is a class AND a specialization together (\"Heretic Ara Sequencer\"), which is "
+    "what makes the combination unique.\n"
+    "THIS RULE OUTRANKS A SOURCE'S WORDING. Community guides, aussiescodex and old reddit/Q&A posts routinely "
+    "call the tier-10 CLASSES \"specializations\" - if a knowledge_search or class_guide block says \"the six "
+    "tier-10 specializations are Gilgamesh, Heretic, ...\", it means CLASSES; use the vocabulary above and do not "
+    "repeat theirs. Live failure 2026-09-27: a run read exactly that line back and answered \"Heretic is a "
+    "tier-10 specialization\".\n"
+    "So: never call Ranger/Sequencer/Berserker a class, never call Gilgamesh/Heretic a specialization, and never "
+    "put a specialization and a class in one list as if they were the same kind of thing. When recommending gear "
+    "\"for a class\", say which CLASS LINE (or which useable_by bucket) it is restricted to, and take that from "
+    "the item's own useable_by - never from your own idea of what a name sounds like. Live failure 2026-09-27: an "
+    "answer listed \"Ranger\", \"Summoner\" and \"Dexterity-based classes (Ranger, Assassin, Tamer)\" side by "
+    "side as classes - Summoner is a real class, the other three are specializations, and the gear split it was "
+    "describing is really by class line."
 )
 
 _AGGREGATE_RULE = (
@@ -3229,6 +3340,7 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_CLASS_GUIDE_RULE}\n\n"
         f"{_AGGREGATE_RULE}\n\n"
         f"{_COMPLETENESS_RULE}\n\n"
+        f"{_TAXONOMY_RULE}\n\n"
         f"{_REASONING_RULE}\n\n"
         f"{_CONFIDENCE_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
@@ -3311,6 +3423,11 @@ class OrnaSession:
     # rather than stalling on a question nobody can answer.
     allow_ask: bool = True
     asks_made: int = 0   # capped by MAX_ASKS_PER_REQUEST
+    # Who asked. _arm_text_wait scopes the typed-answer/follow-up window to
+    # them, and it cannot be taken from the message _advance was handed: on a
+    # button-resumed step that message is the BOT's own (orna_callback passes
+    # query.message), whose from_user is the bot.
+    user_id: Optional[int] = None
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -3647,11 +3764,28 @@ async def _advance_inner(sid: str, message) -> None:
             # Counted as an ask so the same cap bounds it, and given a shorter
             # fuse than a real ask, since this one is inferred.
             speculative = not session.seen_calls
-            if (session.needs_input or speculative) and session.allow_ask \
-                    and session.asks_made < MAX_ASKS_PER_REQUEST:
-                session.asks_made += 1
-                _PENDING_ASK_TEXT[message.chat_id] = (
-                    sid, time.monotonic() + (_FOLLOWUP_TTL_SECONDS if speculative else ASK_TEXT_TTL_SECONDS))
+            if session.allow_ask:
+                if (session.needs_input or speculative) and session.asks_made < MAX_ASKS_PER_REQUEST:
+                    session.asks_made += 1
+                    _arm_text_wait(message, sid, _FOLLOWUP_TTL_SECONDS if speculative
+                                   else ASK_TEXT_TTL_SECONDS, asked=True)
+                else:
+                    # A normal, answered request: keep listening briefly so a
+                    # follow-up needs no /orna prefix. NOT counted as an ask -
+                    # the loop asked nothing, and each follow-up is a real user
+                    # message, so there is nothing to ping-pong.
+                    # ponytail: this window can swallow ONE other flow's typed
+                    # input - assess's AWAITING_NAME fallback, if the same user
+                    # sends a screenshot whose OCR fails within
+                    # _FOLLOWUP_TTL_SECONDS of an /orna answer. They then get
+                    # codex info about the item instead of an upgrade table.
+                    # Left alone because it needs all three in 180s and
+                    # telegram_orna already imports telegram_assess, so the
+                    # clean check would be a cycle. Upgrade path if it is ever
+                    # reported: have telegram_assess expose the set of chats
+                    # mid-flow and have _PendingAskTextFilter skip them (that
+                    # direction of import is the acyclic one).
+                    _arm_text_wait(message, sid, _FOLLOWUP_TTL_SECONDS, asked=False)
             return
 
         if action == "ask":
@@ -3693,7 +3827,7 @@ async def _advance_inner(sid: str, message) -> None:
             # the request looked stuck. Tapping a real option clears this
             # again (see orna_callback), so it cannot swallow an unrelated
             # message once the question has been answered.
-            _PENDING_ASK_TEXT[message.chat_id] = (sid, time.monotonic() + ASK_TEXT_TTL_SECONDS)
+            _arm_text_wait(message, sid, ASK_TEXT_TTL_SECONDS, asked=True)
             # One option per row. Four 30-char labels in a single row is the
             # same shape that made the old UTC picker unreadable on a phone -
             # Telegram shrinks buttons to fit and clips the text with no
@@ -3756,6 +3890,7 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     messages, user_lang = await build_loop_messages(text)
     sid = _new_orna_session(messages, MAX_STEPS)
     _ORNA_SESSIONS[sid].user_lang = user_lang
+    _ORNA_SESSIONS[sid].user_id = getattr(getattr(message, "from_user", None), "id", None)
     await _advance(sid, message)
 
 
@@ -3897,8 +4032,21 @@ def build_chosen_inline_result_handler() -> ChosenInlineResultHandler:
 
 async def _await_ask_text(query, sid: str) -> None:
     """Arm the one-shot free-text wait for this chat and prompt for it."""
-    _PENDING_ASK_TEXT[query.message.chat_id] = (sid, time.monotonic() + ASK_TEXT_TTL_SECONDS)
+    _arm_text_wait(query.message, sid, ASK_TEXT_TTL_SECONDS, asked=True)
     await query.message.reply_text("✍️ Напишіть уточнення одним повідомленням:")
+
+
+def _arm_text_wait(message, sid: str, ttl: float, asked: bool) -> None:
+    """Listen for this chat's next typed message and feed it back into `sid`.
+    Scoped to the user who asked (see _PENDING_ASK_TEXT) so it cannot swallow
+    anyone else's message in a group."""
+    session = _ORNA_SESSIONS.get(sid)
+    _PENDING_ASK_TEXT[message.chat_id] = {
+        "sid": sid,
+        "until": time.monotonic() + ttl,
+        "user_id": session.user_id if session else None,
+        "asked": asked,
+    }
 
 
 class _PendingAskTextFilter(filters.MessageFilter):
@@ -3907,7 +4055,12 @@ class _PendingAskTextFilter(filters.MessageFilter):
 
     def filter(self, message) -> bool:
         pending = _PENDING_ASK_TEXT.get(message.chat_id)
-        return bool(pending and time.monotonic() < pending[1])
+        if not pending or time.monotonic() >= pending["until"]:
+            return False
+        # Only the person the loop was talking to continues it. A stored None
+        # (a harness message with no from_user) matches anyone.
+        who = getattr(getattr(message, "from_user", None), "id", None)
+        return pending["user_id"] is None or who == pending["user_id"]
 
 
 _pending_ask_text_filter = _PendingAskTextFilter()
@@ -3921,7 +4074,7 @@ async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     pending = _PENDING_ASK_TEXT.pop(message.chat_id, None)
     if pending is None:
         return  # the filter already checked, but stay defensive
-    sid, expires = pending
+    sid, expires = pending["sid"], pending["until"]
     if time.monotonic() > expires:
         await message.reply_text("Уточнення застаріло — спробуйте /orna ще раз.")
         return
@@ -3929,19 +4082,30 @@ async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if session is None:
         await message.reply_text("Ця сесія застаріла — спробуйте /orna ще раз.")
         return
-    session.messages.append({
-        "role": "user",
-        "content": f"Observation: the user answered the clarifying question in their own words: "
-                   f"{message.text.strip()[:500]!r}. Use this and continue.",
-    })
+    said = message.text.strip()[:500]
+    if pending["asked"]:
+        follow_up = (f"Observation: the user answered the clarifying question in their own words: {said!r}. "
+                     "Use this and continue.")
+    else:
+        # Nothing was asked - the loop had already answered and this is the
+        # next thing the user said. It is a new turn of the same conversation,
+        # so the accumulated context applies, but it is NOT an answer to
+        # anything and must not be read as one.
+        follow_up = (f"Observation: the user sent a FOLLOW-UP message in the same conversation: {said!r}. "
+                     "Read it against the answer you just gave - it may be a new question, a correction, or a "
+                     "request to narrow or extend that answer. Do NOT re-state the previous answer, and if it "
+                     "needs data you have not observed in this conversation, call a tool for it.")
+    session.messages.append({"role": "user", "content": follow_up})
     # The user has now supplied something, so the flag that kept us listening
     # is stale - leaving it set re-arms the wait on the next finish even if no
     # tool asked for anything, which would swallow unrelated messages.
     session.needs_input = False
     # The answer may arrive after the loop already spent its budget (it can
     # come in after a finish - see _NEEDS_INPUT), so top it up enough to act
-    # on what was just supplied rather than closing out immediately.
-    session.steps_left = max(session.steps_left, _RESUME_STEPS)
+    # on what was just supplied rather than closing out immediately. A plain
+    # FOLLOW-UP is a fresh question rather than the missing half of one, so it
+    # gets the full budget; _advance's own wall-clock ceiling still bounds it.
+    session.steps_left = max(session.steps_left, _RESUME_STEPS if pending["asked"] else MAX_STEPS)
     await _advance(sid, message)
 
 
@@ -4173,6 +4337,93 @@ def _demo() -> None:
     assert _normalize_options(["  ", "Mage"]) == ["Mage"]
     assert _normalize_options(["plain, with a comma"]) == ["plain, with a comma"]
 
+    # _reassign_class_pools: orna_classes' pool names are INVERTED from the
+    # game's, so the model (taught the game's words) fills the two keys the
+    # other way round. Both conventions must land in the right pool; the
+    # returned pair is in orna_classes' OWN terms (spec = the tier-10 class).
+    # Live 2026-09-27: an answer called Ranger and Sequencer "classes" and
+    # listed them beside Summoner, which is a real one.
+    tier10 = orna_classes.all_names("specialization")[0]      # e.g. "Beowulf"
+    special = orna_classes.all_names("class")[0]              # e.g. "Apprentice"
+    assert _reassign_class_pools(tier10, special) == (tier10, special)        # already right
+    assert _reassign_class_pools(special, tier10) == (tier10, special)        # swapped -> fixed
+    assert _reassign_class_pools(tier10, "") == (tier10, "")                  # class alone
+    assert _reassign_class_pools("", tier10) == (tier10, "")                  # class in the spec key
+    assert _reassign_class_pools(special, "") == ("", special)                # spec in the class key
+    assert _reassign_class_pools("", special) == ("", special)                # spec alone
+    assert _reassign_class_pools("", "") == ("", "")
+    # "none" is an ANSWER for the tier-10 slot, never a misfiled name...
+    assert _reassign_class_pools("none", special) == ("none", special)
+    # ...and a name in NEITHER pool stays put, so the caller's own "that is not
+    # a real name" message still names the field the model actually filled.
+    assert _reassign_class_pools("Гільгармос", "") == ("Гільгармос", "")
+    assert _reassign_class_pools("", "Дудар") == ("", "Дудар")
+
+    # The two pools have to be DISJOINT for the above to be unambiguous at all.
+    assert not (set(orna_classes.all_names("class")) & set(orna_classes.all_names("specialization")))
+
+    # _arm_text_wait: a follow-up window is scoped to whoever ASKED, not to
+    # whatever message _advance was handed - on a button-resumed step that is
+    # the BOT's own message. And it must record WHY it is listening, since an
+    # answer to a question and an unprompted follow-up are framed differently.
+    class _M:
+        chat_id = 42
+        from_user = type("U", (), {"id": 999})()      # the bot, on a button resume
+    sid = _new_orna_session([], MAX_STEPS)
+    _ORNA_SESSIONS[sid].user_id = 7
+    try:
+        _arm_text_wait(_M(), sid, 60, asked=False)
+        got = _PENDING_ASK_TEXT[42]
+        assert got["user_id"] == 7 and got["asked"] is False and got["sid"] == sid, got
+        assert _pending_ask_text_filter.filter(_M()) is False, "the bot's own id must not match"
+        _M.from_user = type("U", (), {"id": 7})()
+        assert _pending_ask_text_filter.filter(_M()) is True, "the asker must match"
+    finally:
+        _PENDING_ASK_TEXT.pop(42, None)
+        _ORNA_SESSIONS.pop(sid, None)
+
+    # ...and the two reasons to be listening must reach the model DIFFERENTLY.
+    # A follow-up read as "the answer to my question" sent the loop looking for
+    # a question it never asked; an answer read as a follow-up loses the point
+    # of having asked. Also checks the budget: a follow-up is a fresh question
+    # (MAX_STEPS), an answer only unblocks the tool that wanted it
+    # (_RESUME_STEPS).
+    advanced = []
+    real_advance = globals()["_advance"]
+
+    async def _spy(sid_, message_, with_status=True):
+        advanced.append(sid_)
+
+    class _Msg:
+        chat_id = 43
+        from_user = type("U", (), {"id": 7})()
+        text = "and for the head slot?"
+
+        async def reply_text(self, *a, **k):
+            return None
+
+    class _Upd:
+        effective_message = _Msg()
+
+    globals()["_advance"] = _spy
+    try:
+        for asked, want_steps, want_phrase in ((False, MAX_STEPS, "FOLLOW-UP"),
+                                               (True, _RESUME_STEPS, "answered the clarifying question")):
+            sid = _new_orna_session([{"role": "user", "content": "Q"}], 0)
+            _ORNA_SESSIONS[sid].user_id = 7
+            _arm_text_wait(_Msg(), sid, 60, asked=asked)
+            advanced.clear()
+            asyncio.run(handle_ask_text(_Upd(), None))
+            sess = _ORNA_SESSIONS[sid]
+            assert advanced == [sid], (asked, advanced)
+            assert want_phrase in sess.messages[-1]["content"], (asked, sess.messages[-1]["content"][:90])
+            assert sess.steps_left == want_steps, (asked, sess.steps_left, want_steps)
+            assert 43 not in _PENDING_ASK_TEXT, "the one-shot wait must clear itself"
+            _ORNA_SESSIONS.pop(sid, None)
+    finally:
+        globals()["_advance"] = real_advance
+        _PENDING_ASK_TEXT.pop(43, None)
+
     # the always-appended escape hatch must not be duplicated by the model's
     # own "Інше"/"Своя відповідь" option (live: two near-identical buttons).
     kept = [o for o in _normalize_options(["['Клас', 'Своя відповідь', 'Інше']"])
@@ -4213,23 +4464,26 @@ def _demo() -> None:
     # from the code once already - the old version looped over all five fields
     # expecting a refusal for each, which made the whole module's self-check
     # unrunnable rather than catching anything.
-    full = {"items": [{"name": "Lost Helmet"}], "class": "Duelist",
-            "specialization": "Gilgamesh", "ascension_level": 0, "pvp": False}
-    for field in ("items", "class", "pvp"):
+    # class = the tier-10 CLASS, specialization = the passive package on top -
+    # the game's words, which is what the tool now documents and reads.
+    full = {"items": [{"name": "Lost Helmet"}], "class": "Gilgamesh",
+            "specialization": "Duelist", "ascension_level": 0, "pvp": False}
+    for field in ("items", "specialization", "pvp"):
         sink = _Collect()
         out = asyncio.run(_run_estimate_stats_tool(sink, {k: v for k, v in full.items() if k != field}))
         assert not out.startswith(_NEEDS_INPUT), f"{field} is OPTIONAL: {out[:120]}"
         assert len(sink.posted) == 1, (field, sink.posted)
-    # ...and dropping the SPEC is fine too, as long as items remain
+    # ...and dropping the CLASS (the base-stats source) is fine too, as long as
+    # items remain
     sink = _Collect()
     assert not asyncio.run(_run_estimate_stats_tool(
-        sink, {k: v for k, v in full.items() if k != "specialization"})).startswith(_NEEDS_INPUT)
+        sink, {k: v for k, v in full.items() if k != "class"})).startswith(_NEEDS_INPUT)
 
     # the two genuine refusals. The marker matters as much as the text:
     # _advance_inner keys the keep-listening-after-finish behaviour off it
     for label, partial, want in (
         ("no AL", {k: v for k, v in full.items() if k != "ascension_level"}, "- ascension_level:"),
-        ("nothing to compute", {"class": "Duelist", "specialization": "none",
+        ("nothing to compute", {"class": "none", "specialization": "Duelist",
                                 "ascension_level": 0, "pvp": False}, "and/or items"),
         ("empty args", {}, "- ascension_level:"),
     ):
@@ -4237,7 +4491,8 @@ def _demo() -> None:
         assert out.startswith(_NEEDS_INPUT), (label, out[:80])
         assert want in out, (label, out[:200])
     # ...and a name that is not in the real pool is missing, not a warning
-    for field, bad in (("class", "Маг"), ("specialization", "Гільгармос")):
+    # each bad name is reported under the field the model actually filled
+    for field, bad in (("class", "Гільгармос"), ("specialization", "Дудар")):
         out = asyncio.run(_run_estimate_stats_tool(_Silent(), {**full, field: bad}))
         assert f"- {field}: {bad!r} is not" in out, out[:200]
     # an unparseable AL is reported, never silently 0

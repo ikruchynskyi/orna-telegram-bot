@@ -14,6 +14,38 @@ numbers that look plausible and are wrong:
 * **classes** (40, tiers 1-10): Brawler, Duelist, Magus, ... These carry
   PERCENT `statModifiers` - Brawler is hp +5%, attack +2%.
 
+**THESE TWO POOL NAMES ARE AUSSIESCODEX'S, AND THEY ARE INVERTED FROM THE
+GAME'S OWN WORDS.** In Orna the pool this file calls `spec_stats` is the
+tier-10 **CLASS** (Gilgamesh, Heretic Ara, Beowulf), and the pool it calls
+`classes` is the **SPECIALIZATION** (Ranger, Sequencer, Berserker) - the
+level-gated passive package a class picks. Measured, not argued: of the 40
+`classes` names, **0** appear in the codex's own `classes` category, while
+**all** 19 `spec_stats` names do (`Diety` is aussies' misspelling of Deity).
+Above both sits a third level this dataset has no concept of at all, the
+**class line** (Mage / Thief / Warrior / Valhallan / Summoner / Demigod). A line
+holds a class at EVERY tier 1-10, not just the tier-10 one, and a character
+stays in its line for life; gear restrictions key on the line - see `useable_by`
+in orna_aussies.
+
+**No source in this repo maps a class to its line, and this module does not
+guess one.** Checked 2026-09-27: a codex class record carries only
+tier/price/skills/abilities/celestial_classes (all 82), and the official class
+DESCRIPTION's "can wield equipment of the thief" is cross-line EQUIPMENT ACCESS,
+not membership - Heretic Corvus is a Mage-line class whose description says
+"thief". The one place the chains are written down is prose, in `orna_echo`'s
+tier-by-tier progression guides, reachable through `knowledge_search`. A
+line -> tier-10-class table briefly lived here and was removed: the tier-10 class
+is only the LAST rung of its line, so the table invited exactly the reading that
+"Mage line" means "Heretic".
+
+The pool NAMES are left as aussiescodex wrote them, because that is where the
+data comes from and renaming them would desync this file from its own
+scraper. Everything user- or model-facing says it the game's way instead
+(`telegram_orna._reassign_class_pools` and the estimate_stats tool
+description), so the inversion stops at this module's edge. The two pools are
+fully DISJOINT (0 overlapping names), which is what makes a name alone enough
+to tell which pool it belongs to.
+
 The estimator applies, in order:
   1. a specialization's absolute base stats (or a caller-supplied base),
   2. the class's percent modifiers,
@@ -242,6 +274,18 @@ def _demo() -> None:
     data = _load()
     assert len(data["classes"]) == 40 and len(data["spec_stats"]) == 19, (
         len(data["classes"]), len(data["spec_stats"]))
+
+    # The two pools must stay DISJOINT: everything user- and model-facing sorts a
+    # name into the right one by the name alone (the pool names are inverted from
+    # the game's, see the module docstring), which only works while no name is in
+    # both.
+    assert not (set(all_names("class")) & set(all_names("specialization")))
+
+    # The tier-10 pool is the LAST class of each of the six lines plus two
+    # Celestial variants each, hence 18. That is a shape check only: NOTHING in
+    # any source here says which line a class belongs to (see the docstring), so
+    # this module deliberately does not claim to know.
+    assert len(all_names("specialization")) == 18, all_names("specialization")
 
     # a specialization carries ABSOLUTE stats
     gil = find_class("Gilgamesh")

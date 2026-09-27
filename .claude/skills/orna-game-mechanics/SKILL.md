@@ -69,14 +69,45 @@ boundaries below are the standing example).
    structured source - it lives in `orna_echo`/`orna_mechanics`, via
    `knowledge_search`.
 
-2. **"Specialization" is TWO different things - don't conflate them.**
-   (a) the six tier-10 CLASS specializations (Gilgamesh, Heretic,
-   Realmshifter, Beowulf, Grand Summoner, Deity, + their Celestial variants
-   like Ara/Corvus/Auriga/Hydrus/Ursa/Hercules) - THIS is what
-   `orna_classes`' `spec_stats` / the `estimate_stats` tool mean by
-   "specialization"; and (b) a separate level-50 passive-package system
-   (Hunter/Berserker/Guardian/Scholar/Stargazer/Cleric). The bot's code means
-   (a); a user might mean (b).
+2. **A character is THREE nested things, and `orna_classes`' pool names get two
+   of them backwards.** The game's own words:
+   * a **CLASS LINE** - one of exactly six: Mage, Thief, Warrior, Valhallan,
+     Summoner, Demigod. A character stays in its line for life, and a line holds
+     a class at **every** tier 1-10 - a line is NOT one class, and its tier-10
+     class is only its last rung ("the Mage line" is not a synonym for Heretic).
+     **Gear restrictions key on the LINE**, which is what an item's `useable_by`
+     encodes (`all_classes` / `magic_users` / `warrior_classes` /
+     `thief_classes` / `valhallan_summoner_classes` / `melee_classes` - those
+     six, verified against the live data).
+   * **Which line a class belongs to is in NO structured source here** (checked
+     2026-09-27: a codex class record has `tier` but no line, across all 82).
+     The official description's "can wield equipment of the thief" is cross-line
+     **equipment access**, not membership - Heretic Corvus is a Mage-line class
+     whose description says "thief". The chains are written down only as prose,
+     in `orna_echo`'s tier-by-tier progression guides, via `knowledge_search`.
+     Do not hardcode a line table; a line -> tier-10-class one was tried and
+     removed for implying a line is a single class.
+   * a **CLASS** - one tier 1-10 step inside a line, unlocked by level. Tier 1
+     is Mage/Thief/Warrior; the tier-10 classes are Heretic/Hera,
+     Gilgamesh/Gallia, Beowulf/Bestla, Grand Summoner, Deity and Realmshifter,
+     each plus two Celestial variants (Ara/Corvus/Auriga/Hydrus/Ursa/Hercules) -
+     18 in all. The codex's `classes` category is exactly this level, 82
+     records, tiers 1-10.
+   * a **SPECIALIZATION** - the ONE passive package a class picks on top
+     (Ranger, Berserker, Sequencer, Duelist, Guardian, Scholar, Hunter, ...).
+     Class + specialization together is what makes a build unique.
+
+   **`orna_classes.json` inverts the middle two.** Its `spec_stats` pool (19)
+   is really the tier-10 CLASS, and its `classes` pool (40) is really the
+   SPECIALIZATION - measured, not argued: 0 of the 40 appear in the codex's own
+   `classes` category, all 19 of the others do. Those pool names are
+   aussiescodex's and are left alone, but everything user- and model-facing says
+   it the game's way: the `estimate_stats` tool's keys are the game's
+   (`class`="Gilgamesh", `specialization`="Sequencer"), and
+   `telegram_orna._reassign_class_pools` sorts them by which pool the NAME is in
+   so a crossed call still works. Live 2026-09-27: an answer listed "Ranger",
+   "Summoner" and "Dexterity-based classes (Ranger, Assassin, Tamer)" side by
+   side as classes - only Summoner is one.
 
 3. **Ascension Level is per-CLASS, +1% to base stats per level, effectively
    uncapped.** AL 100 ≈ +100% (double) a class's base stats; all variants of

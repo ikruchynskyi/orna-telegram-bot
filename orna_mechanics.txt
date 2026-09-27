@@ -21,14 +21,25 @@ than classes, and it is answerable: ★11 dungeons and towers place Arisen
 Superbosses on floor 16 and floor 25 (★10 puts its 5 superbosses on the final
 floor only), and a character at ★11 / level 250 gets double the Godforging
 chances per run versus ★10. So "there is no tier 11" is right about classes and
-wrong as a flat answer to "should I run T11 dungeons". The three starting classes are Warrior, Mage and Thief; the class
-tree branches as you tier up. The six tier-10 specializations are Gilgamesh,
+wrong as a flat answer to "should I run T11 dungeons". A character is three nested things, and calling any two of them by one word is
+the mistake to avoid. A CLASS LINE - Mage, Thief, Warrior, Valhallan, Summoner
+or Demigod, six of them - is what you belong to for life, and it holds a CLASS
+at every tier from 1 to 10; a line is NOT a single class, and its tier-10 class
+is only its last rung, so "the Mage line" does not mean "Heretic". The three
+starting classes are Warrior, Mage and Thief (tier 1); the tree branches as you
+tier up. The six tier-10 CLASSES - not "specializations" - are Gilgamesh,
 Heretic, Realmshifter, Beowulf, Grand Summoner and Deity, each with Celestial
 evolved variants unlocked via the Titans (e.g. Beowulf Auriga/Hydrus, Heretic
-Ara/Corvus, Gilgamesh Hercules/Ursa, Deity Ara/Ursa). Separately, a "class
-specialization" package (Hunter, Berserker, Guardian, Scholar, Stargazer,
-Cleric) unlocks around level 50 - this is a different thing from the tier-10
-specializations.
+Ara/Corvus, Gilgamesh Hercules/Ursa, Deity Ara/Ursa), 18 in all. A
+SPECIALIZATION is the separate passive package a class picks on top - Ranger,
+Berserker, Sequencer, Duelist, Hunter, Guardian, Scholar, Stargazer, Cleric and
+so on, the first unlocking around level 50. Community guides and aussiescodex
+frequently call the tier-10 classes "specializations"; that wording is wrong and
+reading it back produced a live wrong answer on 2026-09-27. Which LINE a given
+class belongs to is not recorded in any structured source - a codex class record
+has its tier and no line, and a class description's "can wield equipment of the
+thief" is cross-line EQUIPMENT ACCESS rather than membership (Heretic Corvus is
+a Mage-line class described as "thief").
 
 === Ascension Level (AL) ===
 Ascension is the endgame progression PAST level 250, added around 2022 (a
