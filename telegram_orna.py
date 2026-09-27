@@ -3585,6 +3585,12 @@ async def _advance_inner(sid: str, message) -> None:
         # got "" and spent a step answering "calculate needs a numeric
         # expression". Accept either placement.
         action_input = str(step.get("action_input") or args.get("action_input") or "").strip()
+        # The call chain, one line per step, grouped by sid - grep "orna: step"
+        # to read a whole request's trace. The harness prints this for a request
+        # you run yourself; in production this log was the only thing missing.
+        logger.info("orna: step %s/%s sid=%s action=%s input=%r args=%s",
+                    step_number, MAX_STEPS, sid, action, action_input[:120],
+                    {k: str(v)[:80] for k, v in args.items() if k != "action_input"} or "{}")
 
         if action == "finish" or not action:
             usage_stats.record_tool_call("finish")
