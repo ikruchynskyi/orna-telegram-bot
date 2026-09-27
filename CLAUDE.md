@@ -1947,7 +1947,10 @@ reasons over everything on the first iteration - fewer paid LLM calls, and no
   today); the touched entities are recorded on `session.viewed_entries` so
   `finish()` offers buttons to open any of them. Multi-entity requests bundle
   every subject in one observation (`args.entities`, or a comma/"and"/"та"
-  split of `action_input`).
+  split of `action_input` - but the WHOLE string is resolved first and split
+  only if that fails, so a real name that itself contains a comma or "and"
+  ("Arisen Thor, the Storm God", "Sword and Shield") is not shredded into a
+  wrong item plus an unresolved half).
 - **Added alongside** `open_entry`/`search_codex`/`query`, not replacing them -
   they still serve browsing and single lookups; `research` is the prompt's
   DEFAULT for analytical/comparative/"how to beat" questions.

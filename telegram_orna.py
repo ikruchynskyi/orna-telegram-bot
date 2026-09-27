@@ -74,7 +74,7 @@ from orna_aussies import has_aussies_page
 from orna_aussies import fuzzy_codex_name
 from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
 from orna_aussies import unresolvable_condition_fields
-from orna_aussies import build_supergraph
+from orna_aussies import build_supergraph, resolve_entity
 from orna_aussies import class_abilities as orna_aussies_class_abilities
 from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
@@ -1153,8 +1153,14 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
     names = args.get("entities")
     if not names:
         raw = (action_input or "").strip()
-        # a comma / "and" / "та" separated subject is several entities
-        names = [p.strip() for p in re.split(r",| and | та ", raw) if p.strip()] or [raw]
+        # A real entity name can itself contain "," or "and" ("Arisen Thor, the
+        # Storm God", "Sword and Shield"), so resolve the WHOLE string first and
+        # split into several entities ONLY when it doesn't resolve on its own -
+        # an eager split mis-resolved those to a wrong item + an unresolved half.
+        if raw and "id" in await asyncio.to_thread(resolve_entity, raw):
+            names = [raw]
+        else:
+            names = [p.strip() for p in re.split(r",| and | та ", raw) if p.strip()] or [raw]
     names = [n for n in names if n]
     if not names:
         return "research needs an entity name in action_input"
@@ -1172,8 +1178,10 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
         if sources is not None and has_aussies_page(ent["category"]):
             _add_source(sources, ent["name"], build_aussies_url(ent["category"], ent["id"]))
 
-    # knowledge half - the same aggregation knowledge_search uses (best effort)
-    subject = action_input or names[0]
+    # knowledge half - the same aggregation knowledge_search uses (best effort).
+    # Join names (not just names[0]) so an entities-only call with no
+    # action_input still gathers knowledge for every subject.
+    subject = action_input or " ".join(names)
     knowledge = await _gather_knowledge(subject, sources)
     if knowledge:
         return codex_text + "\n\nCOMMUNITY KNOWLEDGE:\n" + knowledge
@@ -4459,6 +4467,19 @@ def _demo() -> None:
     sessU = _RSess()
     obsR3 = asyncio.run(_run_tool(_RSpy(), "research", "zzzptqx nothing here", {}, sessU.sources, sessU))
     assert "could not resolve" in obsR3.lower(), obsR3[:200]
+    # a real entity name can contain "," or "and" - resolve the WHOLE string
+    # first, don't shred it (live bug: "Arisen Thor, the Storm God" split into a
+    # wrong item + an unresolved half; "Sword and Shield" was never found).
+    for whole in ("Arisen Thor, the Storm God", "Sword and Shield"):
+        sW = _RSess()
+        oW = asyncio.run(_run_tool(_RSpy(), "research", whole, {}, sW.sources, sW))
+        assert "could not resolve" not in oW.lower(), (whole, oW[:160])
+        assert len(sW.viewed_entries) == 1, (whole, sW.viewed_entries)
+    # ...but two genuine entities joined by "and" still split into both
+    sT = _RSess()
+    asyncio.run(_run_tool(_RSpy(), "research",
+                          "Fallen King Centaurus and Judge Trifecta Maximus", {}, sT.sources, sT))
+    assert len(sT.viewed_entries) == 2, sT.viewed_entries
 
     # research is advertised in the system prompt (a tool undescribed is unused)
     _p = _orna_system_prompt("what does Fallen King Centaurus drop")

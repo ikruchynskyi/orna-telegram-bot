@@ -495,11 +495,15 @@ def build_cases() -> list:
         # raid's 12 drops, so "yes" and "no" are both defensible and the case
         # graded a coin flip. Grade the thing with one right answer: the
         # three-way class split the loop used to get wrong by sampling.
+        # `research` is accepted here (and is now the model's default): one call
+        # returns the raid + every drop with its useable_by, which is the whole
+        # class split - a strictly better path than N open_entry calls. The
+        # content assertions still grade the answer.
         Case("trifecta-classes", 2,
              "which classes can use the items dropped by Judge Trifecta Maximus?",
              Expect(final_all_of=["warrior", "thief"],
                     final_any_of=[["valhallan", "summoner"]],
-                    tools_any=["query", "open_entry"])),
+                    tools_any=["query", "open_entry", "research"])),
         Case("godforged-orn", 2, "what is the orn bonus of a godforged Lost Helmet?",
              Expect(all_of=[f"{lh_orn:g}"], tools_all=["assess"])),
         Case("eos-floor", 2, "what floor is the Eos wild tower on right now?",
@@ -517,8 +521,12 @@ def build_cases() -> list:
         # --------------------------- tier 3: research and judgement --------
         # _STRATEGY_RULE: a boss's elemental immunities are in NO structured
         # source, so codex facts alone must not be enough to finish.
+        # `research` is accepted here too: its knowledge half runs the same
+        # community-knowledge aggregation knowledge_search does (immunities
+        # included), so it satisfies _STRATEGY_RULE in one call - which the
+        # prompt now tells the model to prefer for a "how do I beat X" question.
         Case("sirus-strategy", 3, "how do I kill Knight Sirus?",
-             Expect(tools_any=["knowledge_search", "web_search"],
+             Expect(tools_any=["knowledge_search", "web_search", "research"],
                     final_none_of=["no known weaknesses"])),
         # _CLASS_GUIDE_RULE + the language lock, which lost to the prompt's
         # own Ukrainian examples until it was made deterministic.

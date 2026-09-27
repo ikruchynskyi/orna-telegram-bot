@@ -598,10 +598,8 @@ def resolve_entity(name: str) -> dict:
     }
 
 
-# Every one of these edge fields is a list of [category, id] cross-links in
-# codex.json (verified live). The default expand set is category-aware.
-_GRAPH_EDGES = ("drops", "skills", "dropped_by", "upgrade_materials",
-                "used_by", "learned_by")
+# Every cross-link edge field in codex.json is a list of [category, id] pairs
+# (verified live); the category-aware default set to expand is _DEFAULT_EXPAND.
 _DEFAULT_EXPAND = {
     "raids": ("drops", "skills"),
     "bosses": ("drops", "skills"),
