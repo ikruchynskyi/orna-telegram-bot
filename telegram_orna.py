@@ -101,6 +101,7 @@ from telegram_go import (
 )
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
+from telegram_remind import schedule_reminder  # towers tool's "remind me at floor 50" buttons
 from telegram_resources import build_report, pre_table, send_report_blocks
 import usage_stats
 
@@ -910,8 +911,12 @@ async def _run_towers_tool(message) -> str:
     run under Node before deploying - see orna_towers._demo), not looked
     up from any data source at all. No args needed - cheap enough to
     always report all 5 and let the model read whichever one the request
-    actually asked about. Also posts a ready-to-tap `/remind` suggestion
-    for each tower not already at 50 - see orna_towers.time_to_floor."""
+    actually asked about. Also posts a "🔔 remind me at floor 50" button
+    per tower not already there - see orna_towers.time_to_floor - modelled
+    on telegram_resources.py's own guild reminder buttons, but simpler:
+    the fire time here is a plain ELAPSED delay (now -> the tower's own
+    ETA), not an absolute clock time, so there's no per-user UTC-offset
+    ask to do first, unlike that flow's `request_utc_offset`."""
     now = datetime.datetime.now(datetime.timezone.utc)
     floors = orna_towers.get_tower_floors(now)
 
@@ -929,26 +934,46 @@ async def _run_towers_tool(message) -> str:
         delta_min = int((nxt["time"] - now).total_seconds() // 60)
         lines.append(f"Наступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
 
-    # "/remind" is a plain elapsed-time reminder ("/remind Nh ..."), not an
-    # absolute clock time, so no timezone question needs asking here at all
-    # (see orna_towers.time_to_floor's own docstring) - just the whole-hour
-    # ceiling of "ETA - now" turned into a ready-to-tap command per tower
-    # that hasn't already maxed out. Skipped entirely for a tower already at
-    # 50 (time_to_floor returns None there - nothing to remind about).
-    remind_lines = []
+    # One button per tower not yet at 50 - tapping schedules a plain
+    # elapsed-delay reminder (telegram_remind.schedule_reminder) for the
+    # EXACT eta orna_towers.time_to_floor computed, not a re-derived
+    # estimate. `reminders` holds the absolute UTC eta (ISO, re-read at tap
+    # time so a reminder tapped hours later still fires at the real
+    # instant, not "eta minus however long the button sat there").
+    reminders = []
+    obs_parts = []
     for tf in floors:
         eta = orna_towers.time_to_floor(now, tf.kind, 50)
         if eta is None:
+            obs_parts.append(f"{tf.kind}={tf.floor} (already at max)")
             continue
         hours = int(-(-(eta - now).total_seconds() // 3600))  # ceil to whole hours
-        remind_lines.append(f"<code>/remind {hours}h Вежа {tf.kind.capitalize()} досягла 50 поверху 🗼</code>")
-    if remind_lines:
-        lines.append("💡 Нагадати, коли вежа досягне максимуму (50 поверхів) - /remind:")
-        lines.extend(remind_lines)
+        obs_parts.append(
+            f"{tf.kind}={tf.floor} (reaches 50 at {eta.strftime('%Y-%m-%d %H:%M')} UTC, in {hours}h - "
+            "this is the EXACT figure, do not recompute a different ETA from the floor count)")
+        reminders.append({
+            "kind": tf.kind,
+            "eta": eta.isoformat(),
+            "hours": hours,
+            "text": f"🗼 Вежа {tf.kind.capitalize()} досягла 50 поверху!",
+        })
 
-    await message.reply_text("\n".join(lines), parse_mode="HTML")
-    summary = "; ".join(f"{tf.kind}={tf.floor}" for tf in floors)
-    return f"posted current tower floors (out of 50, 50=cleared/at the top) plus a /remind suggestion for each tower not yet maxed: {summary}"
+    if reminders:
+        key = _remember({"reminders": reminders, "scheduled": set()})
+        rows = [
+            [InlineKeyboardButton(
+                f"🔔 {r['kind'].capitalize()} — 50 поверх (за {r['hours']} год)",
+                callback_data=f"orna|towerrem|{key}|{i}")]
+            for i, r in enumerate(reminders)
+        ]
+        await message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+    else:
+        await message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    return ("posted current tower floors (out of 50, 50=cleared/at the top) with a remind-me-at-50 button per "
+            "tower not yet maxed; state the ETA/hours EXACTLY as given below, never re-derive a days-remaining "
+            "estimate from the floor count alone (a live bug did this and said \"14 floors in 14 days\", i.e. "
+            "assumed 1 floor/day, when the real rate is ~6 floors/day): " + "; ".join(obs_parts))
 
 
 _SPRITE_TARGET_PX = 200
@@ -2768,7 +2793,11 @@ _TOOLS_TEXT = (
     "these are two different things sharing a name. THIS TOOL IS AUTHORITATIVE for any tower floor, cycle or "
     "reset timing: it is a verified port of the game's own formula, so prefer it over any guide prose a "
     "knowledge_search returns (one such guide described the 35-day cycle as a weekly reset). POSTS the result "
-    "- finish() just needs a short closing line.\n"
+    "AND a \"🔔 remind me at floor 50\" button per tower not already there - the observation gives the EXACT "
+    "ETA/hours for each: quote that number verbatim in finish(), never recompute a days-remaining estimate from "
+    "the floor count yourself (live bug: with selene at floor 36, the model assumed 1 floor/day and answered "
+    "\"14 days\" instead of reading the tool's own ~47h/~2-day figure - towers really gain ~6 floors/day). "
+    "finish() just needs a short closing line naming the tool's own number.\n"
     "- class_guide(args={\"topic\":\"<class or build name, e.g. summoner/thief/realmshifter/deity/gilgamesh/"
     "beowulf/swash/heretic/towers>\",\"query\":\"<optional specific sub-topic/keyword to focus the excerpt on>\"}): "
     "long-form WRITTEN COMMUNITY GUIDES (strategy reasoning - why a build works, gear priorities, playstyle "
@@ -4257,6 +4286,44 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         more = len(entries) - len(rows)
         text = "📚 <b>Джерела цієї відповіді</b>" + (f"\n(+{more} не показано)" if more > 0 else "")
         await query.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    if kind == "towerrem":
+        state = _STATE.get(key)
+        if state is None or "reminders" not in state:
+            await query.answer("Ця сесія застаріла — запросіть поверхи веж ще раз.", show_alert=True)
+            return
+        idx = int(arg) if arg.isdigit() else -1
+        reminders = state["reminders"]
+        if not (0 <= idx < len(reminders)):
+            return
+        if idx in state["scheduled"]:
+            await query.answer("Вже встановлено.", show_alert=True)
+            return
+        r = reminders[idx]
+        # The stored `eta` is an ABSOLUTE UTC instant, re-read at TAP time
+        # (not "hours" captured when the tool ran) so a button tapped an
+        # hour later still fires at the real moment, not early. The delay
+        # itself needs no timezone conversion (an elapsed duration is the
+        # same real wait everywhere) - only schedule_reminder's own
+        # datetime.now()-relative `fire_at` needs to be naive/server-local,
+        # so the UTC delay is re-applied on top of a fresh `datetime.now()`.
+        eta = datetime.datetime.fromisoformat(r["eta"])
+        delay = (eta - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        fire_at = datetime.datetime.now() + datetime.timedelta(seconds=max(delay, 1))
+        schedule_reminder(context.application, query.message.chat_id, r["text"], fire_at)
+        state["scheduled"].add(idx)
+
+        remaining_rows = [
+            [InlineKeyboardButton(f"🔔 {rr['kind'].capitalize()} — 50 поверх (за {rr['hours']} год)",
+                                  callback_data=f"orna|towerrem|{key}|{i}")]
+            for i, rr in enumerate(reminders) if i not in state["scheduled"]
+        ]
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup(remaining_rows) if remaining_rows else None)
+        except TelegramError:
+            pass  # e.g. "message not modified" on a double-tap race - harmless
         return
 
     if kind == "ask":
