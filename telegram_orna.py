@@ -910,7 +910,8 @@ async def _run_towers_tool(message) -> str:
     run under Node before deploying - see orna_towers._demo), not looked
     up from any data source at all. No args needed - cheap enough to
     always report all 5 and let the model read whichever one the request
-    actually asked about."""
+    actually asked about. Also posts a ready-to-tap `/remind` suggestion
+    for each tower not already at 50 - see orna_towers.time_to_floor."""
     now = datetime.datetime.now(datetime.timezone.utc)
     floors = orna_towers.get_tower_floors(now)
 
@@ -928,9 +929,26 @@ async def _run_towers_tool(message) -> str:
         delta_min = int((nxt["time"] - now).total_seconds() // 60)
         lines.append(f"Наступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
 
+    # "/remind" is a plain elapsed-time reminder ("/remind Nh ..."), not an
+    # absolute clock time, so no timezone question needs asking here at all
+    # (see orna_towers.time_to_floor's own docstring) - just the whole-hour
+    # ceiling of "ETA - now" turned into a ready-to-tap command per tower
+    # that hasn't already maxed out. Skipped entirely for a tower already at
+    # 50 (time_to_floor returns None there - nothing to remind about).
+    remind_lines = []
+    for tf in floors:
+        eta = orna_towers.time_to_floor(now, tf.kind, 50)
+        if eta is None:
+            continue
+        hours = int(-(-(eta - now).total_seconds() // 3600))  # ceil to whole hours
+        remind_lines.append(f"<code>/remind {hours}h Вежа {tf.kind.capitalize()} досягла 50 поверху 🗼</code>")
+    if remind_lines:
+        lines.append("💡 Нагадати, коли вежа досягне максимуму (50 поверхів) - /remind:")
+        lines.extend(remind_lines)
+
     await message.reply_text("\n".join(lines), parse_mode="HTML")
     summary = "; ".join(f"{tf.kind}={tf.floor}" for tf in floors)
-    return f"posted current tower floors (out of 50, 50=cleared/at the top): {summary}"
+    return f"posted current tower floors (out of 50, 50=cleared/at the top) plus a /remind suggestion for each tower not yet maxed: {summary}"
 
 
 _SPRITE_TARGET_PX = 200

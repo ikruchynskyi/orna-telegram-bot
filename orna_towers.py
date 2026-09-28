@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
 KINDS = ["selene", "eos", "oceanus", "themis", "prometheus"]
 _BASE_FLOORS = [35, 30, 25, 20, 15]
@@ -125,6 +125,29 @@ def get_tower_floors_in_next_days(time: datetime, n: int = 2) -> List[dict]:
     return out
 
 
+def time_to_floor(time: datetime, kind: str, target: int = 50) -> Optional[datetime]:
+    """First upcoming checkpoint at which `kind`'s tower reaches `target`
+    floor (default 50, the "cleared, waiting for reset" cap) - or None if
+    it is already there right now. Scans forward a full cycle via
+    `get_tower_floors_in_next_days`, which already applies the same
+    wraparound/cap logic `get_tower_floors` does, so this needs no separate
+    formula of its own - just reads off the first matching entry. The
+    caller (telegram_orna's towers tool) turns the returned UTC instant
+    into an ELAPSED delay (now -> then) for a "/remind Nh ..." suggestion -
+    `/remind`'s duration form is a plain timedelta from "now", so no
+    timezone conversion is needed at all, unlike its absolute "HH:MM" form."""
+    if time.tzinfo is None:
+        time = time.replace(tzinfo=timezone.utc)
+    time = time.astimezone(timezone.utc)
+    idx = KINDS.index(kind)
+    if get_tower_floors(time)[idx].floor >= target:
+        return None
+    for entry in get_tower_floors_in_next_days(time, CYCLE_DAYS + 1):
+        if entry["floors"][idx].floor >= target:
+            return entry["time"]
+    return None
+
+
 def _demo() -> None:
     """Pinned regression checks - each expected floor list captured by
     running the ORIGINAL upstream tower.ts (unmodified, types stripped
@@ -156,6 +179,15 @@ def _demo() -> None:
     assert [tf.floor for tf in projected[8]["floors"]] == [50, 43, 38, 33, 28]
     assert projected[-1]["time"].isoformat() == "2026-09-25T10:00:00+00:00"
     assert [tf.floor for tf in projected[-1]["floors"]] == [16, 46, 41, 36, 31]
+
+    # time_to_floor: selene is the one at floor 40 in this same base case
+    # (about to overtake the others toward 50 first) - pinned against the
+    # exact checkpoint from the projection above (projected[8]).
+    assert time_to_floor(datetime.fromisoformat("2026-09-23T14:07:00+00:00"), "selene").isoformat() \
+        == "2026-09-24T20:00:00+00:00"
+    # Already-at-50 (or past target) returns None instead of scanning ahead
+    # to the NEXT cycle's crossing - selene is already 50 at this instant.
+    assert time_to_floor(datetime.fromisoformat("2026-09-24T20:00:00+00:00"), "selene") is None
 
     print("orna_towers._demo: all checks passed")
 
