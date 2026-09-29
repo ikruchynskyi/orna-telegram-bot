@@ -26,7 +26,8 @@ glue around three live, unmocked external services.
   only the amity and offerings screens get a reply** - any other image is
   ignored silently (no typing indicator, no error), because busy guild chats
   post random screenshots and the bot was answering each with an OCR dump.
-  Item assessment still works in a private chat, and OCR text is never sent
+  Item assessment still works in a private chat, but only when stats were
+  actually parsed - no stats means no reply at all. OCR text is never sent
   to the chat (it goes to the log only, via `_log_ocr_dump`).
 - `telegram_offerings.py` — parses the altar's "NEEDED OFFERINGS" screen
   (`<have> / <need> <material>` rows), computes shortfalls, and reuses
@@ -130,7 +131,13 @@ glue around three live, unmocked external services.
   use it directly, without going through the gated command.
 - `telegram_amity.py` — memory-hunt coordination. `telegram_assess`'s photo
   flow hands a "MEMORY COMPLETED"/"Спомин завершено" screenshot here (fuzzy
-  header match); effects are split (lowercase/number-only line = wrap; first
+  header match), and also an INVENTORY/equipped amity ("Inventory"/"Інвентар",
+  no header, no "When equipped...") - recognised by the fixed description
+  "Spectral essence of a place in time... bonuses and maluses.", whose effects
+  end at TIER/РАНГ. Its screen carries no hour, so the uploader must give
+  colour + option + UTC hour ("Red 4 14", "червона 4 14:00";
+  `parse_choice_hour`), and one ACQUIRED before this week's Monday (a day of
+  slack for the player's local date) is refused as already reset. Effects are split (lowercase/number-only line = wrap; first
   half bonuses, second half maluses - the counts are always equal, an odd
   count is refused) and fuzzy-matched against `orna_bonuses`' structured
   `amity_cards` (Ukrainian lines go through `telegram_orna._translate` first).

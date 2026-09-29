@@ -983,16 +983,11 @@ async def assess_item_screenshot(
         item_name, item_level, lang, cy, la, observed_stats,
     )
 
-    # If we couldn't parse any stats, OCR probably failed badly. Asking for the
-    # name won't help in that case — bail out and ask for a better screenshot.
+    # No stats = not an item stat screen (a random screenshot, or a screen
+    # this flow doesn't know). Say NOTHING - an error reply to every such
+    # image is exactly what made the bot noisy in busy chats.
     if not observed_stats:
-        logger.warning("no stats parsed from OCR — bailing out")
-        await msg.reply_text(
-            (f"Found <b>{html.escape(item_name)}</b>, but " if item_name else "")
-            + "couldn't parse any stats. Make sure the stat panel is visible "
-            "and try again.",
-            parse_mode="HTML",
-        )
+        logger.info("no stats parsed from OCR - not an item screen, ignored")
         return ConversationHandler.END
 
     # ---- 5. Codex lookup (blocking I/O → thread) ----------------------------

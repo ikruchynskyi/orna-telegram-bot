@@ -46,10 +46,18 @@ COLORS = {  # colour -> (emoji, stems in EN / UK / RU, lowercase)
     "Purple": ("🟣", ("purple", "violet", "pink", "фіол", "фиол", "пурп", "рож", "роз")),
 }
 _HEADERS = ("MEMORY COMPLETED", "СПОМИН ЗАВЕРШЕНО")
-_EQUIP_RE = re.compile(r"when equip|споряджен", re.IGNORECASE)
+# An INVENTORY/equipped amity ("Inventory"/"Інвентар", "Одягнений") has no
+# header or "When equipped..." line; its effects follow the fixed description
+# "...through both bonuses and maluses." and end at TIER/РАНГ.
+_EQUIP_RE = re.compile(r"when equip|споряджен|maluses\.", re.IGNORECASE)
+_AMITY_DESC_RE = re.compile(r"spectral essence of a place|bonuses and maluses", re.IGNORECASE)
+_END_RE = re.compile(r"^\W*(tier|rank|ранг|acquired|отримано|useable by|доступно)\b", re.IGNORECASE)
 _REWARD_RE = re.compile(r"\d{1,3}(?:[,.\s]\d{3})+")   # "109,324,554 gold" ends the effects
 _NUM_RE = re.compile(r"\d+(?:[.,]\d+)?")
 
+_HOUR_HINT = ("Це amity з інвентарю — на ньому немає години, тож додайте годину UTC, коли його знайшли: "
+              "<b>Red 4 14</b> (колір, варіант, година 0-23).\nInventory amity has no hour - add the UTC hour "
+              "it was found: <b>Red 4 14</b>.")
 _CHOICE_HINT = ("Кольори / colors: 🔴 Red (червона), 🟡 Yellow (жовта), 🟢 Green (зелена), "
                 "🔵 Blue (синя), 🟣 Purple (фіолетова). Номер варіанту / option: 1-5.")
 
@@ -71,10 +79,45 @@ def parse_choice(text: str) -> Optional[tuple]:
     return found.pop(), int(nums[0])
 
 
-def looks_like_amity_screen(ocr_text: str) -> bool:
-    # Fuzzy, because the header is small caps and OCR mangles it now and then.
+_HOUR_MARK_RE = re.compile(r"(\d{1,2})\s*(?::\d{2}|utc|h\b|год)", re.IGNORECASE)
+_ACQUIRED_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(20\d{2})")
+
+
+def parse_choice_hour(text: str) -> Optional[tuple]:
+    """("Red", 4, 14) for an INVENTORY amity, whose screen carries no hour:
+    colour + option + UTC hour, e.g. "red 4 14", "червона 4 14:00", "14 utc
+    red 4". A number marked as a time (":00", "utc", "h", "год") is the hour;
+    otherwise the first number is the option and the second the hour."""
+    low = (text or "").lower()
+    found = {c for c, (_e, stems) in COLORS.items() if any(s in low for s in stems)}
+    marked = _HOUR_MARK_RE.search(low)
+    rest = low[:marked.start()] + " " + low[marked.end():] if marked else low
+    nums = [int(n) for n in re.findall(r"\d+", rest)]
+    if marked:
+        nums.append(int(marked.group(1)))
+    if len(found) != 1 or len(nums) != 2 or not 1 <= nums[0] <= 5 or not 0 <= nums[1] <= 23:
+        return None
+    return found.pop(), nums[0], nums[1]
+
+
+def is_memory_screen(ocr_text: str) -> bool:
+    """The memory-hunt RESULT screen (its hour is the message time); anything
+    else looks_like_amity_screen accepts is an inventory/equipped amity."""
     return any(difflib.SequenceMatcher(None, line.strip().upper(), h).ratio() > 0.8
                for line in ocr_text.splitlines() for h in _HEADERS)
+
+
+def acquired_date(ocr_text: str) -> Optional[datetime.date]:
+    m = _ACQUIRED_RE.search(ocr_text)
+    try:
+        return datetime.date(int(m.group(3)), int(m.group(1)), int(m.group(2))) if m else None
+    except ValueError:
+        return None
+
+
+def looks_like_amity_screen(ocr_text: str) -> bool:
+    # Fuzzy, because the header is small caps and OCR mangles it now and then.
+    return bool(_AMITY_DESC_RE.search(ocr_text)) or is_memory_screen(ocr_text)
 
 
 def split_effects(ocr_text: str) -> Optional[tuple]:
@@ -86,7 +129,7 @@ def split_effects(ocr_text: str) -> Optional[tuple]:
     first and there are always as many maluses as bonuses - an odd count means
     the split went wrong, so it is refused rather than guessed."""
     lines = ocr_text.splitlines()
-    start = next((i for i, l in enumerate(lines) if _EQUIP_RE.search(l)), None)
+    start = max((i for i, l in enumerate(lines) if _EQUIP_RE.search(l)), default=None)
     if start is None:
         return None
     effects = []
@@ -94,7 +137,7 @@ def split_effects(ocr_text: str) -> Optional[tuple]:
         line = line.strip()
         if not line:
             continue
-        if _REWARD_RE.search(line):
+        if _REWARD_RE.search(line) or _END_RE.match(line):
             break
         first = next((ch for ch in line if ch.isalpha()), "")
         if not first and not effects:
@@ -131,7 +174,8 @@ def describe(raw: str, english: str, kind: str, cards: list) -> tuple:
         return english, _norm(raw) + value   # translated if it was Ukrainian
     text = best["desc"]
     if value:
-        text = re.sub(r"[%#]", lambda m: value + ("%" if m.group() == "%" else ""), text, count=1)
+        # aussies writes some templates as "increased by -%"; the sign is theirs, not the roll's
+        text = re.sub(r"-?[%#]", lambda m: value + ("%" if m.group().endswith("%") else ""), text, count=1)
     if best["range"]:
         text += f" ({best['range']})"
     return text, f"{best['name']}|{best['desc']}|{value}"
@@ -240,8 +284,10 @@ def _format(entry: dict, now_hour: Optional[int] = None, nick: str = "") -> str:
     return "\n".join(lines)
 
 
-async def _finish(message, draft: dict, color: str, option: int) -> None:
+async def _finish(message, draft: dict, color: str, option: int, hour: Optional[int] = None) -> None:
     draft = dict(draft, color=color, option=option)
+    if hour is not None:
+        draft["hour"] = hour
     draft["key"] = "|".join([draft["week"], str(draft["hour"]), color, str(option)] + sorted(draft.pop("parts")))
     if not await asyncio.to_thread(add_entry, draft):
         await message.reply_text("Цей amity для цієї відьми й години вже є у списку цього тижня — див. /amity")
@@ -259,14 +305,29 @@ async def handle_amity_screen(msg, ocr_text: str) -> None:
     ts = msg.date or datetime.datetime.now(datetime.timezone.utc)   # aware either way
     ts = ts.astimezone(datetime.timezone.utc)
     user = msg.from_user
-    draft = {"week": _week(ts), "hour": ts.hour, "bonuses": bonuses, "maluses": maluses, "parts": parts,
+    inventory = not is_memory_screen(ocr_text)
+    if inventory:
+        # Its week is when it was FOUND; a find from before this Monday has
+        # already been reset in game and would list a slot that no longer
+        # gives it. (The date is the player's local one - allow a day of slack.)
+        found = acquired_date(ocr_text)
+        monday = (ts - datetime.timedelta(days=ts.weekday())).date()
+        if found and found < monday - datetime.timedelta(days=1):
+            await msg.reply_text(f"Цей amity отримано {found:%d.%m} — до тижневого скидання (пн 00:00 UTC), "
+                                 "тож цей варіант відьми вже дає інше. Не зберігаю.")
+            return
+    draft = {"week": _week(ts), "hour": None if inventory else ts.hour, "bonuses": bonuses, "maluses": maluses, "parts": parts,
              "user_id": user.id, "username": user.username, "name": user.full_name,
              "chat_id": msg.chat_id, "ts": ts.isoformat()}
-    choice = parse_choice(msg.caption or "")
+    choice = (parse_choice_hour if inventory else parse_choice)(msg.caption or "")
     if choice:
         await _finish(msg, draft, *choice)
         return
     _PENDING[(msg.chat_id, user.id)] = (draft, time.monotonic() + PENDING_TTL_SECONDS)
+    if inventory:
+        await msg.reply_text(f"{user.mention_html()}, яка відьма, варіант і година UTC?\n\n{_HOUR_HINT}\n\n"
+                             f"{_CHOICE_HINT}", parse_mode="HTML")
+        return
     await msg.reply_text(
         f"{user.mention_html()}, яка відьма і який варіант? Напишіть колір і номер, наприклад "
         f"<b>Red 4</b> або <b>Червона 4</b>.\nWhich witch and option? E.g. <b>Red 4</b>.\n\n{_CHOICE_HINT}",
@@ -289,10 +350,13 @@ async def handle_choice_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if pending[0].get("delete"):
         await _delete(msg, msg.text)
         return
-    choice = parse_choice(msg.text)
+    inventory = pending[0].get("hour") is None
+    choice = (parse_choice_hour if inventory else parse_choice)(msg.text)
     if choice is None:
-        await msg.reply_text("Не розпізнав колір і номер — amity не збережено. "
-                             "Надішліть скріншот ще раз з підписом, наприклад «Red 4».\n\n" + _CHOICE_HINT)
+        example = "Red 4 14" if inventory else "Red 4"
+        await msg.reply_text(f"Не розпізнав {'колір, номер і годину' if inventory else 'колір і номер'} — amity "
+                             f"не збережено. Надішліть скріншот ще раз з підписом, наприклад «{example}».\n\n"
+                             + _CHOICE_HINT + (" Година / hour: 0-23 UTC." if inventory else ""))
         return
     await _finish(msg, pending[0], *choice)
 
@@ -397,6 +461,31 @@ _UK = """СПОМИН ЗАВЕРШЕНО
 2, 78,116,658 золота
 """
 
+# Real OCR of inventory/equipped amities (2026-09-29): no header, no
+# "When equipped..." - the effects follow the fixed description.
+_INV_EN = """‘Inventory ,
+Siphoning & Feebleness
+Spectral essence of a place in time. Amities give one balance
+through both bonuses and maluses.
+There is a chance that you will recover HP from 5.0% of the
+damage dealt to an opponent
+Your stats are decreased by 10% when defending territory
+TIER * 10
+ACQUIRED 9/28/2026
+"""
+_INV_UK = """IHBeHTap =
+Opportunity & Toxins (L)
+Одягнений
+Spectral essence of a place in time. Amities give one balance
+through both bonuses and maluses.
+Critical hits will be 40% more effective
+Your accessories will be 25% more effective
+Your chance to miss an opponent is increased by 2%
+Removes proficiency for Swords
+РАНГ % 10
+OTPUMAHO 9/27/2026
+"""
+
 
 def _demo() -> None:
     """Real OCR of the two guild screenshots. Run `python3 telegram_amity.py`."""
@@ -406,6 +495,23 @@ def _demo() -> None:
         assert parse_choice(text) == exp, (text, parse_choice(text))
     assert looks_like_amity_screen(_EN) and looks_like_amity_screen(_UK)
     assert looks_like_amity_screen("MEMORY C0MPLETED") and not looks_like_amity_screen("NEEDED OFFERINGS")
+    assert looks_like_amity_screen(_INV_EN) and looks_like_amity_screen(_INV_UK)
+    assert not is_memory_screen(_INV_EN) and not is_memory_screen(_INV_UK) and is_memory_screen(_EN)
+    assert acquired_date(_INV_EN) == datetime.date(2026, 9, 28) and acquired_date(_EN) is None
+    for text, exp in [("red 4 14", ("Red", 4, 14)), ("червона 4 14:00", ("Red", 4, 14)),
+                      ("14 utc red 4", ("Red", 4, 14)), ("4yellow 0", ("Yellow", 4, 0)), ("синя 2 23h", ("Blue", 2, 23)),
+                      ("red 4", None), ("red 4 24", None), ("red 7 14", None), ("red 4 14 5", None)]:
+        assert parse_choice_hour(text) == exp, (text, parse_choice_hour(text))
+    assert describe("x", "Your chance to miss an opponent is increased by 2%", "malus",
+                    [{"kind": "malus", "name": "Inaccuracy", "range": "1–2%",
+                      "desc": "Your chance to miss an opponent is increased by -%"}])[0] \
+        == "Your chance to miss an opponent is increased by 2% (1–2%)"
+    assert split_effects(_INV_EN) == (["There is a chance that you will recover HP from 5.0% of the damage dealt "
+                                       "to an opponent"], ["Your stats are decreased by 10% when defending territory"])
+    assert split_effects(_INV_UK) == (["Critical hits will be 40% more effective",
+                                       "Your accessories will be 25% more effective"],
+                                      ["Your chance to miss an opponent is increased by 2%",
+                                       "Removes proficiency for Swords"])
     b, m = split_effects(_EN)
     assert b == ["Critical hits will be 40% more effective",
                  "5.0% of the damage your Ward takes will be converted to mana"], b
