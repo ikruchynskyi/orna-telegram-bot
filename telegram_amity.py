@@ -49,6 +49,9 @@ _EQUIP_RE = re.compile(r"when equip|споряджен", re.IGNORECASE)
 _REWARD_RE = re.compile(r"\d{1,3}(?:[,.\s]\d{3})+")   # "109,324,554 gold" ends the effects
 _NUM_RE = re.compile(r"\d+(?:[.,]\d+)?")
 
+_CHOICE_HINT = ("Кольори / colors: 🔴 Red (червона), 🟡 Yellow (жовта), 🟢 Green (зелена), "
+                "🔵 Blue (синя), 🟣 Purple (фіолетова). Номер варіанту / option: 1-5.")
+
 # (chat_id, user_id) -> (draft entry, expires_monotonic): a screenshot waiting
 # for its colour/option. One typed answer is read, valid or not.
 _PENDING: dict = {}
@@ -248,7 +251,7 @@ async def handle_amity_screen(msg, ocr_text: str) -> None:
     _PENDING[(msg.chat_id, user.id)] = (draft, time.monotonic() + PENDING_TTL_SECONDS)
     await msg.reply_text(
         f"{user.mention_html()}, яка відьма і який варіант? Напишіть колір і номер, наприклад "
-        f"<b>Red 4</b> або <b>Червона 4</b>.\nWhich witch and option? E.g. <b>Red 4</b>.",
+        f"<b>Red 4</b> або <b>Червона 4</b>.\nWhich witch and option? E.g. <b>Red 4</b>.\n\n{_CHOICE_HINT}",
         parse_mode="HTML")
 
 
@@ -271,7 +274,7 @@ async def handle_choice_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     choice = parse_choice(msg.text)
     if choice is None:
         await msg.reply_text("Не розпізнав колір і номер — amity не збережено. "
-                             "Надішліть скріншот ще раз з підписом, наприклад «Red 4».")
+                             "Надішліть скріншот ще раз з підписом, наприклад «Red 4».\n\n" + _CHOICE_HINT)
         return
     await _finish(msg, pending[0], *choice)
 
