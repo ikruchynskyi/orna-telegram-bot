@@ -20,10 +20,11 @@ from telegram.ext import (ApplicationBuilder, ApplicationHandlerStop, CommandHan
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_reminder_callback_handler, build_resource_conversation
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
+from telegram_amity import build_amity_choice_handler, build_amity_handler
 from telegram_remind import (build_remind_handler, build_tz_callback_handler,
                              build_tz_edit_callback_handler, build_tz_input_handler,
                              reschedule_pending)
-from telegram_orna import (build_ask_text_handler, build_chosen_inline_result_handler,
+from telegram_orna import (build_clarify_handler, build_chosen_inline_result_handler,
                           build_inline_query_handler, build_orna_callback_handler, build_orna_handler,
                           build_update_codex_handler)
 from telegram_orna import _next_text, _today_text
@@ -531,10 +532,12 @@ async def _post_init(app):
     commands = [
         BotCommand("start", "Що вміє бот і як питати"),
         BotCommand("orna", "Запит про Orna (природною мовою)"),
+        BotCommand("clarify", "Уточнити останню відповідь /orna"),
         BotCommand("res_today", "Ресурси, доступні сьогодні"),
         BotCommand("res_next", "Коли з'явиться ресурс"),
         BotCommand("report", "Повідомити про помилку"),
         BotCommand("remind", "Поставити нагадування"),
+        BotCommand("amity", "Amity цього тижня з memory hunt"),
     ]
     for scope in (
         BotCommandScopeDefault(),
@@ -619,10 +622,13 @@ def main():
     # matches a chat with a live timezone ask, so for every other chat it is a
     # guaranteed no-op that falls through to them untouched.
     app.add_handler(build_tz_input_handler())
-    # The typed answer to /orna's clarifying question ("Своя відповідь", or an
-    # "Інше"-style option the model offered). Same narrow-filter-before-the-
-    # conversations rule as the two handlers above.
-    app.add_handler(build_ask_text_handler())
+    # /clarify <text>: a follow-up (or a typed answer to a question) in the
+    # user's own /orna conversation - explicit, so group chatter is never caught.
+    app.add_handler(build_clarify_handler())
+    # /amity, and the uploader's typed "Red 4" after an uncaptioned amity
+    # screenshot - same narrow-filter-before-the-conversations rule.
+    app.add_handler(build_amity_handler())
+    app.add_handler(build_amity_choice_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.

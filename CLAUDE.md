@@ -123,6 +123,20 @@ glue around three live, unmocked external services.
   UNGATED entry point onto the same scheduling/persistence machinery -
   `telegram_resources.py`'s "remind me when this resource lands" buttons
   use it directly, without going through the gated command.
+- `telegram_amity.py` — memory-hunt coordination. `telegram_assess`'s photo
+  flow hands a "MEMORY COMPLETED"/"Спомин завершено" screenshot here (fuzzy
+  header match); effects are split (lowercase/number-only line = wrap; first
+  half bonuses, second half maluses - the counts are always equal, an odd
+  count is refused) and fuzzy-matched against `orna_bonuses`' structured
+  `amity_cards` (Ukrainian lines go through `telegram_orna._translate` first).
+  Witch colour/option comes from the caption ("red 4", "фіолетовий 3",
+  "4yellow"); if missing, the uploader is pinged and their NEXT message is read
+  once (pending-filter pattern, invalid = cancelled). Hour/week come from the
+  message's UTC date; week = ISO week, which resets Monday 00:00 UTC like the
+  game. `/amity` lists this week's finds globally (sharer shown as a t.me link,
+  not a mention, so listing doesn't ping everyone); `/amity delete [hours]`
+  removes the caller's own. Stored in gitignored `amities.json`; dedupe is by
+  slot + effects, so a party member re-posting the leader's find is rejected.
 - `usage_stats.py` — usage counters (questions per command, LLM calls per
   model), persisted to `usage_stats.json` for the same reload-survival
   reason as `reminders.json`. Viewed via the hidden `/stats` command
@@ -573,52 +587,18 @@ missing":**
   `ask` with an observation telling the model to answer from what it has and
   state its assumptions. Verified both ways with stubs - chat pauses on the
   question, inline answers anyway.
-- **A FOLLOW-UP needs no `/orna` prefix - the same one-shot text wait now also
-  arms after a normal, answered request** (`_arm_text_wait`, `asked=False`,
-  `_FOLLOWUP_TTL_SECONDS` 180s). Live report 2026-09-27: a question about the
-  answer just given was typed without the command, fell through to
-  `telegram_resources.handle_free_text`, matched no material name, and was
-  **silently dropped** - that handler deliberately says nothing rather than
-  answering every message in a guild chat, so the user saw the bot ignore them.
-  The wait resumes the SAME session, so the whole accumulated context applies.
-  * **A bare closer ("thanks"/"ok"/"дякую"/emoji) does NOT resume the loop.**
-    Live 2026-09-27: a user said "thank you" (no `/orna`) after an answer; the
-    follow-up wait resumed the loop, which RAN TOOLS again and re-stated the
-    same answer - the prompt's "do NOT re-state" lost, as prompt-only guards do.
-    `handle_ask_text` now checks `_is_pleasantry` (whole message is closer/filler
-    tokens, or no words at all) BEFORE resuming and just acknowledges once. A
-    real follow-up that merely starts with "thanks," still resumes.
-  Three things make it safe to widen:
-  * **It is scoped to the user who asked**, via `OrnaSession.user_id`, so
-    everyone else's messages in a group still fall straight through to the
-    assess/resources flows. That id **cannot** be taken from the message
-    `_advance` was handed: on a button-resumed step `orna_callback` passes
-    `query.message`, whose `from_user` is the BOT. Pinned in `_demo`.
-  * **The observation says which of the two it is.** An answer to a question
-    and an unprompted follow-up read completely differently, so `asked` picks
-    the framing - a follow-up is introduced as a new turn that may correct or
-    narrow the previous answer, explicitly NOT as the missing half of one.
-  * **A follow-up does not count against `MAX_ASKS_PER_REQUEST`** (the loop
-    asked nothing) and gets the full `MAX_STEPS` rather than `_RESUME_STEPS`,
-    since it is a fresh question; `LOOP_TIMEOUT_SECONDS` still bounds it.
-  The accepted trade: for 180s after an answer, that user's free text goes to
-  `/orna` instead of the resources flow. Harmless in practice because `/orna`
-  has the `need` tool, which is the same `build_report` pipeline that flow uses.
-  The ONE path that does degrade is `telegram_assess`'s `AWAITING_NAME`
-  fallback: same user, a screenshot whose OCR could not name the item, inside
-  the 180s - their typed name goes to `/orna` and they get codex info instead of
-  an upgrade table. Left as a marked `ponytail:` ceiling because it needs all
-  three inside 180s, and the clean guard would be a CYCLE (`telegram_orna`
-  already imports `telegram_assess`). If it is ever reported, the acyclic fix is
-  for `telegram_assess` to expose the chats it has mid-flow and for
-  `_PendingAskTextFilter` to skip them.
-- **A typed answer works for EVERY ask, not just the escape hatch.** Live
-  2026-09-24: the bot asked, the user typed the full answer, and nothing
-  happened - `_PENDING_ASK_TEXT` was armed only when the "Своя відповідь"
-  button was tapped, so a perfectly good reply fell through to the other
-  handlers and the request looked stuck with no status message. Posting an
-  `ask` now arms the wait, and **tapping a real option clears it again**, so
-  it can't capture an unrelated message once the question is answered.
+- **Follow-ups and typed answers go through `/clarify <text>`** (2026-09-28,
+  replacing a 180s "this user's next free-text message resumes the loop"
+  window that kept catching group chatter). One conversation per user
+  (`_USER_SESSIONS`: user_id -> sid): a new `/orna` replaces it, and it expires
+  `SESSION_TTL_SECONDS` (15 min) after the bot's last reply in it - `created` is
+  refreshed on each reply, so it measures idleness. `OrnaSession.awaiting` says
+  whether the last reply was a question (ask(), or a finish that really was
+  one), which frames the `/clarify` as an ANSWER (`_RESUME_STEPS`) or a
+  FOLLOW-UP (`MAX_STEPS`). A `/clarify` while the loop is still running is
+  refused (`session.running`), a bare "/clarify thanks" is acknowledged without
+  resuming (`_is_pleasantry`), and every finish/ask carries a `_clarify_hint`
+  line (not inline, which has no reply channel). Pinned in `_demo`.
 - **`MAX_ASKS_PER_REQUEST = 2`, enforced in code.** The loop asked three
   times in a row: the user tapped "I'll provide details", then
   "Specialization/Class" - options naming WHAT to supply rather than

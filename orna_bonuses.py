@@ -120,6 +120,34 @@ def parse_amities(html: str) -> list:
     return rows
 
 
+def parse_amity_cards(html: str) -> list:
+    """Structured amities: [{"kind": "bonus"|"malus", "name", "range", "desc"}].
+    The flattened `parse_amities` lines are for a reading model; the amity
+    screenshot matcher (telegram_amity) needs the description TEMPLATE ("Critical
+    hits will be % more effective") and which side it is on. Each card's text
+    runs "<+ Bonus|- Malus> [T n] <range|Fixed> <name> <description> ...", so the
+    fields are read relative to the <h3> name rather than by position."""
+    soup = BeautifulSoup(html, "html.parser")
+    cards = {}
+    for heading in soup.find_all("h3"):
+        name = heading.get_text(" ", strip=True)
+        node = heading.parent
+        while node is not None:
+            strings = list(node.stripped_strings)
+            if strings and ("Bonus" in strings[0] or "Malus" in strings[0]):
+                break
+            node = node.parent
+        if node is None or name not in strings:
+            continue
+        i = strings.index(name)
+        if i + 1 >= len(strings):
+            continue
+        rng = strings[i - 1] if re.search(r"\d|Fixed", strings[i - 1]) else ""
+        kind = "bonus" if strings[0].lstrip().startswith("+") else "malus"
+        cards[(kind, strings[i + 1])] = {"kind": kind, "name": name, "range": rng, "desc": strings[i + 1]}
+    return list(cards.values())
+
+
 def parse_crucibles(html: str) -> list:
     """One flattened line per crucible table row. The Bonus cell is a
     rowspan, present only on a group's first row, so it is carried forward -
@@ -158,7 +186,9 @@ def _fetch() -> dict:
     path = CACHE_DIR / CACHE_FILE
     if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL_SECONDS:
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            cached = json.loads(path.read_text(encoding="utf-8"))
+            if cached.get("amity_cards"):   # a pre-amity_cards cache is a miss
+                return cached
         except (ValueError, OSError):
             logger.warning("bonuses: cache unreadable, refetching")
 
@@ -168,7 +198,9 @@ def _fetch() -> dict:
         resp = httpx.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
         data[key] = parser(resp.text)
-    if not data.get("amities") or not data.get("crucibles"):
+        if key == "amities":
+            data["amity_cards"] = parse_amity_cards(resp.text)
+    if not data.get("amities") or not data.get("crucibles") or not data.get("amity_cards"):
         # Never cache a half-empty scrape: aussiescodex is a JS app whose
         # server-rendered markup could change, and pinning "there are no
         # crucibles" for a week would be worse than retrying next call.
@@ -279,6 +311,17 @@ def _demo() -> None:
     assert "Head: — Unavailable on Head" not in crows[0], crows[0]
 
     assert parse_crucibles("<html><body>no table</body></html>") == []
+
+    card_html = """
+    <div><span>+ Bonus</span><span>T<!-- -->1</span><span>5\u201340%</span><h3>% Crit Dmg</h3>
+      <p>Critical hits will be % more effective</p><span>Found as</span></div>
+    <div><span>\u2212 Malus</span><h3>Absorption</h3>
+      <p>Any outgoing reflected damage will be reduced by %</p></div>
+    """
+    cards = parse_amity_cards(card_html)
+    assert cards[0] == {"kind": "bonus", "name": "% Crit Dmg", "range": "5\u201340%",
+                        "desc": "Critical hits will be % more effective"}, cards
+    assert cards[1]["kind"] == "malus" and cards[1]["range"] == "", cards
     print("orna_bonuses: all checks passed")
 
 

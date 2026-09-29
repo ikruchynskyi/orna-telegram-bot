@@ -216,39 +216,20 @@ _STATE_MAX = 200
 # _ORNA_SESSIONS because that is pruned on SESSION_TTL_SECONDS (15 min) while
 # a posted answer stays in the chat forever - tapping the button an hour later
 # should still work. Same short-id-in-callback_data pattern as _STATE.
-# An "ask" whose answer the user wants to TYPE. Live report 2026-09-24:
-# the model often offers an "Інше"/"Other" option, tapping it fed the loop
-# `user chose "Інше"` - literally no information - and it carried on guessing.
-# Now that tap (and the always-present "своя відповідь" button below) waits
-# for one typed message instead.
-#
-# Free text is never safe by default in this bot: a bare MessageHandler would
-# race the assess/resources ConversationHandlers, whose registration order is
-# load-bearing. Same guard as /go's Continue and the timezone ask - a
-# MessageFilter that matches ONLY a chat with a live pending ask, registered
-# before those conversations, so everywhere else it is a guaranteed no-op.
-# Deliberately NOT armed for an ordinary option tap: someone who picked a
-# real option may well type something unrelated next (a /need request, an
-# assess screenshot caption), and swallowing that would be worse than the bug
-# this fixes. Tapping "I want to type" is the unambiguous signal.
-# chat_id -> {"sid", "until", "user_id", "asked"}. "asked" distinguishes the
-# two reasons to listen: the loop asked a QUESTION (ask(), or a finish() that
-# was really one), or it just ANSWERED and a follow-up should not need the
-# /orna prefix again - live report 2026-09-27, a question about the answer
-# just given went to the free-text resource flow, matched no material, and was
-# silently dropped. "user_id" keeps that window to the person who was talking:
-# in a guild GROUP chat, everyone else's messages must still fall through to
-# the resources/assess flows exactly as before.
-_PENDING_ASK_TEXT: dict = {}
-ASK_TEXT_TTL_SECONDS = 600
+# Follow-ups and typed answers to an ask() go through `/clarify <text>`, never
+# bare free text. Design ask 2026-09-28: the bot lives in a crowded guild chat,
+# and the old "listen to this user's next message for 180s" window kept
+# catching chatter that was not meant for it. An explicit command costs the
+# user six characters and removes the guessing - and the pending-filter
+# machinery that guessing needed.
+# One conversation per user: user_id -> sid. A new /orna replaces it; it dies
+# SESSION_TTL_SECONDS after the bot's last reply in it (`created` is refreshed
+# on every reply, so it measures idleness, not age).
+_USER_SESSIONS: dict = {}
 # Steps handed to a session resumed by a typed answer - enough to run the
 # tool the answer unblocks and finish, without restarting the whole budget.
 _RESUME_STEPS = 8
-# A shorter fuse for the INFERRED wait after a finish that looks like a
-# question (see the finish branch) - it is a guess, so it should not sit on
-# the chat for the full ten minutes a real ask() gets.
-_FOLLOWUP_TTL_SECONDS = 180
-# A bare "thanks"/"ok"/"дякую" inside the follow-up window is a CLOSER, not a
+# A bare "/clarify thanks"/"ok"/"дякую" is a CLOSER, not a
 # new question. Live 2026-09-27: a user said "thank you" (no /orna) after an
 # answer; the follow-up wait resumed the loop, which RAN TOOLS again and
 # re-stated the same answer - the prompt's "do NOT re-state" lost. So this is
@@ -3468,8 +3449,8 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     "piece is absent and the user hasn't said to assume, call ask() ONCE listing what you still need in the "
     f"question text (e.g. \"{ask_example}\") - a "
     "\"Своя відповідь\" button is added automatically, so they can type all of it in one message, and you "
-    "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. **The user can also simply TYPE their "
-    "answer to any question you ask - say so in the question when what you need is a list.** Every option you "
+    "must NOT add an \"Інше\"/\"Своя відповідь\" option yourself. **The user can also TYPE their answer "
+    "to any question you ask (a hint telling them how is appended automatically).** Every option you "
     "give must be a possible ANSWER, not a category of answer: \"Magus\", \"Godforged\", \"PVP\" are "
     "answers; \"I'll provide details\", \"Specialization/Class\", \"Equipment and quality\" are NOT - "
     "tapping one of those tells you nothing and you will just have to ask again (live failure: three asks in a "
@@ -3524,11 +3505,13 @@ class OrnaSession:
     # rather than stalling on a question nobody can answer.
     allow_ask: bool = True
     asks_made: int = 0   # capped by MAX_ASKS_PER_REQUEST
-    # Who asked. _arm_text_wait scopes the typed-answer/follow-up window to
-    # them, and it cannot be taken from the message _advance was handed: on a
-    # button-resumed step that message is the BOT's own (orna_callback passes
-    # query.message), whose from_user is the bot.
+    # Who asked - set by handle_orna, NOT taken from the message _advance was
+    # handed: on a button-resumed step that is the BOT's own message.
     user_id: Optional[int] = None
+    # The last reply was a question (ask(), or a finish() that really was one),
+    # so the next /clarify is its ANSWER rather than a new follow-up question.
+    awaiting: bool = False
+    running: bool = False   # a /clarify mid-run would double-drive the loop
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -3727,6 +3710,7 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
     status = _Status(message) if with_status else None
     if session is not None:
         session.status = status
+        session.running = True
     try:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -3742,6 +3726,8 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
         usage_stats.record_tool_call("_loop_timeout")
         await _close_out(session, message, "the time limit for this request was reached", fallback)
     finally:
+        if session is not None:
+            session.running = False
         if status is not None:
             await status.clear()
 
@@ -3894,40 +3880,19 @@ async def _advance_inner(sid: str, message) -> None:
                     and _detect_lang(answer_text) != session.user_lang):
                 answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE)
             answer, effective = _confidence_gate(session, step, answer_text)
-            await _reply_markdown(message, answer, reply_markup=markup)
             # The model often states what it still needs as an ANSWER rather
-            # than as an ask(), which ENDS the request - and the user's reply
-            # then falls through to the other handlers and vanishes ("Bot
-            # ignored my answer", live 2026-09-25; measured 2 of 3 runs of
-            # "порахуй мої стати"). Two narrow signals that a finish is really
-            # a question: a tool refused for want of a user-supplied input
-            # (_NEEDS_INPUT), or the loop called no tool at all, which for
-            # /orna means it produced no data and can only have been asking.
-            # Counted as an ask so the same cap bounds it, and given a shorter
-            # fuse than a real ask, since this one is inferred.
-            speculative = not session.seen_calls
+            # than as an ask() (live 2026-09-25: 2 of 3 runs of "порахуй мої
+            # стати"). Two narrow signals that a finish is really a question: a
+            # tool refused for want of a user input (_NEEDS_INPUT), or the loop
+            # called no tool at all. Counted as an ask so the same cap bounds
+            # it; the user's /clarify is then framed as the answer.
             if session.allow_ask:
-                if (session.needs_input or speculative) and session.asks_made < MAX_ASKS_PER_REQUEST:
-                    session.asks_made += 1
-                    _arm_text_wait(message, sid, _FOLLOWUP_TTL_SECONDS if speculative
-                                   else ASK_TEXT_TTL_SECONDS, asked=True)
-                else:
-                    # A normal, answered request: keep listening briefly so a
-                    # follow-up needs no /orna prefix. NOT counted as an ask -
-                    # the loop asked nothing, and each follow-up is a real user
-                    # message, so there is nothing to ping-pong.
-                    # ponytail: this window can swallow ONE other flow's typed
-                    # input - assess's AWAITING_NAME fallback, if the same user
-                    # sends a screenshot whose OCR fails within
-                    # _FOLLOWUP_TTL_SECONDS of an /orna answer. They then get
-                    # codex info about the item instead of an upgrade table.
-                    # Left alone because it needs all three in 180s and
-                    # telegram_orna already imports telegram_assess, so the
-                    # clean check would be a cycle. Upgrade path if it is ever
-                    # reported: have telegram_assess expose the set of chats
-                    # mid-flow and have _PendingAskTextFilter skip them (that
-                    # direction of import is the acyclic one).
-                    _arm_text_wait(message, sid, _FOLLOWUP_TTL_SECONDS, asked=False)
+                asked = bool((session.needs_input or not session.seen_calls)
+                             and session.asks_made < MAX_ASKS_PER_REQUEST)
+                session.asks_made += asked
+                _arm_text_wait(sid, asked)
+                answer += "\n\n" + _clarify_hint(session)
+            await _reply_markdown(message, answer, reply_markup=markup)
             return
 
         if action == "ask":
@@ -3969,7 +3934,7 @@ async def _advance_inner(sid: str, message) -> None:
             # the request looked stuck. Tapping a real option clears this
             # again (see orna_callback), so it cannot swallow an unrelated
             # message once the question has been answered.
-            _arm_text_wait(message, sid, ASK_TEXT_TTL_SECONDS, asked=True)
+            _arm_text_wait(sid, True)
             # One option per row. Four 30-char labels in a single row is the
             # same shape that made the old UTC picker unreadable on a phone -
             # Telegram shrinks buttons to fit and clips the text with no
@@ -3988,7 +3953,7 @@ async def _advance_inner(sid: str, message) -> None:
             if (session.user_lang != _LOOP_LANGUAGE
                     and _detect_lang(ask_text) != session.user_lang):
                 ask_text = await _translate(ask_text, session.user_lang, source=_LOOP_LANGUAGE)
-            await _reply_markdown(message, ask_text, reply_markup=keyboard)
+            await _reply_markdown(message, ask_text + "\n\n" + _clarify_hint(session), reply_markup=keyboard)
             return
 
         if session.status is not None:
@@ -4034,7 +3999,11 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     messages, user_lang = await build_loop_messages(text)
     sid = _new_orna_session(messages, MAX_STEPS)
     _ORNA_SESSIONS[sid].user_lang = user_lang
-    _ORNA_SESSIONS[sid].user_id = getattr(getattr(message, "from_user", None), "id", None)
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    _ORNA_SESSIONS[sid].user_id = user_id
+    if user_id is not None:   # one conversation per user: a new /orna replaces the old one
+        _ORNA_SESSIONS.pop(_USER_SESSIONS.get(user_id, ""), None)
+        _USER_SESSIONS[user_id] = sid
     await _advance(sid, message)
 
 
@@ -4175,95 +4144,84 @@ def build_chosen_inline_result_handler() -> ChosenInlineResultHandler:
 
 
 async def _await_ask_text(query, sid: str) -> None:
-    """Arm the one-shot free-text wait for this chat and prompt for it."""
-    _arm_text_wait(query.message, sid, ASK_TEXT_TTL_SECONDS, asked=True)
-    await query.message.reply_text("✍️ Напишіть уточнення одним повідомленням:")
-
-
-def _arm_text_wait(message, sid: str, ttl: float, asked: bool) -> None:
-    """Listen for this chat's next typed message and feed it back into `sid`.
-    Scoped to the user who asked (see _PENDING_ASK_TEXT) so it cannot swallow
-    anyone else's message in a group."""
+    """"Своя відповідь" was tapped: the answer comes as /clarify."""
+    _arm_text_wait(sid, True)
     session = _ORNA_SESSIONS.get(sid)
-    _PENDING_ASK_TEXT[message.chat_id] = {
-        "sid": sid,
-        "until": time.monotonic() + ttl,
-        "user_id": session.user_id if session else None,
-        "asked": asked,
-    }
+    await query.message.reply_text("✍️ " + _clarify_hint(session))
 
 
-class _PendingAskTextFilter(filters.MessageFilter):
-    """Matches only a chat waiting on a typed clarification - see
-    _PENDING_ASK_TEXT for why this can't be a plain MessageHandler."""
-
-    def filter(self, message) -> bool:
-        pending = _PENDING_ASK_TEXT.get(message.chat_id)
-        if not pending or time.monotonic() >= pending["until"]:
-            return False
-        # Only the person the loop was talking to continues it. A stored None
-        # (a harness message with no from_user) matches anyone.
-        who = getattr(getattr(message, "from_user", None), "id", None)
-        return pending["user_id"] is None or who == pending["user_id"]
+def _arm_text_wait(sid: str, asked: bool) -> None:
+    """The bot just replied in `sid`: restart its idle clock and record whether
+    that reply was a question, so /clarify is framed right."""
+    session = _ORNA_SESSIONS.get(sid)
+    if session is not None:
+        session.awaiting = asked
+        session.created = time.monotonic()
 
 
-_pending_ask_text_filter = _PendingAskTextFilter()
+def _clarify_hint(session) -> str:
+    uk = getattr(session, "user_lang", "") == "Ukrainian"
+    return (f"💬 Уточнити: /clarify <текст> (протягом {SESSION_TTL_SECONDS // 60} хв)" if uk else
+            f"💬 Follow up: /clarify <text> (within {SESSION_TTL_SECONDS // 60} min)")
 
 
-async def handle_ask_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """The typed answer to a clarifying question, resuming the loop with it."""
+def _user_session(user_id) -> tuple:
+    """(sid, session) of the user's live conversation, or (None, None)."""
+    sid = _USER_SESSIONS.get(user_id)
+    session = _ORNA_SESSIONS.get(sid) if sid else None
+    if session is None or time.monotonic() - session.created > SESSION_TTL_SECONDS:
+        _USER_SESSIONS.pop(user_id, None)
+        _ORNA_SESSIONS.pop(sid or "", None)
+        return None, None
+    return sid, session
+
+
+async def handle_clarify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/clarify <text>: the user's follow-up, or their typed answer to a
+    question, fed back into THEIR current /orna conversation."""
     message = update.effective_message
-    if not message or not message.text:
+    if not message:
         return
-    pending = _PENDING_ASK_TEXT.pop(message.chat_id, None)
-    if pending is None:
-        return  # the filter already checked, but stay defensive
-    said_raw = message.text.strip()
-    if _is_pleasantry(said_raw):
-        # A closer, not a question - acknowledge once and DON'T resume the loop
-        # (which re-ran tools and re-stated the same answer before). The wait is
-        # already popped, so the next message falls through normally.
-        await message.reply_text("Будь ласка! 🙂" if _CYRILLIC_RE.search(said_raw) else "You're welcome! 🙂")
-        return
-    sid, expires = pending["sid"], pending["until"]
-    if time.monotonic() > expires:
-        await message.reply_text("Уточнення застаріло — спробуйте /orna ще раз.")
-        return
-    session = _ORNA_SESSIONS.get(sid)
+    said = " ".join(context.args or []).strip()[:500]
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    sid, session = _user_session(user_id)
     if session is None:
-        await message.reply_text("Ця сесія застаріла — спробуйте /orna ще раз.")
+        await message.reply_text("Немає активної розмови (вона живе 15 хв після відповіді) — почніть з /orna <запит>.")
         return
-    said = message.text.strip()[:500]
-    if pending["asked"]:
+    if not said:
+        await message.reply_text("Використання: /clarify <уточнення>, наприклад /clarify а для шолома?")
+        return
+    if session.running:
+        await message.reply_text("⏳ Ще обробляю попередній запит — зачекайте на відповідь.")
+        return
+    if _is_pleasantry(said):
+        # A closer, not a question - acknowledge and DON'T resume the loop
+        # (live 2026-09-27: it re-ran tools and re-stated the same answer).
+        await message.reply_text("Будь ласка! 🙂" if _CYRILLIC_RE.search(said) else "You're welcome! 🙂")
+        return
+    if session.awaiting:
         follow_up = (f"Observation: the user answered the clarifying question in their own words: {said!r}. "
                      "Use this and continue.")
     else:
-        # Nothing was asked - the loop had already answered and this is the
-        # next thing the user said. It is a new turn of the same conversation,
-        # so the accumulated context applies, but it is NOT an answer to
-        # anything and must not be read as one.
+        # A new turn of the same conversation - NOT an answer to anything.
         follow_up = (f"Observation: the user sent a FOLLOW-UP message in the same conversation: {said!r}. "
                      "Read it against the answer you just gave - it may be a new question, a correction, or a "
                      "request to narrow or extend that answer. Do NOT re-state the previous answer, and if it "
                      "needs data you have not observed in this conversation, call a tool for it.")
     session.messages.append({"role": "user", "content": follow_up})
-    # The user has now supplied something, so the flag that kept us listening
-    # is stale - leaving it set re-arms the wait on the next finish even if no
-    # tool asked for anything, which would swallow unrelated messages.
+    # Stale once the user has supplied something - left set, the next finish
+    # would be framed as a question again.
     session.needs_input = False
-    # The answer may arrive after the loop already spent its budget (it can
-    # come in after a finish - see _NEEDS_INPUT), so top it up enough to act
-    # on what was just supplied rather than closing out immediately. A plain
-    # FOLLOW-UP is a fresh question rather than the missing half of one, so it
-    # gets the full budget; _advance's own wall-clock ceiling still bounds it.
-    session.steps_left = max(session.steps_left, _RESUME_STEPS if pending["asked"] else MAX_STEPS)
+    # An answer only unblocks the tool that wanted it; a follow-up is a fresh
+    # question. _advance's wall-clock ceiling bounds both.
+    session.steps_left = max(session.steps_left, _RESUME_STEPS if session.awaiting else MAX_STEPS)
+    session.awaiting = False
+    session.created = time.monotonic()
     await _advance(sid, message)
 
 
-def build_ask_text_handler() -> MessageHandler:
-    """Registered BEFORE the assess/resources conversations - its filter makes
-    it a no-op for any chat that isn't waiting on a clarification."""
-    return MessageHandler(_pending_ask_text_filter & filters.TEXT & ~filters.COMMAND, handle_ask_text)
+def build_clarify_handler() -> CommandHandler:
+    return CommandHandler("clarify", handle_clarify)
 
 
 async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4335,9 +4293,7 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not (0 <= idx < len(session.ask_options)):
             return
         choice = session.ask_options[idx]
-        # The question is answered by this tap - stop waiting for a typed
-        # reply, so a later unrelated message isn't captured as one.
-        _PENDING_ASK_TEXT.pop(query.message.chat_id, None)
+        session.awaiting = False   # answered by this tap
         # Consume the pending ask right here (no await between the bounds
         # check above and this clear, so it's atomic on the event loop): a
         # duplicate callback delivery - Telegram redelivery, or a fast
@@ -4353,7 +4309,7 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             pass  # e.g. keyboard already gone - harmless, the loop resume below still runs
         if _OTHER_OPTION_RE.search(choice):
             # "Інше" carries no information - resuming on it is what made the
-            # loop guess (see _PENDING_ASK_TEXT). Wait for the real answer.
+            # loop guess. Wait for the real answer (/clarify).
             await _await_ask_text(query, key)
             return
         session.messages.append({"role": "user", "content": f'Observation: user chose "{choice}".'})
@@ -4551,33 +4507,11 @@ def _demo() -> None:
     # The two pools have to be DISJOINT for the above to be unambiguous at all.
     assert not (set(orna_classes.all_names("class")) & set(orna_classes.all_names("specialization")))
 
-    # _arm_text_wait: a follow-up window is scoped to whoever ASKED, not to
-    # whatever message _advance was handed - on a button-resumed step that is
-    # the BOT's own message. And it must record WHY it is listening, since an
-    # answer to a question and an unprompted follow-up are framed differently.
-    class _M:
-        chat_id = 42
-        from_user = type("U", (), {"id": 999})()      # the bot, on a button resume
-    sid = _new_orna_session([], MAX_STEPS)
-    _ORNA_SESSIONS[sid].user_id = 7
-    try:
-        _arm_text_wait(_M(), sid, 60, asked=False)
-        got = _PENDING_ASK_TEXT[42]
-        assert got["user_id"] == 7 and got["asked"] is False and got["sid"] == sid, got
-        assert _pending_ask_text_filter.filter(_M()) is False, "the bot's own id must not match"
-        _M.from_user = type("U", (), {"id": 7})()
-        assert _pending_ask_text_filter.filter(_M()) is True, "the asker must match"
-    finally:
-        _PENDING_ASK_TEXT.pop(42, None)
-        _ORNA_SESSIONS.pop(sid, None)
-
-    # ...and the two reasons to be listening must reach the model DIFFERENTLY.
-    # A follow-up read as "the answer to my question" sent the loop looking for
-    # a question it never asked; an answer read as a follow-up loses the point
-    # of having asked. Also checks the budget: a follow-up is a fresh question
-    # (MAX_STEPS), an answer only unblocks the tool that wanted it
-    # (_RESUME_STEPS).
-    advanced = []
+    # /clarify: continues only the CALLER's own session, frames an answer and a
+    # follow-up differently (a follow-up read as "the answer to my question"
+    # sent the loop hunting a question it never asked), budgets them
+    # differently, and refuses an expired, missing or still-running session.
+    advanced, replies = [], []
     real_advance = globals()["_advance"]
 
     async def _spy(sid_, message_, with_status=True):
@@ -4586,13 +4520,15 @@ def _demo() -> None:
     class _Msg:
         chat_id = 43
         from_user = type("U", (), {"id": 7})()
-        text = "and for the head slot?"
 
-        async def reply_text(self, *a, **k):
-            return None
+        async def reply_text(self, text, *a, **k):
+            replies.append(text)
 
     class _Upd:
         effective_message = _Msg()
+
+    class _Ctx:
+        args = ["and", "for", "the", "head", "slot?"]
 
     globals()["_advance"] = _spy
     try:
@@ -4600,18 +4536,34 @@ def _demo() -> None:
                                                (True, _RESUME_STEPS, "answered the clarifying question")):
             sid = _new_orna_session([{"role": "user", "content": "Q"}], 0)
             _ORNA_SESSIONS[sid].user_id = 7
-            _arm_text_wait(_Msg(), sid, 60, asked=asked)
+            _USER_SESSIONS[7] = sid
+            _arm_text_wait(sid, asked)
             advanced.clear()
-            asyncio.run(handle_ask_text(_Upd(), None))
+            asyncio.run(handle_clarify(_Upd(), _Ctx()))
             sess = _ORNA_SESSIONS[sid]
             assert advanced == [sid], (asked, advanced)
             assert want_phrase in sess.messages[-1]["content"], (asked, sess.messages[-1]["content"][:90])
             assert sess.steps_left == want_steps, (asked, sess.steps_left, want_steps)
-            assert 43 not in _PENDING_ASK_TEXT, "the one-shot wait must clear itself"
-            _ORNA_SESSIONS.pop(sid, None)
+            assert sess.awaiting is False
+            # still running -> refused, not double-driven
+            sess.running = True
+            advanced.clear()
+            asyncio.run(handle_clarify(_Upd(), _Ctx()))
+            assert advanced == [] and "обробляю" in replies[-1], replies[-1]
+            sess.running = False
+            # idle past the TTL -> gone
+            sess.created -= SESSION_TTL_SECONDS + 1
+            asyncio.run(handle_clarify(_Upd(), _Ctx()))
+            assert advanced == [] and sid not in _ORNA_SESSIONS and 7 not in _USER_SESSIONS, replies[-1]
+        # someone else's /clarify never reaches user 7's session
+        sid = _new_orna_session([], 0)
+        _USER_SESSIONS[7] = sid
+        _Msg.from_user = type("U", (), {"id": 8})()
+        asyncio.run(handle_clarify(_Upd(), _Ctx()))
+        assert advanced == [] and "/orna" in replies[-1], replies[-1]
     finally:
         globals()["_advance"] = real_advance
-        _PENDING_ASK_TEXT.pop(43, None)
+        _USER_SESSIONS.clear()
 
     # the always-appended escape hatch must not be duplicated by the model's
     # own "Інше"/"Своя відповідь" option (live: two near-identical buttons).

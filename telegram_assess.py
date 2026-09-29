@@ -60,6 +60,7 @@ from orna_assess import (
     get_quality_name,
 )
 from orna_codex import lookup_by_name
+from telegram_amity import handle_amity_screen, looks_like_amity_screen
 from telegram_offerings import build_offerings_report, looks_like_offerings_screen
 from telegram_resources import send_report_blocks
 
@@ -922,6 +923,11 @@ async def assess_item_screenshot(
     # Console-only diagnostics. Visible in the bot's stdout / launchd logs;
     # never sent to the end user.
     _log_ocr_dump(chat_id, user_id, ocr_text)
+
+    # ---- 3a. Memory-hunt amity screen ("MEMORY COMPLETED")? -----------------
+    if looks_like_amity_screen(ocr_text):
+        await handle_amity_screen(msg, ocr_text)
+        return ConversationHandler.END
 
     # ---- 3b. Guild "offerings" screen? Different screen, different pipeline. -
     # (progress bars of "<have> / <need> <material>" toward a guild goal,

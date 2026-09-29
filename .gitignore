@@ -26,3 +26,4 @@ orna_model_compare.json
 # copy costs nothing. The other caches stay ignored because they refetch in
 # seconds (.aussies_cache) or have a committed fallback (.knowledge_cache ->
 # orna_knowledge.txt).
+amities.json
