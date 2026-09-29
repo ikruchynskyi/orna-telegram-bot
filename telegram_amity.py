@@ -334,6 +334,10 @@ async def handle_amity_screen(msg, ocr_text: str) -> None:
         parse_mode="HTML")
 
 
+def cancel_pending(chat_id: int, user_id: int) -> None:
+    _PENDING.pop((chat_id, user_id), None)
+
+
 class _PendingFilter(filters.MessageFilter):
     """Only the uploader's next message in that chat, while an ask is live."""
 
