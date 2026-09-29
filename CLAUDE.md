@@ -22,7 +22,12 @@ glue around three live, unmocked external services.
 - `telegram_bot.py` — entry point, registers handlers, `app.run_polling()`.
 - `telegram_assess.py` — screenshot OCR pipeline for single-item stat
   screens (quality/upgrade projection). Its photo handler is also where
-  offerings-screen screenshots get detected and handed off.
+  offerings-screen screenshots get detected and handed off. **In a group
+  only the amity and offerings screens get a reply** - any other image is
+  ignored silently (no typing indicator, no error), because busy guild chats
+  post random screenshots and the bot was answering each with an OCR dump.
+  Item assessment still works in a private chat, and OCR text is never sent
+  to the chat (it goes to the log only, via `_log_ocr_dump`).
 - `telegram_offerings.py` — parses the altar's "NEEDED OFFERINGS" screen
   (`<have> / <need> <material>` rows), computes shortfalls, and reuses
   `telegram_resources.build_report`.

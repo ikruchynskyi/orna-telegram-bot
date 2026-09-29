@@ -887,7 +887,13 @@ async def assess_item_screenshot(
         )
         return ConversationHandler.END
 
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    # In a group, people post all kinds of screenshots: only the amity and
+    # offerings screens are for the bot, anything else is ignored SILENTLY
+    # (no typing indicator, no error, no OCR text). Item assessment stays
+    # available in a private chat.
+    in_group = update.effective_chat.type != "private"
+    if not in_group:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     # ---- 2. Download --------------------------------------------------------
     try:
@@ -895,6 +901,8 @@ async def assess_item_screenshot(
         img_bytes = bytes(await tg_file.download_as_bytearray())
     except Exception as e:
         logger.exception("telegram download failed")
+        if in_group:
+            return ConversationHandler.END
         await msg.reply_text(f"Couldn't download your image: {e}")
         return ConversationHandler.END
 
@@ -903,6 +911,8 @@ async def assess_item_screenshot(
         ocr_text = await asyncio.to_thread(_ocr, img_bytes)
     except pytesseract.TesseractNotFoundError:
         logger.exception("tesseract not installed or not on PATH")
+        if in_group:
+            return ConversationHandler.END
         await msg.reply_text(
             "OCR engine (tesseract) not found on this server.\n"
             "  Linux:   sudo apt install tesseract-ocr tesseract-ocr-ukr\n"
@@ -917,6 +927,8 @@ async def assess_item_screenshot(
         return ConversationHandler.END
     except Exception as e:
         logger.exception("ocr failed")
+        if in_group:
+            return ConversationHandler.END
         await msg.reply_text(f"OCR failed: {e}")
         return ConversationHandler.END
 
@@ -949,6 +961,10 @@ async def assess_item_screenshot(
         await send_report_blocks(msg, blocks, bundles)
         return ConversationHandler.END
 
+    if in_group:
+        logger.info("group screenshot is neither amity nor offerings - ignored")
+        return ConversationHandler.END
+
     # Anguish-eligible items show a second "alternate stats" block below the
     # default one. We only want the default block for quality assessment.
     stats_text = _strip_anguish_alternate_block(ocr_text)
@@ -974,8 +990,7 @@ async def assess_item_screenshot(
         await msg.reply_text(
             (f"Found <b>{html.escape(item_name)}</b>, but " if item_name else "")
             + "couldn't parse any stats. Make sure the stat panel is visible "
-            "and try again.\n\n"
-            f"<i>OCR text:</i>\n<pre>{html.escape(ocr_text[:600])}</pre>",
+            "and try again.",
             parse_mode="HTML",
         )
         return ConversationHandler.END
