@@ -34,6 +34,7 @@ Register in your bot — one line:
 from __future__ import annotations
 
 import asyncio
+import difflib
 import html
 import io
 import logging
@@ -397,6 +398,34 @@ def _extract_name(text: str) -> Optional[str]:
     if non_breadcrumb:
         return _strip_trailing_quality(non_breadcrumb[0], _looks_like_quality)
     return _strip_trailing_quality(candidates[0][0], _looks_like_quality)
+
+
+def _extract_name_candidates(text: str, limit: int = 4) -> List[str]:
+    """_extract_name's pick first, then the other plausible title lines below
+    the "Inventory" header (or near the top). OCR sometimes turns the styled
+    title area into a plausible-looking garbage line ABOVE the real name, and
+    _extract_name alone would search the codex for that garbage."""
+    from orna_codex import _looks_like_quality  # local import to avoid cycle
+    lines = text.splitlines()
+    start = next((i + 1 for i, l in enumerate(lines) if "вентар" in l.lower() or "inventor" in l.lower()), 0)
+    out: List[str] = []
+    for raw in [_extract_name(text) or ""] + lines[start:start + 8]:
+        cleaned = _clean_name_line(raw) if raw else None
+        name = _strip_trailing_quality(cleaned, _looks_like_quality) if cleaned else ""
+        if len(name) >= 3 and name not in out:
+            out.append(name)
+    return out[:limit]
+
+
+def _name_matches(query: str, found: str) -> bool:
+    """Is the codex hit plausibly the line we searched for? The codex search
+    always returns SOMETHING, so a garbage query gets an irrelevant item."""
+    q, f = query.lower(), found.lower()
+    if f in q:          # "ornate balor sword" -> "balor sword"
+        return True
+    return difflib.SequenceMatcher(None, q, f).ratio() >= 0.6 or any(
+        difflib.SequenceMatcher(None, " ".join(q.split()[i:i + len(f.split())]), f).ratio() >= 0.8
+        for i in range(max(1, len(q.split()) - len(f.split()) + 1)))
 
 
 def _strip_trailing_quality(name: str, looks_like_quality_fn) -> str:
@@ -976,7 +1005,8 @@ async def assess_item_screenshot(
         logger.info("stripped Anguish-mode alternate stat block from OCR text")
 
     # ---- 4. Parse OCR text into name / level / stats / language --------------
-    item_name = _extract_name(ocr_text)
+    name_candidates = _extract_name_candidates(ocr_text)
+    item_name = name_candidates[0] if name_candidates else None
     observed_stats = _extract_stats(stats_text)
     item_level = _extract_level(ocr_text)
     lang = _detect_language(ocr_text)
@@ -998,15 +1028,17 @@ async def assess_item_screenshot(
     entry: Optional[CodexEntry] = None
     source_url: Optional[str] = None
     if item_name:
-        from orna_codex import _name_candidates  # for logging only
-        logger.info(
-            "CODEX SEARCH: name=%r lang=%s candidates=%s",
-            item_name, lang, _name_candidates(item_name),
-        )
+        logger.info("CODEX SEARCH: lang=%s name candidates=%s", lang, name_candidates)
         try:
-            entry, source_url = await asyncio.to_thread(
-                lookup_by_name, item_name, lang
-            )
+            # Try each candidate title line; accept only a hit that actually
+            # resembles the line searched, so an OCR garbage line above the
+            # real name can't return an unrelated item.
+            for candidate in name_candidates:
+                hit, url = await asyncio.to_thread(lookup_by_name, candidate, lang)
+                if hit is not None and _name_matches(candidate, hit.name):
+                    entry, source_url, item_name = hit, url, candidate
+                    break
+                logger.info("CODEX REJECT: %r -> %r", candidate, hit.name if hit else None)
         except Exception as e:
             logger.exception("codex lookup failed")
             await msg.reply_text(

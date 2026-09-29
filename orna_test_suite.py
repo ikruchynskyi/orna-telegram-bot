@@ -142,6 +142,17 @@ def _check_bogus_field_is_reported() -> None:
          {"kind": "stat", "field": "magic", "cmp": ">", "value": 250}]) == []
 
 
+def _check_ocr_name_candidates() -> None:
+    """OCR garbage above the real title must not be the only name searched,
+    and a codex hit that doesn't resemble the searched line is rejected."""
+    import telegram_assess as ta
+    c = ta._extract_name_candidates("Inventory\nWe Eee ee\nBalor Sword\nATTACK 120")
+    assert "Balor Sword" in c, c
+    assert ta._name_matches("Ornate Balor Sword", "Balor Sword")
+    assert ta._name_matches("Balor Swrd", "Balor Sword")
+    assert not ta._name_matches("We Eee ee", "Weeping Willow Staff")
+
+
 def _check_observation_is_honest() -> None:
     """The name list handed to the MODEL must never be silently shorter than
     the count it states - that is how a 13-item set got answered from 5."""
@@ -390,6 +401,7 @@ TIER0 = [
     ("research-supergraph", _check_research_supergraph),
     ("echo-corpus", lambda: orna_echo._demo()),
     ("ban-guard", _check_ban_guard),
+    ("ocr-name-candidates", _check_ocr_name_candidates),
 ]
 
 

@@ -29,6 +29,11 @@ glue around three live, unmocked external services.
   Item assessment still works in a private chat, but only when stats were
   actually parsed - no stats means no reply at all. OCR text is never sent
   to the chat (it goes to the log only, via `_log_ocr_dump`).
+  OCR can turn the styled title area into a plausible garbage line above the
+  real name, and the codex search ALWAYS returns something - so the flow
+  tries several title-line candidates (`_extract_name_candidates`) and
+  accepts a hit only if it resembles the searched line (`_name_matches`);
+  otherwise it falls through to asking the user for the name.
 - `telegram_offerings.py` — parses the altar's "NEEDED OFFERINGS" screen
   (`<have> / <need> <material>` rows), computes shortfalls, and reuses
   `telegram_resources.build_report`.
