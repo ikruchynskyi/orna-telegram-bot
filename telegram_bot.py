@@ -20,7 +20,7 @@ from telegram.ext import (ApplicationBuilder, ApplicationHandlerStop, CommandHan
 from telegram_assess import build_assess_conversation
 from telegram_resources import build_reminder_callback_handler, build_resource_conversation
 from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
-from telegram_amity import build_amity_choice_handler, build_amity_handler
+from telegram_amity import build_amity_choice_handler, build_amity_handler, build_iam_handler
 from telegram_remind import (build_remind_handler, build_tz_callback_handler,
                              build_tz_edit_callback_handler, build_tz_input_handler,
                              reschedule_pending)
@@ -108,7 +108,9 @@ _WELCOME = (
     "• <code>/orna білд для heretic</code> — гайди спільноти по класах\n\n"
     "\U0001F4F8 <b>Можна просто надіслати скриншот:</b>\n"
     "• екран характеристик предмета — порахую, як він прокачається\n"
-    "• екран «NEEDED OFFERINGS» з вівтаря — покажу, чого не вистачає\n\n"
+    "• екран «NEEDED OFFERINGS» з вівтаря — покажу, чого не вистачає\n"
+    "• екран «Memory completed» з підписом відьми, напр. <code>Red 4</code> — збережу amity для всіх; "
+    "/amity — що знайшли цього тижня; /iam <нік> — ваш нік у грі поруч з вами в /amity\n\n"
     "⚡ <b>Швидкі команди:</b>\n"
     "• /res_today — ресурси на сьогодні\n"
     "• /res_next — коли з'явиться потрібний ресурс\n\n"
@@ -117,7 +119,8 @@ _WELCOME = (
     "\U0001F4A1 <b>Що варто знати:</b>\n"
     "• Складне питання може оброблятись до хвилини — я показую, що саме зараз роблю.\n"
     "• Під відповіддю буває кнопка «\U0001F4DA Джерела» — там видно, звідки я взяв інформацію.\n"
-    "• Якщо я перепитаю — можна натиснути кнопку або написати свою відповідь словами.\n\n"
+    "• Щоб уточнити відповідь або відповісти на моє питання — <code>/clarify текст</code> "
+    "(протягом 15 хв).\n\n"
     "🐞 Якщо щось не працює або відповідь неправильна — напишіть "
     "<code>/report опис проблеми</code>. Це дуже допомагає.\n\n"
     "❓ <b>Питайте що завгодно — не соромтесь.</b> Немає «неправильних» питань і не "
@@ -538,6 +541,7 @@ async def _post_init(app):
         BotCommand("report", "Повідомити про помилку"),
         BotCommand("remind", "Поставити нагадування"),
         BotCommand("amity", "Amity цього тижня з memory hunt"),
+        BotCommand("iam", "Вказати свій нік у грі (/iam нік)"),
     ]
     for scope in (
         BotCommandScopeDefault(),
@@ -628,6 +632,7 @@ def main():
     # /amity, and the uploader's typed "Red 4" after an uncaptioned amity
     # screenshot - same narrow-filter-before-the-conversations rule.
     app.add_handler(build_amity_handler())
+    app.add_handler(build_iam_handler())
     app.add_handler(build_amity_choice_handler())
     app.add_handler(build_assess_conversation())
     # Registered last: only claims free text that assess's own conversation

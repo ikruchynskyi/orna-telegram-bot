@@ -304,12 +304,11 @@ def _remember(state: dict) -> str:
 
 
 def _capabilities_text() -> str:
-    """Fixed, deterministic reply for a meta "what can you do" ask -
-    deliberately NOT model-generated prose (same reasoning as every other
-    structured-over-freeform choice in this codebase). The system prompt
-    tells the model to copy this verbatim into finish() rather than write
-    its own. Only mentions genuinely public commands - /go and its hidden
-    siblings stay unlisted here same as everywhere else."""
+    """Fixed, deterministic reply for a meta "what can you do" ask, and the
+    ONLY reference the model gets about the bot's own commands - deliberately
+    NOT model-generated prose. Public commands only: admin ones (/go, /stats,
+    /ban, /unban, /update_codex) are never listed here or anywhere the model
+    can read, so it cannot reveal them."""
     return (
         "Я вмію відповідати на питання про Orna:\n"
         "• /orna <назва> — знайти предмет/боса/клас/спел у кодексі "
@@ -324,9 +323,16 @@ def _capabilities_text() -> str:
         "• /orna порівняй X і Y — порівняння речей за прокачаними характеристиками\n"
         "• /orna найкращий орн-бонус по слотах для мага — оптимальний білд по слотах\n"
         "• /orna що по білду summoner/thief/deity/gilgamesh/beowulf/swash/heretic — гайди спільноти по класах\n"
-        "• /res_today, /res_next — те саме окремими командами\n"
-        "• /remind <час> <текст> — поставити нагадування (це окрема команда, "
-        "не /orna)"
+        "• /clarify <текст> — уточнити або продовжити останню відповідь /orna "
+        "(розмова живе 15 хв після відповіді; новий /orna починає нову)\n"
+        "• /res_today, /res_next <ресурс> — ресурси сьогодні / коли з'явиться ресурс\n"
+        "• Скриншот предмета — якість і прокачка; скриншот «NEEDED OFFERINGS» — чого бракує\n"
+        "• Скриншот «Memory completed» / «Спомин завершено» з підписом кольору відьми й номера "
+        "варіанту (напр. «Red 4») — поділитися amity; /amity — amity цього тижня й хто поділився "
+        "(попросіться до нього в пати); /amity delete — видалити свої; /iam <нік> — вказати свій нік у грі, "
+        "він показується поруч з вами в /amity\n"
+        "• /remind <час> <текст> — поставити нагадування (це окрема команда, не /orna)\n"
+        "• /report <опис> — повідомити про помилку"
     )
 
 
@@ -3181,6 +3187,13 @@ def _confidence_gate(session, step: dict, answer: str) -> tuple:
     because inline it was untestable - there is no way to inject a step into
     _advance_inner."""
     claimed = _parse_confidence(step)
+    # Explaining the bot's own commands needs no tool - the fixed reference in
+    # the prompt IS the source (often translated, so match its command names,
+    # not its wording), and "no tool was called" must not cap it.
+    if not session.seen_calls and any(
+            re.search(re.escape(c) + r"\b", answer)
+            for c in set(re.findall(r"/[a-z_]+", _capabilities_text()))):
+        return answer, max(claimed or 0, 90)
     ceiling, why = _evidence_ceiling(session)
     effective = min(claimed, ceiling) if claimed is not None else ceiling
     if effective >= _CONFIDENCE_FLOOR:
@@ -3427,6 +3440,9 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_CONFIDENCE_RULE}\n\n"
         "FIXED REPLIES - copy verbatim into finish()'s action_input, do not paraphrase or write your own version:\n"
         f"- a meta \"what can you do\"/\"help\"/\"допоможи\" ask with no real Orna subject: {_capabilities_text()!r}\n"
+        "- a question about how THIS BOT or one of its commands works (\"how does /amity work\", \"what is "
+        "/clarify\", \"how do I share an amity\", \"як поділитися amity\" - sharing amities IS this bot's feature): answer from that same text only, no tools - it is the complete list of commands; a command "
+        "not in it does not exist for the user, so never mention or guess at others.\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
         "Each turn, reply with strict JSON only, no other text: "
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, unused for query/today>",'
@@ -4923,6 +4939,12 @@ def _demo() -> None:
     for _q in ("when does the event end", "thanks, and when does it end",
                "last martyr", "балоріт 100"):
         assert not _is_pleasantry(_q), _q
+    # the command reference is its own evidence; memory-only prose is still gated
+    _cs = type("S", (), {"seen_calls": {}, "messages": [], "user_lang": "English"})()
+    _ref = "Send the screenshot captioned Red 4, then /amity lists it."
+    assert _confidence_gate(_cs, {"confidence": 95}, _ref)[0] == _ref
+    assert _confidence_gate(_cs, {"confidence": 95}, "Balor Sword has 300 attack")[1] < _CONFIDENCE_FLOOR
+    assert not any(c in _capabilities_text() for c in ("/go", "/stats", "/ban", "/update_codex"))
     # ephemeral status shows the tool's key argument, not just "searching…"
     assert _status_detail("search_codex", "Judge Trifecta Falx", {}) == "Judge Trifecta Falx"
     assert _status_detail("research", "", {"entities": ["Fallen King Centaurus", "X"]}).startswith("Fallen King Centaurus")

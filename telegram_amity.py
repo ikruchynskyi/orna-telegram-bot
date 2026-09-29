@@ -35,6 +35,7 @@ from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 logger = logging.getLogger(__name__)
 
 _STORE_PATH = Path(__file__).parent / "amities.json"
+_NICKS_PATH = Path(__file__).parent / "nicknames.json"   # telegram user id -> in-game nickname (/iam)
 PENDING_TTL_SECONDS = 600
 
 COLORS = {  # colour -> (emoji, stems in EN / UK / RU, lowercase)
@@ -206,17 +207,34 @@ def add_entry(entry: dict) -> bool:
 
 # --------------------------------------------------------------------------- telegram
 
-def _who(entry: dict) -> str:
+def _load_nicks() -> dict:
+    try:
+        return json.loads(_NICKS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def set_nick(user_id: int, nick: str) -> None:
+    nicks = _load_nicks()
+    nicks[str(user_id)] = nick
+    tmp = _NICKS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(nicks, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(_NICKS_PATH)
+
+
+def _who(entry: dict, nick: str = "") -> str:
     # A t.me link, not a mention entity: /amity must not ping every sharer.
     if entry.get("username"):
-        return f'<a href="https://t.me/{entry["username"]}">@{html.escape(entry["username"])}</a>'
-    return html.escape(entry.get("name") or "?")
+        who = f'<a href="https://t.me/{entry["username"]}">@{html.escape(entry["username"])}</a>'
+    else:
+        who = html.escape(entry.get("name") or "?")
+    return who + (f" (🎮 <code>{html.escape(nick)}</code>)" if nick else "")
 
 
-def _format(entry: dict, now_hour: Optional[int] = None) -> str:
+def _format(entry: dict, now_hour: Optional[int] = None, nick: str = "") -> str:
     emoji = COLORS[entry["color"]][0]
     head = (f"<b>{entry['hour']:02d}:00 UTC</b> {emoji} <b>{entry['color']} {entry['option']}</b>"
-            f" — {_who(entry)}" + (" ⏰ <b>зараз</b>" if entry["hour"] == now_hour else ""))
+            f" — {_who(entry, nick)}" + (" ⏰ <b>зараз</b>" if entry["hour"] == now_hour else ""))
     lines = [head] + [f"➕ {html.escape(b)}" for b in entry["bonuses"]] \
                    + [f"➖ {html.escape(m)}" for m in entry["maluses"]]
     return "\n".join(lines)
@@ -316,7 +334,25 @@ async def handle_amity_command(update: Update, context: ContextTypes.DEFAULT_TYP
     entries.sort(key=lambda e: (e["hour"], order.index(e["color"]), e["option"]))
     head = (f"<b>Amity цього тижня</b> ({len(entries)}) — скидання пн 00:00 UTC, зараз "
             f"{now.hour:02d}:{now.minute:02d} UTC. Щоб отримати такий самий — попросіться в пати.")
-    await send_report_blocks(msg, [head] + [_format(e, now.hour) for e in entries])
+    nicks = await asyncio.to_thread(_load_nicks)
+    await send_report_blocks(msg, [head] + [_format(e, now.hour, nicks.get(str(e["user_id"]), ""))
+                                            for e in entries])
+
+
+async def handle_iam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    nick = " ".join(context.args or []).strip()[:32]
+    if not nick:
+        current = (await asyncio.to_thread(_load_nicks)).get(str(msg.from_user.id))
+        await msg.reply_text((f"Ваш нік у грі: {current}\n" if current else "")
+                             + "Щоб вказати нік у грі, напишіть: /iam ВашНік")
+        return
+    await asyncio.to_thread(set_nick, msg.from_user.id, nick)
+    await msg.reply_text(f"✅ Запам'ятав: ваш нік у грі — {nick}. Він з'явиться поруч з вами в /amity.")
+
+
+def build_iam_handler() -> CommandHandler:
+    return CommandHandler("iam", handle_iam_command)
 
 
 def build_amity_handler() -> CommandHandler:
@@ -401,6 +437,7 @@ def _demo() -> None:
     assert parse_hours("8, 14") == {8, 14} and parse_hours("08:00,23") == {8, 23}
     assert parse_hours("8, 24") is None and parse_hours("nope") is None
     assert "@bob" in _who({"username": "bob"}) and "<" not in _who({"name": "<x>"}).replace("&lt;", "")
+    assert "🎮 <code>Odie&amp;Co</code>" in _who({"username": "bob"}, "Odie&Co") and "🎮" not in _who({"username": "bob"})
     print("telegram_amity: all checks passed")
 
 

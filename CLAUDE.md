@@ -137,6 +137,9 @@ glue around three live, unmocked external services.
   not a mention, so listing doesn't ping everyone); `/amity delete [hours]`
   removes the caller's own. Stored in gitignored `amities.json`; dedupe is by
   slot + effects, so a party member re-posting the leader's find is rejected.
+  `/iam <nick>` stores an in-game nickname per Telegram user ID (not
+  username, which can change) in gitignored `nicknames.json`; `/amity` shows
+  it next to the sharer. Unlike amities, it never resets.
 - `usage_stats.py` — usage counters (questions per command, LLM calls per
   model), persisted to `usage_stats.json` for the same reload-survival
   reason as `reminders.json`. Viewed via the hidden `/stats` command
