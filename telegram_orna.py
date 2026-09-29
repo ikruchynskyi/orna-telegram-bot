@@ -1390,6 +1390,15 @@ def _parse_quality_spec(spec: str) -> Optional[tuple]:
     text = text.strip().rstrip("%").strip()
     if not text:
         return (100, level) if level is not None else None
+    # "200% godforged" / "godforged 200%": a forge word is a LEVEL, so it
+    # combines with a percentage rather than making the spec unparseable
+    # (live 2026-09-29: the model then dropped "godforged" and assessed lv1).
+    words = text.split()
+    forged = [w for w in words if w in _FORGED_LEVELS]
+    if forged and len(words) == 2:
+        pct = _parse_quality_spec(next(w for w in words if w not in _FORGED_LEVELS))
+        if pct is not None:
+            return pct[0], level if level is not None else _FORGED_LEVELS[forged[0]]
     if text in _FORGED_LEVELS:
         return 100, level if level is not None else _FORGED_LEVELS[text]
     if text in _QUALITY_NAME_TO_PERCENT:
@@ -1737,7 +1746,25 @@ async def _run_assess_tool(message, item_name: str, quality_spec: str) -> str:
     # then dropped on the floor.
     bonuses = ", ".join(bonus_observed) if bonus_observed else "none"
     return (f"posted assessment for {entry.name} at quality={quality}% level={level}. "
+            f"{_projection_observation(result, level)} "
             f"Quality-scaled bonus stats [{bonuses}] - use THESE numbers, not the item's base values.")
+
+
+def _projection_observation(result, level: int) -> str:
+    """The projected combat stats as TEXT for the model. The table only went
+    to Telegram, so the loop could not read the number it had just shown -
+    live 2026-09-29: asked for a 200% godforged item's magic "+20%", it
+    re-ran codex lookups and added 20% to the BASE stat instead."""
+    rows = []
+    for stat, row in result.stats.items():
+        vals = [v for v in row.values]
+        if not vals:
+            continue
+        at = vals[min(level, len(vals)) - 1]
+        rows.append(f"{stat}={at:g} (base {row.base:g}; lv1..lv{len(vals)}: "
+                    + "/".join(f"{v:g}" for v in vals) + ")")
+    return (f"Projected stats at level {level} [{'; '.join(rows) or 'none'}] - these ARE this item's "
+            "numbers at this quality/level; do further arithmetic on them, do not look the item up again.")
 
 
 async def _run_compare_tool(message, item_names: list, quality_spec: str) -> str:
@@ -2712,7 +2739,8 @@ _TOOLS_TEXT = (
     "same calculation the screenshot-upload assess flow uses, just started from a name+quality instead of OCR'd "
     "stats. Use this whenever the user names a SPECIFIC item and asks to assess/project/calculate its stats, e.g. "
     '"assess arisen aaru robe legendary" or "aaru robe at 185%". quality is either a percentage ("185", "185%") '
-    "or a named tier (broken/poor/regular/superior/famed/legendary/ornate/masterforged/demonforged/godforged) - "
+    "or a named tier (broken/poor/regular/superior/famed/legendary/ornate/masterforged/demonforged/godforged), "
+    "and a forge word COMBINES with a percentage - pass \"200% godforged\" whole, never drop either half - "
     "pass whichever form the user gave verbatim, don't convert it yourself. This POSTS the full table to the "
     "user directly (same as search_codex/query results) - finish() just needs a short closing line, the table IS "
     "the answer.\n"
@@ -3367,7 +3395,63 @@ async def build_loop_messages(text: str, allow_ask: bool = True) -> tuple:
             body = (f"{english}\n\n[The user wrote this in {user_lang}. Original, verbatim - prefer THIS "
                     f"spelling for any item/material/class name you pass to a tool: {text}]")
     return ([{"role": "system", "content": _orna_system_prompt(text, allow_ask=allow_ask)},
-             {"role": "user", "content": body}], user_lang)
+             {"role": "user", "content": f"{_USER_QUESTION}\n{body}"}], user_lang)
+
+
+# The loop's transcript is TAGGED so the model can tell what the user said from
+# what a tool returned, and so _working_state can index it. None of this is ever
+# sent to Telegram - the user sees only tool cards and the final answer.
+_USER_QUESTION = "[USER QUESTION]"
+_USER_FOLLOW_UP = "[USER FOLLOW-UP]"
+_USER_ANSWER = "[USER ANSWER to your question]"
+_SYSTEM_NOTE = "[SYSTEM NOTE]"
+_TOOL_RESULT_RE = re.compile(r"^\[TOOL RESULT #(\d+) \u00b7 ([^\]]*)\]")
+_TAG_RE = re.compile(r"^\[(USER QUESTION|USER FOLLOW-UP|USER ANSWER to your question)\]\n?")
+
+
+def _tool_result(n: int, action: str, action_input: str, args: dict, observation: str) -> str:
+    call = action + (f" {action_input!r}" if action_input else "")
+    if args:
+        call += " " + json.dumps(args, ensure_ascii=False)[:160]
+    return f"[TOOL RESULT #{n} \u00b7 {call}]\n{observation}"
+
+
+def _working_state(messages: list) -> str:
+    """A compact index of the conversation, appended (never stored) as the last
+    message of every step call. Live 2026-09-29: the loop assessed a 200%
+    godforged item, then on "+20%" re-ran codex lookups and added 20% to the
+    BASE stat - the right number was in its context, buried among raw JSON
+    turns, and nothing pointed it there. This names every user turn, the
+    model's own previous answers, and every tool result by number, and asks
+    the thought to reason FROM them before choosing a tool."""
+    convo, results, n_results = [], [], 0
+    for m in messages:
+        content = str(m.get("content") or "")
+        if m.get("role") == "user":
+            tag = _TAG_RE.match(content)
+            hit = _TOOL_RESULT_RE.match(content)
+            if tag:
+                convo.append(f"- {tag.group(1)}: {content[tag.end():][:400]}")
+            elif hit:
+                n_results += 1
+                body = content[hit.end():].strip().replace("\n", " ")
+                results.append(f"- #{hit.group(1)} {hit.group(2)} -> {body[:220]}")
+        elif m.get("role") == "assistant":
+            try:
+                step = json.loads(content)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(step, dict) and step.get("action") in ("finish", "ask"):
+                label = "YOUR ANSWER (already shown to the user)" if step["action"] == "finish" else "YOUR QUESTION"
+                convo.append(f"- {label}: {str(step.get('action_input') or '')[:400]}")
+    return ("[WORKING STATE - internal, never shown to the user]\n"
+            "Conversation so far (respond to the LAST user line):\n" + "\n".join(convo or ["- (none)"])
+            + "\nTool results already in this context - the full text is above; read it, do not fetch it again:\n"
+            + ("\n".join(results[-25:]) if results else "- (none yet)")
+            + "\nIn \"thought\", before choosing an action: (1) say what the latest user line asks; (2) name the "
+            "result numbers (#n) or earlier answer that already contain the data and quote the exact values; "
+            "(3) do any arithmetic on THOSE values (e.g. \"+20%\" applies to the number you already reported, not "
+            "to a base stat); (4) call a tool ONLY for data none of them contain - otherwise finish.")
 
 
 def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
@@ -3444,6 +3528,11 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         "/clarify\", \"how do I share an amity\", \"як поділитися amity\" - sharing amities IS this bot's feature): answer from that same text only, no tools - it is the complete list of commands; a command "
         "not in it does not exist for the user, so never mention or guess at others.\n"
         f'- a message shaped like a reminder request ("нагадай мені...", "remind me to..."): {_REMINDER_NUDGE!r}\n\n'
+        "CONTEXT FORMAT: user turns are tagged [USER QUESTION] / [USER FOLLOW-UP] / [USER ANSWER to your question]; "
+        "every tool's output is a numbered [TOOL RESULT #n \u00b7 call] block; [SYSTEM NOTE] is the loop talking; the "
+        "final [WORKING STATE] message indexes all of it. Tool results are INTERNAL - the user never sees them, only "
+        "your finish() answer, so a number you rely on must be restated there. Reuse earlier results instead of "
+        "repeating a lookup.\n\n"
         "Each turn, reply with strict JSON only, no other text: "
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, unused for query/today>",'
         '"args":{"...only for action \\"query\\", see above..."},"options":["<opt1>","<opt2>"]}. "options" is only '
@@ -3628,7 +3717,7 @@ async def _close_out(session: "OrnaSession", message, limit_hit: str, fallback: 
     (~90s) past whichever limit was hit."""
     session.messages.append({
         "role": "user",
-        "content": f"Observation: {limit_hit} - no further tool calls are possible. Reply NOW with action "
+        "content": f"{_SYSTEM_NOTE} {limit_hit} - no further tool calls are possible. Reply NOW with action "
                    '"finish", putting the best answer you can give from everything gathered so far into '
                    "action_input, and say plainly which parts you could not confirm.",
     })
@@ -3727,6 +3816,10 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
     if session is not None:
         session.status = status
         session.running = True
+        last_user = next((str(m.get("content") or "") for m in reversed(session.messages)
+                          if m.get("role") == "user" and _TAG_RE.match(str(m.get("content") or ""))), "")
+        logger.info("orna: turn sid=%s user=%s\n  %s", sid, session.user_id,
+                    last_user[:800].replace("\n", "\n  "))
     try:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -3746,6 +3839,10 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
             session.running = False
         if status is not None:
             await status.clear()
+
+
+def _with_state(messages: list) -> list:
+    return messages + [{"role": "user", "content": _working_state(messages)}]
 
 
 async def _call_step_model(session: "OrnaSession", step_number: int):
@@ -3771,13 +3868,13 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
             if session.cloud_calls < MAX_CLOUD_CALLS:
                 session.cloud_calls += 1
                 return await chat_json_with_fallback(
-                    ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages,
+                    ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, _with_state(session.messages),
                     api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
                     tools=_STEP_TOOLS,
                 )
             # Only past the runaway guard (or MAX_CLOUD_CALLS=0, i.e. the
             # harness's FORCE_LOCAL): local is all there is.
-            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, session.messages,
+            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, _with_state(session.messages),
                                    timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS)
         except (OllamaError, UnsupportedMultimodal) as e:
             if attempt == 0:
@@ -3849,9 +3946,10 @@ async def _advance_inner(sid: str, message) -> None:
         # The call chain, one line per step, grouped by sid - grep "orna: step"
         # to read a whole request's trace. The harness prints this for a request
         # you run yourself; in production this log was the only thing missing.
-        logger.info("orna: step %s/%s sid=%s action=%s input=%r args=%s",
+        logger.info("orna: step %s/%s sid=%s action=%s input=%r args=%s\n  thought: %s",
                     step_number, MAX_STEPS, sid, action, action_input[:120],
-                    {k: str(v)[:80] for k, v in args.items() if k != "action_input"} or "{}")
+                    {k: str(v)[:80] for k, v in args.items() if k != "action_input"} or "{}",
+                    str(step.get("thought") or "")[:600])
 
         if action == "finish" or not action:
             usage_stats.record_tool_call("finish")
@@ -3896,6 +3994,10 @@ async def _advance_inner(sid: str, message) -> None:
                     and _detect_lang(answer_text) != session.user_lang):
                 answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE)
             answer, effective = _confidence_gate(session, step, answer_text)
+            logger.info("orna: finish sid=%s confidence=%s\n  %s", sid, effective, answer[:1500].replace("\n", "\n  "))
+            # Keep the answer in the transcript: a /clarify follow-up is read
+            # against it, and without it the model could not see what it said.
+            session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
             # The model often states what it still needs as an ANSWER rather
             # than as an ask() (live 2026-09-25: 2 of 3 runs of "порахуй мої
             # стати"). Two narrow signals that a finish is really a question: a
@@ -3916,7 +4018,7 @@ async def _advance_inner(sid: str, message) -> None:
             if session.asks_made >= MAX_ASKS_PER_REQUEST:
                 session.messages.append({
                     "role": "user",
-                    "content": f"Observation: you have already asked {session.asks_made} times and must not "
+                    "content": f"{_SYSTEM_NOTE} you have already asked {session.asks_made} times and must not "
                                "ask again. Use what the user has ALREADY told you - re-read their messages, "
                                "the answer is usually there - CALL the tool you were collecting inputs for, "
                                "and only then finish, stating any remaining assumption explicitly. Do not "
@@ -3926,7 +4028,7 @@ async def _advance_inner(sid: str, message) -> None:
             if not session.allow_ask:
                 session.messages.append({
                     "role": "user",
-                    "content": "Observation: you cannot ask anything here - this request came from INLINE mode, "
+                    "content": f"{_SYSTEM_NOTE} you cannot ask anything here - this request came from INLINE mode, "
                                "where there are no buttons and no reply channel. Answer NOW from what you "
                                "already have, state the assumptions you made for any missing detail, and say "
                                "which detail would change the answer.",
@@ -3937,12 +4039,13 @@ async def _advance_inner(sid: str, message) -> None:
             if not options:
                 session.messages.append({
                     "role": "user",
-                    "content": 'Observation: "ask" needs 2-4 short "options" to tap - '
+                    "content": _SYSTEM_NOTE + ' "ask" needs 2-4 short "options" to tap - '
                                "there's no free-text reply channel here. Retry with options, or finish.",
                 })
                 continue
             session.asks_made += 1
             session.ask_options = options
+            session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
             # Accept a TYPED answer to this question, not only a tapped one.
             # Live: the bot asked, the user typed the full answer, and nothing
             # happened - the wait was armed only by the escape-hatch button,
@@ -3986,7 +4089,11 @@ async def _advance_inner(sid: str, message) -> None:
             observation = await _run_tool(message, action, action_input, args, session.sources, session)
             session.seen_calls[sig] = observation
         session.needs_input = observation.startswith(_NEEDS_INPUT)
-        session.messages.append({"role": "user", "content": f"Observation: {observation}"})
+        logger.info("orna: result sid=%s action=%s\n  %s", sid, action, observation[:1500].replace("\n", "\n  "))
+        n_result = sum(1 for m in session.messages
+                       if m.get("role") == "user" and _TOOL_RESULT_RE.match(str(m.get("content") or ""))) + 1
+        session.messages.append({"role": "user", "content": _tool_result(
+            n_result, action, action_input, args if isinstance(args, dict) else {}, observation)})
 
     usage_stats.record_tool_call("_step_budget_exhausted")
     await _close_out(session, message, "the step budget is exhausted",
@@ -4216,14 +4323,12 @@ async def handle_clarify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("Будь ласка! 🙂" if _CYRILLIC_RE.search(said) else "You're welcome! 🙂")
         return
     if session.awaiting:
-        follow_up = (f"Observation: the user answered the clarifying question in their own words: {said!r}. "
-                     "Use this and continue.")
+        follow_up = f"{_USER_ANSWER}\n{said}"
     else:
         # A new turn of the same conversation - NOT an answer to anything.
-        follow_up = (f"Observation: the user sent a FOLLOW-UP message in the same conversation: {said!r}. "
-                     "Read it against the answer you just gave - it may be a new question, a correction, or a "
-                     "request to narrow or extend that answer. Do NOT re-state the previous answer, and if it "
-                     "needs data you have not observed in this conversation, call a tool for it.")
+        # A new turn of the same conversation: it may correct, narrow or extend
+        # the previous answer, which is now in the transcript (see finish).
+        follow_up = f"{_USER_FOLLOW_UP}\n{said}"
     session.messages.append({"role": "user", "content": follow_up})
     # Stale once the user has supplied something - left set, the next finish
     # would be framed as a question again.
@@ -4328,7 +4433,7 @@ async def orna_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             # loop guess. Wait for the real answer (/clarify).
             await _await_ask_text(query, key)
             return
-        session.messages.append({"role": "user", "content": f'Observation: user chose "{choice}".'})
+        session.messages.append({"role": "user", "content": f"{_USER_ANSWER}\n{choice}"})
         await _advance(key, query.message)
         return
 
@@ -4549,7 +4654,7 @@ def _demo() -> None:
     globals()["_advance"] = _spy
     try:
         for asked, want_steps, want_phrase in ((False, MAX_STEPS, "FOLLOW-UP"),
-                                               (True, _RESUME_STEPS, "answered the clarifying question")):
+                                               (True, _RESUME_STEPS, "USER ANSWER")):
             sid = _new_orna_session([{"role": "user", "content": "Q"}], 0)
             _ORNA_SESSIONS[sid].user_id = 7
             _USER_SESSIONS[7] = sid
@@ -4939,6 +5044,20 @@ def _demo() -> None:
     for _q in ("when does the event end", "thanks, and when does it end",
                "last martyr", "балоріт 100"):
         assert not _is_pleasantry(_q), _q
+    _msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": f"{_USER_QUESTION}\nmagic of 200% godforged staff?"},
+             {"role": "assistant", "content": json.dumps({"action": "assess", "action_input": "Staff"})},
+             {"role": "user", "content": _tool_result(1, "assess", "Staff", {"quality": "200% godforged"}, "magic=500")},
+             {"role": "assistant", "content": json.dumps({"action": "finish", "action_input": "Magic is 500."})},
+             {"role": "user", "content": f"{_USER_FOLLOW_UP}\nadd 20% to it"}]
+    _ws = _working_state(_msgs)
+    assert "USER QUESTION: magic of 200%" in _ws and "#1 assess 'Staff'" in _ws and "magic=500" in _ws
+    assert "YOUR ANSWER (already shown to the user): Magic is 500." in _ws
+    assert _ws.index("Magic is 500") < _ws.index("USER FOLLOW-UP: add 20%")
+    assert _with_state(_msgs)[-1]["content"] == _ws and len(_msgs) == 6   # brief is never stored
+    assert _parse_quality_spec("200% godforged") == (200, 13) == _parse_quality_spec("godforged 200")
+    assert _parse_quality_spec("185% lv10") == (185, 10) and _parse_quality_spec("200 junk") is None
+    _pr = type("R", (), {"stats": {"magic": type("SR", (), {"base": 100, "values": [150.0, 200.0, 250.0]})()}})()
+    assert "magic=250" in _projection_observation(_pr, 3) and "base 100" in _projection_observation(_pr, 3)
     # the command reference is its own evidence; memory-only prose is still gated
     _cs = type("S", (), {"seen_calls": {}, "messages": [], "user_lang": "English"})()
     _ref = "Send the screenshot captioned Red 4, then /amity lists it."

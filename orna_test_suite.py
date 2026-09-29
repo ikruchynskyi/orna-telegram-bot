@@ -410,8 +410,8 @@ class Expect:
     final_none_of: list = field(default_factory=list)
     tools_all: list = field(default_factory=list)
     tools_any: list = field(default_factory=list)       # >=1 of these was called
-    # NOTE finish() is NEVER in the trace: _advance_inner's finish branch
-    # returns before the assistant message is appended to the session. So this
+    # NOTE finish()/ask() are recorded in the transcript (so a /clarify can
+    # see the previous answer) but EXCLUDED from this trace. So this
     # counts RESEARCH calls only - min_tools=1 catches "answered with no tool
     # at all" (the prompt-only-answer failure), and asking for 2 because "it
     # should research then finish" is unsatisfiable.
@@ -623,7 +623,7 @@ async def run_case_once(case: Case) -> tuple:
             action = json.loads(msg["content"]).get("action")
         except Exception:
             continue
-        if action:
+        if action and action not in ("finish", "ask"):   # the loop now records these too
             tools.append(action)
 
     texts = [t for name, t in replies if name != "delete"]

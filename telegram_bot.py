@@ -65,6 +65,11 @@ class _RedactSecrets(logging.Filter):
             text = record.getMessage()
         except Exception:
             return True
+        # Long-polling logs one getUpdates line every ~10s whether or not
+        # anything happened - ~95% of the log. Drop them; polling FAILURES
+        # are logged by telegram.ext itself, not by these httpx lines.
+        if record.name.startswith("httpx") and "/getUpdates" in text:
+            return False
         redacted = text
         for pattern in _SECRET_PATTERNS:
             redacted = pattern.sub(lambda m: m.group(1) + "<redacted>", redacted)

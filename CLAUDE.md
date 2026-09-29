@@ -350,6 +350,21 @@ action per turn via a JSON schema `{"thought","action","action_input","args"}`
 5. Cache pattern (aussies/releases/bonuses/knowledge): disk cache + TTL + atomic
    write + an empty/partial parse is NEVER cached (see each module + `/update_codex`).
 
+**Context format (2026-09-29).** The transcript is TAGGED: `[USER QUESTION]` /
+`[USER FOLLOW-UP]` / `[USER ANSWER to your question]`, numbered
+`[TOOL RESULT #n · call]` blocks, and `[SYSTEM NOTE]`. `finish()`/`ask()` are
+recorded as assistant turns, so a `/clarify` can see the answer it follows (before
+this they were never stored at all). Every step call also gets a transient
+`_working_state` message, which is never stored. It indexes the user turns, the
+model's own earlier answers and every result by number, and asks the thought to
+quote the values it will use before picking a tool. This fixed a live report:
+"+20%" on a 200% godforged item re-ran codex lookups and scaled the BASE stat.
+Two things caused it: that brief was missing, and `assess` returned no numbers
+(it now returns the projected per-level stats via `_projection_observation`).
+The log has the whole chain, keyed by sid:
+`orna: turn` / `step` (with thought) / `result` / `finish`. httpx's `getUpdates`
+polling lines are dropped by `telegram_bot._RedactSecrets`, since they were ~95% of the log.
+
 **Codex shape:** every playorna codex page is one universal JSON schema
 (`codex-bootstrap`: `detail{name,facts,effects,tags,sections}`, or `results`);
 `orna_codex.fetch_codex_json`/`codex_search` return it as-is, so the loop is a
