@@ -58,6 +58,20 @@ DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
 # call after the cooldown probes cloud again, and any success clears it.
 CLOUD_COOLDOWN_SECONDS = 300
 _cloud_down_until = 0.0
+_cloud_model_override: Optional[str] = None
+
+
+def get_cloud_model(default: str) -> str:
+    return _cloud_model_override or default
+
+
+def set_cloud_model(model: str) -> None:
+    """Override cloud calls until restart, leaving local-only calls unchanged."""
+    if not model or len(model) > 200 or any(c.isspace() or ord(c) < 32 for c in model):
+        raise ValueError("Specify one model name (at most 200 characters, no whitespace).")
+    global _cloud_model_override
+    _cloud_model_override = model
+    reset_cloud_cooldown()
 
 
 def cloud_is_parked() -> bool:
@@ -242,7 +256,12 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
             if resp.status_code == 400 and _is_no_vision_error(resp.text):
                 raise UnsupportedMultimodal(resp.text[:300])
             resp.raise_for_status()
-            msg = resp.json().get("message") or {}
+            response = resp.json()
+            usage_stats.record_llm_tokens(
+                model, "cloud" if host == OLLAMA_CLOUD_HOST else "local",
+                response.get("prompt_eval_count"), response.get("eval_count"),
+            )
+            msg = response.get("message") or {}
             content = msg.get("content") or ""
     except httpx.HTTPError as e:
         raise OllamaUnavailable(f"Ollama request failed: {e}") from e
@@ -297,6 +316,7 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
     # genuinely slower and is the last resort - cutting it off produces nothing
     # at all. Defaults to one deadline for both, which is what /go passes.
     global _cloud_down_until
+    cloud_model = get_cloud_model(cloud_model)
     local_timeout = local_timeout or timeout
     cloud_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     if cloud_is_parked():

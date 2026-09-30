@@ -29,6 +29,7 @@ from telegram_orna import (build_clarify_handler, build_chosen_inline_result_han
                           build_update_codex_handler)
 from telegram_orna import _next_text, _today_text
 import usage_stats
+import ollama_client
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -382,6 +383,32 @@ async def handle_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text(f"<code>{target}</code> не був заблокований.", parse_mode="HTML")
 
 
+async def handle_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hidden admin-only cloud model override; never persisted."""
+    message = update.effective_message
+    user = update.effective_user
+    if not message:
+        return
+    if not user or user.id not in GO_ALLOWED_USER_IDS:
+        logger.warning("model: rejected user_id=%s", user.id if user else None)
+        return
+    args = context.args or []
+    if len(args) != 1:
+        await message.reply_text("Використання: /model <model-name>\nЗміна діє до перезапуску сервісу.")
+        return
+    try:
+        ollama_client.set_cloud_model(args[0])
+    except ValueError as e:
+        await message.reply_text(str(e))
+        return
+    logger.info("model: cloud model changed to %s by user_id=%s", args[0], user.id)
+    await message.reply_text(
+        f"Хмарна модель: {args[0]}\n"
+        "Діє до перезапуску; потім використовуються налаштування .env.\n"
+        "Якщо хмарний запит не вдасться, бот використає локальну модель Ollama."
+    )
+
+
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Hidden admin command: report usage_stats' counters. Gated by the
     same GO_ALLOWED_USER_IDS allowlist /go and /update_codex use.
@@ -495,8 +522,16 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if llm_calls:
         for model, count in sorted(llm_calls.items(), key=lambda kv: -kv[1]):
             lines.append(f"  {model}: {count}")
+            input_tokens = data["llm_input_tokens"].get(model)
+            output_tokens = data["llm_output_tokens"].get(model)
+            lines.append(
+                f"    токени: вхід {input_tokens if input_tokens is not None else 'немає даних'}, "
+                f"вихід {output_tokens if output_tokens is not None else 'немає даних'}"
+            )
     else:
         lines.append("  (ще немає даних)")
+    lines.append("")
+    lines.append("Токени: лише отримані лічильники API після оновлення; історичні/невдалі запити можуть бути не враховані.")
     lines.append("")
     lines.append("Дії /orna (ReAct loop):")
     orna_tools = data["orna_tools"]
@@ -601,6 +636,7 @@ def main():
     app.add_handler(build_update_codex_handler())
     # Same hidden/gated treatment - reports usage_stats' counters.
     app.add_handler(CommandHandler("stats", handle_stats))
+    app.add_handler(CommandHandler("model", handle_model))
     # Hidden, same allowlist as /go and /stats, and left out of
     # set_my_commands - moderation tools, not something a guild member needs.
     app.add_handler(CommandHandler("ban", handle_ban))

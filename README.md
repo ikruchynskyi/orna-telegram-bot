@@ -33,6 +33,26 @@ donation) screen.
 
 ## How it fits together
 
+### Hidden admin commands
+
+`/stats` reports calls and API-reported input/output tokens per model, separated
+by cloud/local backend. Token totals persist in `usage_stats.json` and are cleared
+by `/stats reset confirm`. Historical calls and requests without returned token
+counts cannot be reconstructed; these totals are not an Ollama billing statement
+or a remaining-quota estimate.
+
+`/model <model-name>` is restricted to `GO_ALLOWED_USER_IDS` (disabled when that
+allowlist is empty) and omitted from the Telegram command menu. It overrides the
+cloud model for `/orna`, `/go`, and translation calls until the service restarts;
+it does not edit `.env` or change local-only calls. The model name is not checked
+against Ollama's catalog: an unavailable model follows the normal fallback path.
+After restart, `ORNA_CLOUD_MODEL`/`GO_MODEL` from `.env` apply again.
+
+Cloud failures, including insufficient credits, HTTP billing errors and rate
+limits, automatically fall back to `OLLAMA_HOST`/`OLLAMA_MODEL`. Availability
+failures skip cloud for five minutes before trying again. `/model` clears that
+cooldown so a newly selected model can be tried immediately.
+
 ```
 telegram_bot.py            entry point — registers all handlers, runs polling
 ├─ telegram_assess.py      screenshot → OCR → item stats/quality assessment

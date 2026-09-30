@@ -35,6 +35,8 @@ MAX_REPORTS_PER_USER = 10
 
 _commands: Counter = Counter()
 _llm_calls: Counter = Counter()  # keyed by "model (local|cloud)"
+_llm_input_tokens: Counter = Counter()
+_llm_output_tokens: Counter = Counter()
 _orna_tools: Counter = Counter()  # keyed by /orna ReAct loop action name
 _user_commands: Dict[str, Counter] = defaultdict(Counter)  # user_id str -> Counter[command]
 _user_names: Dict[str, str] = {}  # user_id str -> last-seen display name
@@ -66,6 +68,8 @@ def _load() -> None:
         return
     _commands.update(data.get("commands", {}))
     _llm_calls.update(data.get("llm_calls", {}))
+    _llm_input_tokens.update(data.get("llm_input_tokens", {}))
+    _llm_output_tokens.update(data.get("llm_output_tokens", {}))
     _orna_tools.update(data.get("orna_tools", {}))
     for uid, counts in data.get("user_commands", {}).items():
         _user_commands[uid].update(counts)
@@ -91,6 +95,8 @@ def _save() -> None:
             "since": _since,
             "commands": dict(_commands),
             "llm_calls": dict(_llm_calls),
+            "llm_input_tokens": dict(_llm_input_tokens),
+            "llm_output_tokens": dict(_llm_output_tokens),
             "orna_tools": dict(_orna_tools),
             "user_commands": {uid: dict(c) for uid, c in _user_commands.items()},
             "user_names": _user_names,
@@ -209,6 +215,8 @@ def reset(include_reports: bool = False) -> dict:
     }
     _commands.clear()
     _llm_calls.clear()
+    _llm_input_tokens.clear()
+    _llm_output_tokens.clear()
     _orna_tools.clear()
     _user_commands.clear()
     _user_log.clear()
@@ -228,6 +236,17 @@ def record_llm_call(model: str, backend: str) -> None:
     that's part of the counter key rather than something you'd have to
     already know to interpret it."""
     _llm_calls[f"{model} ({backend})"] += 1
+    _save()
+
+
+def record_llm_tokens(model: str, backend: str, input_tokens, output_tokens) -> None:
+    """Record API-reported counts, even when the generated content is unusable."""
+    key = f"{model} ({backend})"
+    for counts, value in ((_llm_input_tokens, input_tokens), (_llm_output_tokens, output_tokens)):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            counts[key] += value
+        else:
+            logger.warning("usage_stats: missing or invalid token count for %s: %r", key, value)
     _save()
 
 
@@ -284,6 +303,8 @@ def snapshot() -> Dict:
         "since": _since,
         "commands": dict(_commands),
         "llm_calls": dict(_llm_calls),
+        "llm_input_tokens": dict(_llm_input_tokens),
+        "llm_output_tokens": dict(_llm_output_tokens),
         "orna_tools": dict(_orna_tools),
         "user_count": len(_user_commands),
     }
