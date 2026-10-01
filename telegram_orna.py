@@ -519,7 +519,7 @@ def _section_buttons(sections: list[dict], key: str) -> list:
     return buttons
 
 
-def _format_entry(detail: dict) -> str:
+def _format_entry(detail: dict, aussies_url: Optional[str] = None) -> str:
     lines = [f"<b>{html.escape(detail.get('name') or '?')}</b>"]
     if detail.get("description"):
         lines.append(html.escape(detail["description"]))
@@ -538,6 +538,27 @@ def _format_entry(detail: dict) -> str:
     if tags:
         lines.append("")
         lines.append("Теги: " + ", ".join(html.escape(t) for t in tags))
+    # Cross-link sections (e.g. "Dropped by", "Used in", "Gives") used to be
+    # hidden behind per-section buttons that posted a SECOND message with the
+    # names once tapped - in a 180-person group chat that's a dead button
+    # every member can tap, each tap bloating the chat with another message.
+    # Inlined as text instead (2026-10-01 ask): same names, zero extra taps,
+    # zero extra messages. Capped at 100 per section like the open_entry
+    # tool's own digest, so a huge cross-link (a popular material "used in"
+    # dozens of recipes) doesn't blow the message up - "(+N more)" says so
+    # rather than silently truncating.
+    for section in detail.get("sections") or []:
+        entries = section.get("entries") or []
+        if not entries:
+            continue
+        names = ", ".join(html.escape(e.get("name", "?")) for e in entries[:100])
+        if len(entries) > 100:
+            names += f" (+{len(entries) - 100} more)"
+        lines.append("")
+        lines.append(f"<b>{html.escape(section.get('title', '?'))}:</b> {names}")
+    if aussies_url:
+        lines.append("")
+        lines.append(f'📊 <a href="{html.escape(aussies_url)}">Aussie Codex</a>')
     return "\n".join(lines)
 
 
@@ -570,6 +591,16 @@ def _names_observation(entries: list, fmt=None) -> str:
 
 # Cap on the read-entries button's list - a loose query can match 50 rows.
 _MAX_VIEWED_ENTRIES = 40
+
+# How many entries finish() will POST as full cards instead of hiding behind
+# the "Записи кодексу" button. The 2026-09-26 change deferred every card
+# because a browsing request posted twelve of them and buried the answer; it
+# also took the rich card away from the far more common "what is this item"
+# lookup, which is the whole point of asking (reported 2026-09-30: "now the
+# codex tool returns only the final description and a button"). A request that
+# looked at one or two entries IS that lookup, so its card is the answer and
+# gets posted; a request that browsed a dozen still gets the quiet button.
+_AUTO_CARD_MAX_ENTRIES = 2
 
 
 def _remember_entries(session, entries: list) -> None:
@@ -1040,7 +1071,8 @@ def _codex_path_problem(url: str) -> str:
 
 async def _send_entry(message, entry_ref: dict, lang: str, post: bool = True) -> Optional[dict]:
     """Fetch a codex entry and (by default) post the full rendered card -
-    sprite, facts/effects/tags, cross-link section buttons, Assess link -
+    sprite, facts/effects/tags, cross-link sections (Dropped by/Used in/...)
+    and an Aussie Codex link, all as plain text now (see _format_entry) -
     returning its `detail` dict so a caller can build a text digest from it.
 
     `post=False` fetches and returns WITHOUT rendering anything. That is what
@@ -1084,24 +1116,23 @@ async def _send_entry(message, entry_ref: dict, lang: str, post: bool = True) ->
         except TelegramError:
             logger.warning("orna: failed to send entry sprite %s", sprite, exc_info=True)
 
-    sections = detail.get("sections") or []
-    key = _remember({"sections": sections, "lang": lang})
-    buttons = _section_buttons(sections, key)
-
     # playorna urls are always "/codex/<category>/<id>/" - reuse that to
-    # link an "Aussie Codex" button to aussiescodex.com's calculator for the
-    # same record, when it has a page (only 4 of 9 categories do).
+    # link an "Aussie Codex" page for the same record as a plain text link
+    # (only 4 of 9 categories have one). This used to be a button, same as
+    # the per-section cross-link buttons below _format_entry now inlines as
+    # text - in a 180-person group chat every tappable button is another
+    # member's dead click bloating the chat with a new message, and a plain
+    # <a> link costs nothing to show and nothing to tap (Telegram opens it
+    # directly, no bot reply involved).
+    aussies_url = None
     parts = [p for p in url.split("/") if p]
     if len(parts) >= 3 and parts[0] == "codex" and has_aussies_page(parts[1]):
-        buttons.append(InlineKeyboardButton("📊 Aussie Codex", url=build_aussies_url(parts[1], parts[2])))
-
-    rows = _pack_buttons(buttons)
+        aussies_url = build_aussies_url(parts[1], parts[2])
 
     await message.reply_text(
-        _format_entry(detail),
+        _format_entry(detail, aussies_url),
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=InlineKeyboardMarkup(rows) if rows else None,
     )
     return detail
 
@@ -1126,8 +1157,16 @@ async def _run_open_entry_tool(message, url: str, sources: Optional[list] = None
         _add_source(sources, detail.get("name") or url,
                     f"https://playorna.com{url}" if url.startswith("/") else url)
     if session is not None and isinstance(getattr(session, "viewed_entries", None), list):
-        entry = {"name": detail.get("name") or url, "url": url, "tier": detail.get("tier")}
-        if not any(e.get("url") == url for e in session.viewed_entries):
+        entry = {"name": detail.get("name") or url, "url": url, "tier": detail.get("tier"),
+                 # READ, as opposed to merely listed by a search - finish()
+                 # cards these first, so a one-item lookup shows the item the
+                 # loop actually read and not every near-name the search hit.
+                 "opened": True}
+        for seen in session.viewed_entries:
+            if seen.get("url") == url:
+                seen["opened"] = True
+                break
+        else:
             session.viewed_entries.append(entry)
     facts = "; ".join(f"{f.get('label')}: {f.get('value')}" for f in (detail.get("facts") or []))
     digest = f"{detail.get('name')}: {facts}"
@@ -3968,17 +4007,38 @@ async def _advance_inner(sid: str, message) -> None:
             # answer arrived below a wall of them. This keeps the answer at the
             # bottom of the chat where the user is looking, and still one tap
             # from any entry.
-            if session.viewed_entries:
-                ekey = _remember({"entries": list(session.viewed_entries), "lang": "en"})
+            # A small lookup posts its card(s) in full - stats, effects and the
+            # "Dropped by"/"Gives"/"Causes"/"Upgrade materials" sections, all as
+            # text now - right above the answer. Inline mode has no chat to
+            # post into (see _InlineSink), so it keeps the text-only shape.
+            carded: list = []
+            opened = [e for e in session.viewed_entries if e.get("opened")]
+            candidates = opened or session.viewed_entries
+            if session.allow_ask and 0 < len(candidates) <= _AUTO_CARD_MAX_ENTRIES:
+                for entry in candidates:
+                    try:
+                        if await _send_entry(message, entry, "en"):
+                            carded.append(entry)
+                    except TelegramError:
+                        # A card must never cost the answer it introduces.
+                        logger.warning("orna: failed to post entry card %s",
+                                       entry.get("url"), exc_info=True)
+            # Everything already posted as a card is reachable in the chat, so
+            # the button only lists what is not.
+            remaining = [e for e in session.viewed_entries if e not in carded]
+            if remaining:
+                ekey = _remember({"entries": list(remaining), "lang": "en"})
                 rows.append([InlineKeyboardButton(
-                    f"📄 Записи кодексу ({len(session.viewed_entries)})",
+                    f"📄 Записи кодексу ({len(remaining)})",
                     callback_data=f"orna|entries|{ekey}|0")])
-            if session.sources:
-                if len(_SOURCES) >= _SOURCES_MAX:
-                    _SOURCES.pop(next(iter(_SOURCES)), None)
-                _SOURCES[sid] = list(session.sources)
-                rows.append([InlineKeyboardButton(
-                    f"📚 Джерела ({len(session.sources)})", callback_data=f"orna|src|{sid}|0")])
+            # The "📚 Джерела" button was removed (2026-10-01 ask): in a
+            # 180-person group chat it's another dead button every member can
+            # tap, each tap posting a new message. session.sources keeps being
+            # collected (every tool that cites something still calls
+            # _add_source) - only the button/_SOURCES-dict storage that
+            # surfaced it in chat is gone; nothing else currently reads it,
+            # but it's cheap bookkeeping and other code builds on it (e.g. the
+            # _run_tool call below still threads it through).
             if rows:
                 markup = InlineKeyboardMarkup(rows)
             # CONFIDENCE GATE. The model's own number, clamped by what the loop
@@ -4891,11 +4951,16 @@ def _demo() -> None:
     # ...and a second read of the same url must not duplicate the button entry
     asyncio.run(_run_tool(spy, "open_entry", "/codex/items/vritra-charm/", {}, sess.sources, sess))
     assert len(sess.viewed_entries) == 1, sess.viewed_entries
+    # ...and it is flagged READ, so finish() cards it ahead of names a search
+    # merely listed (a "what is this item" lookup shows the item, not every
+    # near-name hit).
+    assert sess.viewed_entries[0].get("opened") is True, sess.viewed_entries
 
     spy2, sess2 = _Spy(), _Sess()
     obs2 = asyncio.run(_run_tool(spy2, "search_codex", "Judge Trifecta", {}, sess2.sources, sess2))
     assert spy2.sent == [], f"search_codex must post nothing, sent {spy2.sent}"
     assert "results for" in obs2 and sess2.viewed_entries, obs2[:60]
+    assert not any(e.get("opened") for e in sess2.viewed_entries), "a search LISTS, it does not read"
     # the recorder is capped, or a 50-row query builds an unusable keyboard
     big = [{"name": f"n{i}", "url": f"/codex/items/n{i}/"} for i in range(200)]
     sess3 = _Sess()

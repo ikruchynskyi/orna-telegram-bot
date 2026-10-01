@@ -1043,6 +1043,38 @@ answer clearly and opens codex entries only if they want to.
   `_MAX_VIEWED_ENTRIES = 40` so a 50-row query cannot build an unusable
   keyboard. **Every observation is byte-identical**, so the model's context and
   reasoning are untouched - this is purely what lands in the chat.
+- **A SMALL lookup posts its card again (2026-09-30).** Deferring every card
+  also took the rich entry view away from the most common request there is -
+  "what is this item" - which came back as prose plus a link ("now the codex
+  tool returns only the final description and a button"). `finish()` now posts
+  the full card - description, the `pre_table` of stats, effects, and the
+  `Dropped by` / `Immunities` / `Upgrade materials` cross-link sections plus the
+  Aussie Codex link (all plain text since 2026-10-01, see below) - for up to
+  `_AUTO_CARD_MAX_ENTRIES` (2) entries, above the
+  answer so the answer still lands at the bottom. Entries the loop actually
+  READ win over ones a search merely LISTED (`open_entry` marks its entry
+  `opened`), so the one-item lookup shows that item and not every near-name
+  hit. A browse that touched a dozen entries is unchanged - still the quiet
+  button. Inline mode is excluded (one text message, no chat to post into), and
+  a card that fails to send is logged and skipped: it must never cost the
+  answer it introduces. The button lists only what was NOT carded.
+- **Cross-link sections and the Aussie Codex link became plain text, not
+  buttons (2026-10-01).** The bot is in a ~180-person guild chat, and every
+  tappable button is a dead click some member will eventually make - the
+  per-section button (`Dropped by (3)`, `Used in (12)`, ...) posted a WHOLE
+  NEW message listing the names once tapped, and with 180 potential tappers
+  that's exactly the "bloating the chat" the ask named. `_format_entry` now
+  inlines every section's entry names directly under the stats table
+  (`<b>Dropped by:</b> name, name, ...`, capped at 100 per section like
+  `_run_open_entry_tool`'s own digest, "(+N more)" rather than silent
+  truncation) and the Aussie Codex link renders as a plain `<a href>` instead
+  of a `url=` button - Telegram opens a plain link directly with no bot
+  reply involved, so it costs nothing to show or tap. `_send_entry` no longer
+  builds a `reply_markup` for an entry card at all (`_section_buttons`
+  itself is untouched and still used by the unrelated `events()` roster
+  buttons, which weren't part of this ask). Observations are unchanged -
+  `_run_open_entry_tool`'s digest already carried every section's names as
+  text for the model; only what posts to the chat changed.
 - **`finish()` carries one "📄 Записи кодексу (N)" button.** Tapping it posts the
   paged list, and tapping an entry there goes through the EXISTING `open`
   callback and renders the identical card - no second rendering path to keep in
@@ -1109,6 +1141,18 @@ fell to the generic "⏳ Працюю…" before).
 
 ### `finish()` carries a "📚 Джерела" button - what the answer was actually built from
 
+**Update (2026-10-01): the button itself is gone.** With the bot added to a
+~180-person guild chat, every tappable button is a dead click some member
+will make, and each tap posts a brand-new message - "it's bloating the chat"
+(explicit ask). `session.sources`/`_add_source` keep running exactly as
+before (every tool below still cites what it read), but `finish()` no longer
+turns that list into a button, and nothing writes into `_SOURCES`/responds to
+the `orna|src|...` callback anymore - the citation bookkeeping lives on
+in-session only, nothing user-facing reads it right now. The rest of this
+section (what gets cited, and why not everything) is the still-accurate
+history of why the mechanism exists, kept for whenever a quieter way to
+surface it (e.g. folding into the answer text) replaces the button.
+
 Every tool that reads something with a URL appends `(label, url)` to
 `OrnaSession.sources` (`_add_source`, deduped by URL, capped), and `finish()`
 attaches one button when that list is non-empty; tapping it posts the
@@ -1134,7 +1178,10 @@ explicit ask 2026-09-24. What gets cited, and why not everything:
   opened page once, not twice.
 - `_SOURCES` is keyed by sid but kept OUT of `_ORNA_SESSIONS`, which is
   pruned after `SESSION_TTL_SECONDS` (15 min) while a posted answer stays in
-  the chat forever - tapping the button an hour later should still work.
+  the chat forever - tapping the button an hour later should still work
+  (**now dead code since the 2026-10-01 removal above** - kept rather than
+  torn out, since restoring the button only needs the two lines back).
+
 
 ### `research` - one-call supergraph, `codex.json`-first
 
