@@ -229,6 +229,27 @@ _USER_SESSIONS: dict = {}
 # Steps handed to a session resumed by a typed answer - enough to run the
 # tool the answer unblocks and finish, without restarting the whole budget.
 _RESUME_STEPS = 8
+
+# PLAN-WORK-REVIEW-RELEASE (design ask 2026-10-02): the per-step "REASON
+# TWICE" rule already asks the model to plan before its first tool call and
+# re-check before finish - but that is advisory text squeezed into the SAME
+# JSON call that is also picking an action, and it loses to other
+# instructions in the very same prompt (live: the CONTEXT FORMAT rule said
+# "a number you rely on must be restated in finish()", which directly
+# contradicted "don't repeat stats a posted card already shows" - fixed
+# alongside this, but the underlying lesson is that a reasoning instruction
+# sharing a call with the thing it is supposed to check is a weak lever).
+# PLAN and REVIEW are now also genuinely SEPARATE model calls - one before
+# any tool runs, one before the draft answer is allowed to post - with
+# nothing else to do but that one task. Both cost latency, so both are
+# scoped to COMPLEX requests only (_looks_complex_request): a short, single-
+# item lookup resolves in 1-2 tool calls where an upfront plan or a second
+# opinion adds a real delay for essentially no benefit, and the per-step
+# in-line reasoning already covers it well enough (see _demo for the actual
+# measured effect). Bounded to one redo round so REVIEW cannot turn into a
+# second open-ended loop - same "always replies, never hangs" guarantee
+# _close_out/MAX_ASKS_PER_REQUEST already give the rest of this file.
+MAX_REVIEW_ROUNDS = 1
 # A bare "/clarify thanks"/"ok"/"дякую" is a CLOSER, not a
 # new question. Live 2026-09-27: a user said "thank you" (no /orna) after an
 # answer; the follow-up wait resumed the loop, which RAN TOOLS again and
@@ -2928,10 +2949,15 @@ _TOOLS_TEXT = (
     "this. Never ask twice in the same conversation.\n"
     "- finish(action_input=<short closing text>): end the turn. Results a TOOL already showed the user (search "
     "hits, reports, event cards) don't need repeating - finish is just a short closing sentence (e.g. \"Ось "
-    'варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed text. An answer built '
-    "from knowledge_search or web_search is different: nothing was shown to the user yet, so finish() IS the "
-    "answer - write it out properly, in the user's own language, from what came back. Don't call finish before "
-    "you have enough information.\n"
+    'варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed text. This INCLUDES '
+    "codex item stats: when you looked at 1-2 codex entries (open_entry/search_codex/query), the full entry card "
+    "- stats, effects, Dropped by/Gives/Upgrade materials sections - is posted to the chat AUTOMATICALLY, above "
+    "your answer, as soon as you finish. Do NOT restate those numbers/stats/effects yourself - that duplicates "
+    "what the user is about to see twice. Just answer the actual question asked (e.g. which one is better, "
+    "whether it has a given effect) in one short sentence; name the item so it's clear which card it refers to. "
+    "An answer built from knowledge_search or web_search is different: nothing was shown to the user yet, so "
+    "finish() IS the answer - write it out properly, in the user's own language, from what came back. Don't call "
+    "finish before you have enough information.\n"
 )
 
 _CONDITION_RULES = (
@@ -3075,7 +3101,9 @@ _REASONING_RULE = (
     "each one is satisfied by an OBSERVATION, not by your own assumption; check the numbers you are about to state "
     "came back from a tool rather than from memory; check nothing a tool warned about was dropped (a refusal, a "
     "PARTIAL list, a conditional passive, an assumption you had to make). If a constraint is unmet, fix it with "
-    "another tool call instead of writing it up as if it were met. If it cannot be met, SAY so in the answer.\n"
+    "another tool call instead of writing it up as if it were met. If it cannot be met, SAY so in the answer. ALSO "
+    "check: if this is a 1-2 item codex lookup, its full stat card already posts automatically - your finish() "
+    "text must NOT re-list its stats/effects/tags, only answer the actual question in one short sentence.\n"
     "GAME-RULE SANITY, because a stat table can be arithmetically perfect and still describe a character nobody can "
     "build: equipment must be legal (one head/torso/legs, TWO accessory slots, and two hands - so either one "
     "TWO-HANDED weapon alone, or two one-handed weapons, never a two-hander plus an off-hand); two one-handed "
@@ -3570,8 +3598,10 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         "CONTEXT FORMAT: user turns are tagged [USER QUESTION] / [USER FOLLOW-UP] / [USER ANSWER to your question]; "
         "every tool's output is a numbered [TOOL RESULT #n \u00b7 call] block; [SYSTEM NOTE] is the loop talking; the "
         "final [WORKING STATE] message indexes all of it. Tool results are INTERNAL - the user never sees them, only "
-        "your finish() answer, so a number you rely on must be restated there. Reuse earlier results instead of "
-        "repeating a lookup.\n\n"
+        "your finish() answer, so a number you rely on must be restated there - EXCEPT a codex item's own stat "
+        "card (1-2 entries looked at via open_entry/search_codex/query), which posts to the chat on its own, "
+        "visible to the user already; do not copy its stats/effects/tags into finish(), just answer the question "
+        "in one short sentence. Reuse earlier results instead of repeating a lookup.\n\n"
         "Each turn, reply with strict JSON only, no other text: "
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, unused for query/today>",'
         '"args":{"...only for action \\"query\\", see above..."},"options":["<opt1>","<opt2>"]}. "options" is only '
@@ -3656,6 +3686,16 @@ class OrnaSession:
     # so the next /clarify is its ANSWER rather than a new follow-up question.
     awaiting: bool = False
     running: bool = False   # a /clarify mid-run would double-drive the loop
+    # PLAN-WORK-REVIEW-RELEASE (see MAX_REVIEW_ROUNDS). use_plan_review gates
+    # the REVIEW call in finish() - set by _maybe_plan, based on
+    # _looks_complex_request, so a plain simple lookup never pays for it.
+    # review_rounds counts REDO rounds actually spent, bounded by
+    # MAX_REVIEW_ROUNDS. original_request is the user's own English-pipeline
+    # text (see build_loop_messages), kept here so the REVIEW call has the
+    # actual ask to check against without re-parsing session.messages.
+    use_plan_review: bool = False
+    review_rounds: int = 0
+    original_request: str = ""
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -3671,6 +3711,24 @@ def _new_orna_session(messages: list, steps_left: int, allow_ask: bool = True) -
     sid = uuid.uuid4().hex[:10]
     _ORNA_SESSIONS[sid] = OrnaSession(messages=messages, steps_left=steps_left, allow_ask=allow_ask)
     return sid
+
+
+async def _maybe_plan(sid: str, user_text: str) -> None:
+    """PLAN phase entry point, called once right after a fresh session is
+    created (NOT on an ask()/clarify resume - that is a continuation of
+    work already planned, not a new request). Scoped to
+    _looks_complex_request so a simple lookup never pays the extra model
+    call; any PLAN-call failure just leaves use_plan_review set with an
+    empty plan note, never blocks the request that follows."""
+    session = _ORNA_SESSIONS.get(sid)
+    if session is None or not _looks_complex_request(user_text):
+        return
+    session.use_plan_review = True
+    session.original_request = user_text
+    plan_lines = await _call_plan_model(user_text)
+    if plan_lines:
+        note = "[SYSTEM NOTE] PLAN (made before any tool call): " + " | ".join(plan_lines)
+        session.messages.append({"role": "user", "content": note})
 
 
 async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
@@ -3926,6 +3984,116 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
             raise
 
 
+# PLAN-WORK-REVIEW-RELEASE: scoping PLAN/REVIEW to complex requests only.
+# Deliberately a CHEAP heuristic, not an LLM classification call - asking a
+# model "is this complex" just to decide whether to make MORE model calls
+# would burn the very latency this gate exists to protect simple lookups
+# from. Three cheap signals, any one of which is enough: a long request (most
+# single-item lookups are under ~10 words), several quality/level markers
+# (a multi-item loadout/compare, each item carrying its own "185%"/"lv10"),
+# several comma/"and"-joined clauses (several named things at once), or a
+# request naming one of the genuinely multi-step tool shapes (estimate_stats/
+# compare/build_optimize-shaped asks). False positives just cost one extra
+# PLAN + REVIEW call on a request that turns out simple - never a wrong
+# answer - so the thresholds lean a little generous on purpose.
+_COMPLEX_KEYWORDS_RE = re.compile(
+    r"\b(estimate|optimi[sz]e|optimal|max(?:imi[sz]e)?|best\s+build|loadout|порахуй|мої\s+стати|"
+    r"базові\s+стати|білд|compare|порівняй)\b", re.IGNORECASE)
+_QUALITY_OR_LEVEL_RE = re.compile(r"\d+\s*%|\blv\s*\d+|\+\d+\b|масterforged|демонforged|godforged",
+                                   re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(r",|\band\b|\bта\b|\bі\b", re.IGNORECASE)
+
+
+def _looks_complex_request(text: str) -> bool:
+    """Whether a /orna request is worth the extra PLAN + REVIEW model calls.
+    See the MAX_REVIEW_ROUNDS comment above for why this is scoped at all."""
+    text = text or ""
+    if len(text.split()) >= 20:
+        return True
+    if len(_QUALITY_OR_LEVEL_RE.findall(text)) >= 2:
+        return True
+    if len(_CLAUSE_SPLIT_RE.findall(text)) >= 2:
+        return True
+    return bool(_COMPLEX_KEYWORDS_RE.search(text))
+
+
+async def _call_plan_model(user_text: str) -> list[str]:
+    """The PLAN phase: ONE separate model call, before any tool runs, with
+    nothing to do but plan - list the constraints the request states and the
+    ordered tool calls that would satisfy them. This is intentionally an
+    independent call rather than more in-line "thought" text (see the
+    MAX_REVIEW_ROUNDS comment for why that lever is weak), but it must never
+    block or slow down the request it can't help: any failure here just
+    returns [] and the loop proceeds exactly as it did before this existed."""
+    prompt = (
+        f"A user asked (about the mobile game Orna): {user_text!r}\n\n"
+        "Before any tool call is made, write a short PLAN for answering this with the tools below - do NOT "
+        "answer the question itself here, only plan.\n\n"
+        f"{_TOOLS_TEXT}\n"
+        'Reply with strict JSON only: {"constraints": ["<every explicit constraint stated - items, quality, '
+        'level, class, spec, Ascension Level, PVE/PVP, slots, quantities, language, ...>"], '
+        '"plan": ["<step 1: which tool, and why>", "<step 2: ...>", ...]}'
+    )
+    try:
+        result = await chat_json_with_fallback(
+            ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
+            api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
+        )
+    except (OllamaError, UnsupportedMultimodal):
+        logger.warning("orna: PLAN call failed, continuing without a plan", exc_info=True)
+        return []
+    lines = []
+    constraints = result.get("constraints")
+    if isinstance(constraints, list) and constraints:
+        lines.append("Constraints to satisfy: " + "; ".join(str(c) for c in constraints if str(c).strip()))
+    plan = result.get("plan")
+    if isinstance(plan, list) and plan:
+        lines.append("Planned steps: " + " -> ".join(str(p) for p in plan if str(p).strip()))
+    return lines
+
+
+async def _call_review_model(original_request: str, transcript: str, draft_answer: str, card_note: str) -> dict:
+    """The REVIEW phase: ONE separate model call, after a draft finish() is
+    proposed and before it is allowed to post (RELEASE), checking the draft
+    against the evidence already gathered - a fresh call with nothing else to
+    do but check, not the same step's own thought. Deliberately does NOT
+    reuse session.messages/the full system prompt as its own context - that
+    would hand it the very instructions that let the draft go wrong in the
+    first place (see MAX_REVIEW_ROUNDS); it gets a short, independent brief
+    instead.
+
+    Returns {"verdict": "approve"|"revise"|"redo", "answer": "...", "feedback": "..."}.
+    MUST NEVER cost the answer: any failure here degrades to "approve" with
+    the model's own draft, same reliability contract as the confidence gate."""
+    prompt = (
+        "REVIEW the DRAFT answer below against the EVIDENCE already gathered for this request, before it is "
+        "sent to the user. Checklist: (1) does it answer every explicit constraint in the original request; "
+        "(2) does every number/claim trace to the evidence, not memory; (3) does it avoid repeating stats/"
+        "effects/tags that a codex card ALREADY posted to the chat on its own"
+        + (f" ({card_note})" if card_note else " - no card was posted this time, so stating codex facts here is "
+                                                "fine") + "; (4) is anything the evidence warned about (a "
+        "refusal, a partial list, an assumption) missing from the draft. If the draft is fine, approve it. If "
+        "it is wrong only in WORDING - e.g. it repeats numbers already visible in a posted card, or is needlessly "
+        "long - rewrite it short and correct, adding NO new claims beyond what the evidence already supports. If "
+        "it is substantively wrong or incomplete (missing a constraint, an unverified number), send it back with "
+        "concrete feedback naming what tool call would fix it.\n\n"
+        f"ORIGINAL REQUEST: {original_request!r}\n\n"
+        f"EVIDENCE GATHERED SO FAR:\n{transcript}\n\n"
+        f"DRAFT ANSWER: {draft_answer!r}\n\n"
+        'Reply with strict JSON only: {"verdict": "approve"|"revise"|"redo", '
+        '"answer": "<only for revise - the corrected short answer, in English>", '
+        '"feedback": "<only for redo - what is missing/wrong and which tool would fix it>"}'
+    )
+    try:
+        return await chat_json_with_fallback(
+            ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
+            api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
+        )
+    except (OllamaError, UnsupportedMultimodal):
+        logger.warning("orna: REVIEW call failed, approving the draft as-is", exc_info=True)
+        return {"verdict": "approve"}
+
+
 def _normalize_options(raw) -> list:
     """The "ask" options as a real list of strings.
 
@@ -3992,6 +4160,35 @@ async def _advance_inner(sid: str, message) -> None:
 
         if action == "finish" or not action:
             usage_stats.record_tool_call("finish")
+            # REVIEW (PLAN-WORK-REVIEW-RELEASE, see MAX_REVIEW_ROUNDS): a
+            # separate model call checks the draft BEFORE anything is posted -
+            # no card, no reply, nothing user-visible yet - so a "redo"
+            # verdict costs nothing beyond the model call itself. Scoped to
+            # use_plan_review (complex requests only) and bounded to one
+            # round; past that, or on any call failure, this is a no-op and
+            # the draft proceeds exactly as it would have without REVIEW.
+            draft_answer = action_input or "Не вдалося сформувати відповідь."
+            if session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS:
+                opened_preview = [e for e in session.viewed_entries if e.get("opened")]
+                candidates_preview = opened_preview or session.viewed_entries
+                card_note = ("a codex card for this will auto-post above your answer" if
+                             session.allow_ask and 0 < len(candidates_preview) <= _AUTO_CARD_MAX_ENTRIES else "")
+                session.review_rounds += 1
+                verdict = await _call_review_model(session.original_request, _working_state(session.messages),
+                                                   draft_answer, card_note)
+                kind = verdict.get("verdict")
+                if kind == "redo" and str(verdict.get("feedback") or "").strip():
+                    logger.info("orna: review REDO sid=%s feedback=%s", sid, str(verdict["feedback"])[:300])
+                    session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
+                    session.messages.append({
+                        "role": "user",
+                        "content": f"{_SYSTEM_NOTE} REVIEW sent your draft answer back: {verdict['feedback']} "
+                                   "Make the tool call this needs, then finish again.",
+                    })
+                    continue
+                if kind == "revise" and str(verdict.get("answer") or "").strip():
+                    logger.info("orna: review REVISED sid=%s", sid)
+                    action_input = str(verdict["answer"]).strip()
             # finish() is the one place the model's own free-form prose
             # reaches the user (every other reply is a tool-built,
             # already-HTML message) - nothing in the prompt asks for
@@ -4187,6 +4384,7 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if user_id is not None:   # one conversation per user: a new /orna replaces the old one
         _ORNA_SESSIONS.pop(_USER_SESSIONS.get(user_id, ""), None)
         _USER_SESSIONS[user_id] = sid
+    await _maybe_plan(sid, messages[1]["content"])
     await _advance(sid, message)
 
 

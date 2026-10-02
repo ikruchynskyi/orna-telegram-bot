@@ -105,7 +105,14 @@ async def run_once(query: str) -> None:
     messages, user_lang = await T.build_loop_messages(query)
     sid = T._new_orna_session(messages, T.MAX_STEPS)
     T._ORNA_SESSIONS[sid].user_lang = user_lang
+    # Same PLAN-activation wiring handle_orna does - a complex-looking request
+    # here should also engage PLAN/REVIEW, so this harness can actually verify
+    # that framework, not just plain ReAct.
+    await T._maybe_plan(sid, messages[1]["content"])
     await T._advance(sid, FakeMessage(replies))
+
+    print(f"-- use_plan_review={T._ORNA_SESSIONS[sid].use_plan_review} "
+          f"review_rounds={T._ORNA_SESSIONS[sid].review_rounds} --")
 
     print("\n-- ACTION TRACE (which tool the model picked each turn) --")
     for msg in T._ORNA_SESSIONS[sid].messages:

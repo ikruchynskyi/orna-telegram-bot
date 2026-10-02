@@ -1099,6 +1099,113 @@ answer clearly and opens codex entries only if they want to.
   send NOTHING, that a repeat read does not duplicate the button entry, and that
   the recorder is capped.
 
+### `finish()` must not restate a card it just posted (2026-10-02)
+
+Live report: `/orna yelmogus great staff` auto-posted the codex entry card (full
+stats, per the section above) and then `finish()`'s own text restated the same
+numbers in prose below it - the user saw the answer twice. The card-posting
+mechanism existed, but **nothing in the prompt ever told the model it happens**
+- from the model's point of view it was simply answering a question about an
+item's stats, which looks exactly like a case needing numbers restated.
+
+- **`_TOOLS_TEXT`'s `finish()` description** and **`_REASONING_RULE`'s
+  "before finish()" checklist** both gained an explicit line: a 1-2-item codex
+  lookup auto-posts its full stat card right above the answer, so `finish()`
+  must not re-list those stats/effects/tags - just answer the actual question
+  in one short sentence.
+- **That was directly CONTRADICTED by an existing rule** - the CONTEXT FORMAT
+  section said "a number you rely on must be restated [in finish()], since tool
+  results are internal and the user never sees them." True for every other
+  tool, false for a card that just posted to the SAME chat. Fixed with an
+  explicit EXCEPT clause naming codex item stat cards.
+- **Even after fixing the contradiction, a prompt-only rule did not reach
+  100%** - re-verified over several `orna_loop_harness.py` runs of the exact
+  report: restating was clearly REDUCED (shorter, partial repeats) but not
+  eliminated on every run. Consistent with this file's own repeated finding
+  elsewhere (`_close_out`, `MAX_ASKS_PER_REQUEST`, the earlier "reason twice"
+  rule) that a prompt instruction squeezed into the same call that is also
+  picking an action is a reduction, not a guarantee - which is what motivated
+  actually building a real REVIEW step instead of a third prompt patch (next
+  section).
+
+### PLAN-WORK-REVIEW-RELEASE - genuinely separate PLAN and REVIEW model calls (2026-10-02)
+
+Design ask: whether a formal PLAN/WORK/REVIEW/RELEASE framework would improve
+on the bare ReAct loop, prompted directly by the stats-duplication bug above -
+a prompt rule telling the model to "reason twice" (plan before the first tool
+call, re-check before `finish()`) already existed (`_REASONING_RULE`), and it
+was demonstrably unreliable: outvoted by a contradicting rule in the very same
+prompt, and still inconsistent even after the contradiction was fixed. Both
+PLAN and REVIEW are squeezed into the SAME JSON call that is also picking an
+action for that turn - so "reasoning" and "the thing being reasoned about"
+share one call, with no second opinion. Answers confirmed on ask: PLAN is
+**one upfront extra model call** producing a plan before any tool runs
+(not another "thought" field); REVIEW is **a genuinely separate call** after a
+draft `finish()`, which can send the draft back for more WORK; the extra
+latency is an accepted tradeoff; and both are scoped to **complex requests
+only** - a short single-item lookup should stay exactly as fast as before.
+
+- **`_looks_complex_request(text)`** is a cheap heuristic, deliberately NOT an
+  LLM classification call (that would spend the very latency this gate exists
+  to protect simple lookups from): a long request (>=20 words), >=2 quality/
+  level markers (a multi-item loadout each carrying its own "185%"/"lv10"),
+  >=2 comma/"and"/"та"/"і"-joined clauses (several named things at once), or a
+  keyword match for the genuinely multi-step tool shapes (estimate/build/
+  compare/loadout/optimi[sz]e/"порахуй мої стати"/"мій білд"). Thresholds lean
+  generous on purpose - a false positive just costs one extra PLAN+REVIEW call
+  on a request that turns out simple, never a wrong answer.
+- **PLAN (`_call_plan_model`)** runs once, right after a fresh session is
+  created (`_maybe_plan`, wired into `handle_orna` only - NOT the ask()/
+  `/clarify` resume path, since that is a continuation of work already
+  planned, not a new request; and NOT inline mode, which is already
+  latency/complexity-constrained and has no reply channel to show a slow
+  answer in anyway). It is handed the request and the tool list, asked to
+  name every explicit constraint and a short ordered plan, and the result is
+  injected as one `[SYSTEM NOTE]` into `session.messages` before the loop's
+  first step - so it sits in context like any other note, not as a special
+  code path the main loop has to know about.
+- **REVIEW (`_call_review_model`)** runs when `action == "finish"`, BEFORE
+  anything is posted - no card, no reply, nothing user-visible yet - so a
+  "redo" verdict costs nothing beyond the model call itself. It is given the
+  original request, a condensed transcript of the evidence gathered so far
+  (reusing `_working_state`, the same transcript the main loop's own step
+  calls already see - no second extraction to maintain), the draft answer,
+  and whether a codex card is about to auto-post over it; it returns one of:
+  - `"approve"` - draft posts unchanged;
+  - `"revise"` - REVIEW rewrites the answer itself (used for wording-only
+    problems, e.g. the draft repeats numbers a card already shows, or is
+    needlessly long) - no new claims beyond what the evidence already
+    supports, so this cannot introduce new invented facts;
+  - `"redo"` - REVIEW sends the draft back with concrete feedback naming what
+    is missing/wrong and which tool would fix it; the feedback is appended as
+    a `[SYSTEM NOTE]` and the loop `continue`s to make more tool calls, same
+    as any other mid-loop correction.
+- **Deliberately NOT given the main loop's own system prompt or
+  `session.messages` as its context** - that would hand REVIEW the very
+  instructions that let the draft go wrong in the first place. It gets a
+  short, independent brief instead, which is the whole point of a SEPARATE
+  call: a fresh read with nothing else to do but check.
+- **Bounded to `MAX_REVIEW_ROUNDS = 1`** - same "always replies, never hangs"
+  guarantee `_close_out`/`MAX_ASKS_PER_REQUEST` already give the rest of this
+  file. A second `finish()` attempt skips REVIEW entirely and posts, so one
+  redo round is the absolute worst case added to a request's latency.
+- **Fails open everywhere, by design**: a failed PLAN call (timeout, bad
+  JSON) just means no plan note was injected - the loop proceeds exactly as
+  it would have before this existed. A failed REVIEW call is treated as
+  `"approve"` of the model's own original draft. Neither can make the loop
+  reply LESS reliably than it did before.
+- **Verified live** via `orna_loop_harness.py` (now wired with the same
+  `_maybe_plan` call `handle_orna` makes, so it exercises the real path):
+  `"balor sword"` -> `use_plan_review=False`, unchanged plain ReAct, 3 steps.
+  A genuinely complex multi-constraint `estimate_stats` request (class + spec
+  + AL + PVE + two named, quality/level-qualified items) -> `use_plan_review=
+  True`, one REVIEW round spent, two `finish` attempts in the action trace (a
+  redo), and the final posted answer was a corrected, complete stat summary -
+  a real example of REVIEW catching and fixing a draft the plain loop would
+  have posted as-is.
+- Tier 0 (`orna_test_suite.py`) re-run clean after this change - 100%, no
+  regressions.
+
 ### The ephemeral status message (shared by `/orna` AND `/go`)
 
 A `/orna` request can legitimately run for minutes (`MAX_STEPS = 16`, plus
