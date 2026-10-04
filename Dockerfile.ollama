@@ -1,0 +1,54 @@
+# Ollama with the bot's local model ALREADY BAKED IN.
+#
+# WHY bake it rather than pull on first boot: this image exists to make moving
+# to a new host a copy, not a setup. A container that pulls ~13GB the first
+# time someone asks the bot a question means the first few requests fail (or
+# hang) on a fresh host, and it needs working network to Ollama's registry at
+# exactly the wrong moment. Baked, the image is self-contained: `docker save`
+# it, or push it to a registry, and the new host needs nothing but Docker.
+#
+# The cost is an honest one: this image is as large as the model (~13GB for
+# gpt-oss:20b). If you would rather trade startup for size, delete the pull
+# below and let the ollama-models volume fill on first use instead.
+#
+# MODEL CHOICE, and it is not the one in .env. The host dev setup runs
+# OLLAMA_MODEL=nemotron-3.5-lightning:30b-mlx, which is an MLX build: those run
+# ONLY on Apple Silicon and cannot run in a Linux container at all. So the
+# container default is gpt-oss:20b - the repo's own code default
+# (telegram_nlp.OLLAMA_MODEL), portable GGUF, and the model every bit of
+# harmony/tool-calling work in CLAUDE.md was measured against. Override at
+# build time if you want something else:
+#   docker compose build --build-arg OLLAMA_MODELS="qwen3:32b"
+FROM ollama/ollama:latest
+
+# Space-separated, so a second model (e.g. /go's NSFW_MODEL) can be added
+# without a second build stage. Deliberately NOT including NSFW_MODEL by
+# default - it is a gated personal-use feature behind GO_ALLOWED_USER_IDS and
+# nobody in the guild path needs the extra 12B of image.
+ARG OLLAMA_MODELS="gpt-oss:20b"
+
+# `ollama pull` talks to a local server, so the server has to be up DURING the
+# build. Backgrounding it in the same RUN layer is the whole trick: the wait
+# loop is not cosmetic (pull fails outright against a socket that is not
+# listening yet), and the pull's exit status is what fails the build, so a
+# model name that does not exist is caught here instead of at runtime.
+RUN set -eux; \
+    /bin/ollama serve & \
+    for i in $(seq 1 60); do \
+        /bin/ollama list >/dev/null 2>&1 && break; \
+        sleep 1; \
+    done; \
+    /bin/ollama list >/dev/null 2>&1 || { echo "ollama server never came up"; exit 1; }; \
+    for m in ${OLLAMA_MODELS}; do \
+        echo "pulling $m"; \
+        /bin/ollama pull "$m"; \
+    done; \
+    /bin/ollama list; \
+    pkill -f "ollama serve" || true
+
+# Listen on all interfaces, not just loopback - the default 127.0.0.1 binding
+# is unreachable from the bot container even on the same compose network.
+ENV OLLAMA_HOST=0.0.0.0:11434
+
+# The base image already sets ENTRYPOINT ["/bin/ollama"]; this is its argument.
+CMD ["serve"]

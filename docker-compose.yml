@@ -1,0 +1,85 @@
+# docker compose up -d --build    - run the bot AND its local Ollama
+# docker compose logs -f bot      - the `orna:` / `go:` step logs
+#
+# Two containers, no database service - the codex is a SQLite FILE inside the
+# bot container (see README-db.md for why that beat MySQL/Mongo here), so there
+# is nothing to start, no port and no credentials for it.
+#
+# MOVING TO A NEW HOST: everything the bot needs is these two images plus .env.
+# The model is baked into the ollama image (Dockerfile.ollama), so a new host
+# needs no model pull and no Ollama install - just Docker, the repo, and the
+# .env file. The codex DB rebuilds itself in ~0.3s on first use.
+
+services:
+  bot:
+    build: .
+    image: orna-telegram-bot
+    container_name: orna-bot
+    restart: unless-stopped
+    # Secrets come from the environment at RUN time, never from an image
+    # layer - this repo has already leaked a committed .env once.
+    env_file: .env
+    environment:
+      # Points at the ollama SERVICE below, overriding whatever .env says.
+      # This has to be here rather than left to .env: the host's own .env sets
+      # a nemotron *-mlx model and a localhost Ollama, neither of which exists
+      # inside a Linux container.
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      # Must match what Dockerfile.ollama baked in. An MLX model (what the host
+      # .env uses) is Apple-Silicon-only and cannot run here at all.
+      OLLAMA_MODEL: ${OLLAMA_MODEL_DOCKER:-gpt-oss:20b}
+      TZ: ${TZ:-Europe/Kyiv}
+    # The repo is bind-mounted so the bot's own state files persist on the
+    # host exactly as they do for a native run. The code writes them beside
+    # __file__ with a temp-file + os.replace, which REPLACES the target - so
+    # single-file volume mounts or symlinks would be silently eaten on the
+    # first write. A whole-directory mount is the one shape that works
+    # without refactoring every module's paths.
+    volumes:
+      - .:/app
+    depends_on:
+      ollama:
+        # Waits for the model server to answer, not just for the process to
+        # exist - otherwise the bot's first few requests race the load.
+        condition: service_healthy
+    healthcheck:
+      # Proves the interpreter and the codex DB are both usable, which is the
+      # part that silently breaks; a reply to Telegram cannot be checked here.
+      test: ["CMD", "python", "-c", "import orna_codex_db as d; d.run_sql('SELECT count(*) FROM records')"]
+      interval: 5m
+      timeout: 30s
+      start_period: 60s
+      retries: 3
+
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
+      args:
+        # Space-separated. Add NSFW_MODEL here if you use /go nsfw.
+        OLLAMA_MODELS: ${OLLAMA_MODELS:-gpt-oss:20b}
+    image: orna-ollama
+    container_name: orna-ollama
+    restart: unless-stopped
+    # Models are baked into the image; this volume keeps anything pulled LATER
+    # (a `docker exec orna-ollama ollama pull ...`) across restarts. Docker
+    # seeds a new named volume from the image, so the baked models stay
+    # visible - but note an EXISTING volume from an older image shadows them,
+    # so `docker volume rm orna-telegram-bot_ollama-models` after changing
+    # which models are baked.
+    volumes:
+      - ollama-models:/root/.ollama
+    # Not published by default - only the bot talks to it, over the compose
+    # network. Uncomment to reach it from the host (e.g. to pull a model).
+    # ports:
+    #   - "11434:11434"
+    healthcheck:
+      test: ["CMD", "/bin/ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      # Generous: a cold start loads the model from disk before it answers.
+      start_period: 180s
+      retries: 5
+
+volumes:
+  ollama-models:

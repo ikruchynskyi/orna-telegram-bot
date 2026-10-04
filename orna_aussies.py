@@ -1139,6 +1139,78 @@ def _eval_condition(record: dict, cond: dict) -> bool:
     return False
 
 
+def _matching_records(conditions: list, combinator: str = "and",
+                      category: Optional[str] = None):
+    """Yield every record matching `conditions` (see _eval_condition) - the
+    one scan shared by query_records (which ranks and CAPS them) and
+    count_records (which only counts). Empty conditions means every record;
+    the "that is a useless dump" guard belongs in the listing caller, not
+    here, because counting everything is a legitimate ask."""
+    # Normalize model-supplied literals - a stray "OR"/"ASC" casing must not
+    # silently flip to the opposite default (and/desc) with no error.
+    combine = any if str(combinator).strip().lower() == "or" else all
+    codex = _codex()["main"]
+    categories = [category] if category and category in codex else list(codex.keys())
+    for cat in categories:
+        for record in codex.get(cat, {}).values():
+            if conditions and not combine(_eval_condition(record, c) for c in conditions):
+                continue
+            yield record
+
+
+def count_records(conditions: Optional[list] = None, combinator: str = "and",
+                  category: Optional[str] = None, group_by: str = "") -> dict:
+    """Aggregate instead of list: the TRUE number of matching records, plus
+    an optional per-value breakdown. Returns
+    {"total": int, "field": <resolved group field or "">, "groups": {value: count}}.
+
+    This exists because a count CANNOT be read off query_records: that
+    returns at most `limit` rows, so len() of its result is the CAP, not the
+    total - live bug, "how many items can mages use" answered 50 (the cap)
+    instead of 1598. And a bare "how many items are in the codex" has no
+    conditions at all, which query_records rejects outright.
+
+    `group_by` names "category" or any flat attr field (tier/rarity/
+    item_type/place/useable_by/..., resolved the same fuzzy way as an attr
+    condition); groups come back sorted by count desc, and a record missing
+    the field is counted under "(none)" rather than dropped, so the group
+    counts always re-add to `total`."""
+    conditions = [c for c in (conditions or []) if isinstance(c, dict)]
+    try:
+        import orna_codex_db
+        return orna_codex_db.count(conditions, combinator, category, group_by)
+    except ValueError:
+        raise                      # "cannot group by X" is a real answer
+    except Exception:
+        logger.warning("orna_aussies: codex DB count failed, falling back to the in-memory scan",
+                       exc_info=True)
+
+    field = ""
+    if group_by:
+        norm = group_by.strip().lower().replace(" ", "_").replace("-", "_")
+        # "category" is deliberately NOT in the attr vocabulary (it is the
+        # `category` PARAMETER's job when filtering) but it is the single most
+        # useful grouping there is - "what is in the codex" is a per-category
+        # count - so resolve it by hand before the attr lookup.
+        field = "category" if norm == "category" else (_resolve_attr_field(group_by) or "")
+        if not field:
+            raise ValueError(f"cannot group by {group_by!r}: no such field")
+
+    total = 0
+    groups: dict = {}
+    for record in _matching_records(conditions, combinator, category):
+        total += 1
+        if field:
+            raw = record.get(field)
+            if raw is None:
+                raw = (record.get("stats") or {}).get(field)
+            key = "(none)" if raw is None or raw == "" else str(raw)
+            groups[key] = groups.get(key, 0) + 1
+
+    return {"total": total, "field": field,
+            "groups": dict(sorted(groups.items(), key=lambda kv: -kv[1]))}
+
+
 def query_records(conditions: list, combinator: str = "and", category: Optional[str] = None,
                    limit: int = 50, sort_by: Optional[str] = None, sort_dir: str = "desc",
                    offset: int = 0) -> list:
@@ -1157,30 +1229,46 @@ def query_records(conditions: list, combinator: str = "and", category: Optional[
     (e.g. the 2nd-highest)."""
     if not conditions and not sort_by:
         return []
-    # Normalize model-supplied literals - a stray "OR"/"ASC" casing must not
-    # silently flip to the opposite default (and/desc) with no error.
-    combine = any if str(combinator).strip().lower() == "or" else all
-    codex = _codex()["main"]
-    categories = [category] if category and category in codex else list(codex.keys())
+
+    # Runs on SQLite now (orna_codex_db), not by scanning the parsed JSON.
+    # The in-memory path below is KEPT as the oracle the SQL port is checked
+    # against - orna_codex_db._demo runs both over all 5,080 records across
+    # the whole condition vocabulary and requires identical results. That
+    # differential found four real bugs in the port (a mirrored hp stat, a
+    # missing stats fallback, a wrongly-ordered label branch, and the
+    # character-array `element` shape), so it stays wired as a permanent
+    # check rather than being a one-off migration step.
+    #
+    # Imported inside the function: orna_codex_db imports THIS module for its
+    # vocabulary resolvers, so a module-level import either way is circular.
+    try:
+        import orna_codex_db
+        return [EffectMatch(category=m["category"], id=m["id"], name=m["name"],
+                            field="", code="", tier=m["tier"], sort_value=m["sort_value"])
+                for m in orna_codex_db.query(conditions, combinator, category, limit,
+                                             sort_by, sort_dir, offset)]
+    except Exception:
+        # The DB is derived and rebuildable, but a query must not hard-fail on
+        # a missing/corrupt file - fall back to the scan, log it, and let
+        # /update_codex rebuild. Slower, same answers.
+        logger.warning("orna_aussies: codex DB query failed, falling back to the in-memory scan",
+                       exc_info=True)
 
     matched: list = []
-    for cat in categories:
-        for record in codex.get(cat, {}).values():
-            if conditions and not combine(_eval_condition(record, c) for c in conditions):
+    for record in _matching_records(conditions, combinator, category):
+        sort_value = None
+        if sort_by:
+            stats = record.get("stats") or {}
+            real_field = sort_by if sort_by in stats else _resolve_stat_field(sort_by, stats.keys())
+            sort_value = _parse_number(stats.get(real_field)) if real_field else None
+            if sort_value is None:
                 continue
-            sort_value = None
-            if sort_by:
-                stats = record.get("stats") or {}
-                real_field = sort_by if sort_by in stats else _resolve_stat_field(sort_by, stats.keys())
-                sort_value = _parse_number(stats.get(real_field)) if real_field else None
-                if sort_value is None:
-                    continue
-            matched.append((sort_value, EffectMatch(
-                category=record["category"], id=record["id"],
-                name=display_name(record["category"], record["id"]),
-                field="", code="", tier=record.get("tier"),
-                sort_value=f"{sort_value:g}" if sort_value is not None else None,
-            )))
+        matched.append((sort_value, EffectMatch(
+            category=record["category"], id=record["id"],
+            name=display_name(record["category"], record["id"]),
+            field="", code="", tier=record.get("tier"),
+            sort_value=f"{sort_value:g}" if sort_value is not None else None,
+        )))
 
     if sort_by:
         matched.sort(key=lambda pair: pair[0], reverse=(str(sort_dir).strip().lower() != "asc"))

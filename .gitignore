@@ -28,3 +28,7 @@ orna_model_compare.json
 # orna_knowledge.txt).
 amities.json
 nicknames.json
+codex.sqlite3
+codex.sqlite3-shm
+codex.sqlite3-wal
+codex.sqlite3.tmp

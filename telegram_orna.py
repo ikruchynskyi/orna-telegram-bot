@@ -72,7 +72,8 @@ from orna_aussies import decode as decode_effect_code
 from orna_aussies import display_name
 from orna_aussies import has_aussies_page
 from orna_aussies import fuzzy_codex_name
-from orna_aussies import query_records, refetch_now, resolve_codes as resolve_effect_codes
+from orna_aussies import count_records, query_records, refetch_now, resolve_codes as resolve_effect_codes
+import orna_codex_db
 from orna_aussies import unresolvable_condition_fields
 from orna_aussies import build_supergraph, resolve_entity
 from orna_aussies import class_abilities as orna_aussies_class_abilities
@@ -137,9 +138,9 @@ MAX_CLOUD_CALLS = 20
 ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
-_ACTIONS = ("today", "next", "need", "search_codex", "query", "events", "open_entry", "research", "calculate",
-            "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide", "knowledge_search",
-            "releases", "web_search", "ask", "finish")
+_ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
+            "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
+            "knowledge_search", "releases", "web_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -824,9 +825,10 @@ def _describe_condition(cond: dict) -> str:
 
 
 async def _run_query_tool(message, conditions: list, combinator: str, category: str, sort_by: str, sort_dir: str,
-                          session=None) -> str:
+                          session=None, count: bool = False, group_by: str = "") -> str:
     conditions = [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
-    if not conditions and not sort_by:
+    aggregate = bool(count) or bool(group_by)
+    if not conditions and not sort_by and not aggregate:
         return "query needs at least one condition, or a sort_by for a ranking ask"
 
     # An unusable field name must not come back as "0 results" - that reads as
@@ -844,9 +846,32 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
                   "records exist. Re-issue the query with a real field, or filter on the entry's name with a "
                   '{"kind":"text","field":"name"} condition instead.')
 
+    combine = combinator if combinator in ("and", "or") else "and"
+
+    if aggregate:
+        # "How many ...?" is a different question from "which ...?", and it
+        # cannot be answered off the listing path: that one caps at 50, so
+        # len(results) is the cap and reporting it is a confidently WRONG
+        # number. Nothing is posted to the chat - a count is one number the
+        # model restates in finish(), not a card.
+        try:
+            agg = await asyncio.to_thread(count_records, conditions, combine, category or None, group_by or "")
+        except Exception as e:
+            logger.warning("orna: count failed for %r group_by=%r", conditions, group_by, exc_info=True)
+            return f"count failed: {e}"
+        where = (" AND " if combine == "and" else " OR ").join(
+            _describe_condition(c) for c in conditions) or "everything in the codex"
+        scope = f"[{category}] {where}" if category else where
+        if agg["groups"]:
+            breakdown = ", ".join(f"{k}: {v}" for k, v in agg["groups"].items())
+            return (f"COUNT for {scope} = {agg['total']} total, grouped by {agg['field']}: {breakdown}. "
+                    f"These are exact full-database counts (not a capped sample) - report the numbers as they are.")
+        return (f"COUNT for {scope} = {agg['total']}. This is an exact full-database count (not a capped "
+                f"sample) - report the number as it is.")
+
     try:
         matches = await asyncio.to_thread(
-            query_records, conditions, combinator if combinator in ("and", "or") else "and",
+            query_records, conditions, combine,
             category or None, 50, sort_by or None, sort_dir if sort_dir in ("asc", "desc") else "desc",
         )
     except Exception as e:
@@ -874,7 +899,18 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
     # search; the aussiescodex "Assess" link lives on that entry view.
     entries = [{"name": m.name, "url": f"/codex/{m.category}/{m.id}/", "tier": m.tier,
                 "sort_value": m.sort_value} for m in matches]
-    suffix = " (показано перші 50)" if len(entries) >= 50 else ""
+    # A truncated list must report the TRUE total, never len(matches) - that is
+    # the CAP, and reporting it as the count is the observation-honesty rule's
+    # exact failure ("50 matches" for 1598 real ones). Only paid for when the
+    # cap was actually hit; the count is a second 5ms scan of the same records.
+    total = len(entries)
+    if total >= 50:
+        try:
+            total = (await asyncio.to_thread(
+                count_records, conditions, combine, category or None, ""))["total"]
+        except Exception:
+            logger.warning("orna: count for truncated query failed", exc_info=True)
+    suffix = f" (PARTIAL: showing the first 50 of {total})" if total > len(entries) else ""
 
     # Recorded for finish()'s one button rather than posted - see
     # _remember_entries, including the note on the earlier preference this
@@ -891,7 +927,88 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
         if sort_by and e.get("sort_value") is not None:
             return f"{e['name']} [{sort_by}={e['sort_value']}] ({e['url']})"
         return f"{e['name']} ({e['url']})"
-    return (f"{len(matches)} matches for {summary}{suffix}: {_names_observation(entries, _fmt)}")
+    return (f"{total} matches for {summary}{suffix}: {_names_observation(entries, _fmt)}")
+
+
+_SQL_MAX_ROWS = 50
+_SQL_OBS_MAX = 12000
+
+
+def _format_rows(columns: list, rows: list) -> str:
+    """Rows as compact `col=value` lines - readable to the model without the
+    byte cost of a padded table, and unambiguous when a value is empty (an
+    aligned table's blank cell and a literal empty string look identical)."""
+    if not columns:
+        return "(no columns)"
+    if len(columns) == 1:
+        return "; ".join("∅" if r[0] is None else str(r[0]) for r in rows)
+    out = []
+    for r in rows:
+        out.append(" | ".join(f"{c}={'∅' if v is None else v}" for c, v in zip(columns, r)))
+    return "\n".join(out)
+
+
+async def _run_sql_tool(message, sql: str, args: dict, session=None) -> str:
+    """Run one model-written read-only SELECT against the codex database.
+
+    This is the general-purpose counterpart to query(): query() is a fixed
+    condition vocabulary (fast, safe, no SQL to get wrong) while this can
+    COUNT, GROUP BY, join a record to its drops' stats, and full-text search -
+    the questions a filter cannot express at all.
+
+    Posts nothing to the chat: rows are evidence the model reasons over, the
+    same as knowledge_search/web_search, not something to show a user raw.
+    Every safety guarantee (read-only, one statement, 5s abort, row cap) is
+    enforced in orna_codex_db.run_sql - in code, not in the prompt."""
+    sql = (sql or "").strip()
+    if not sql:
+        return ("sql needs a SELECT statement in action_input. Call sql with action_input=\"schema\" "
+                "to see the tables and columns first.")
+
+    # The model does not have to carry the schema in its head (and the prompt
+    # only shows an abridged version): asking for it is one cheap step.
+    if sql.lower().strip(" ;`") in ("schema", "tables", ".schema", "show tables"):
+        try:
+            return "CODEX DATABASE SCHEMA:\n" + await asyncio.to_thread(orna_codex_db.schema_text)
+        except Exception as e:
+            logger.warning("orna: sql schema failed", exc_info=True)
+            return f"could not read the schema: {e}"
+
+    limit = args.get("limit") if isinstance(args, dict) else None
+    try:
+        limit = max(1, min(int(limit), _SQL_MAX_ROWS))
+    except (TypeError, ValueError):
+        limit = _SQL_MAX_ROWS
+
+    try:
+        # to_thread: SQLite work is synchronous CPU/disk and would otherwise
+        # block the event loop for every chat, per CLAUDE.md's standing rule.
+        result = await asyncio.to_thread(orna_codex_db.run_sql, sql, limit)
+    except ValueError as e:
+        # A rejected or malformed query is NOT an empty result - saying
+        # "0 rows" here would be read as "the game has none of those".
+        return (f"SQL did NOT run: {e}. Nothing was searched, so this says nothing about whether such "
+                f"records exist. Fix the statement and retry, or call sql with action_input=\"schema\" "
+                f"to check the real table/column names.")
+    except Exception as e:
+        logger.warning("orna: sql tool failed for %r", sql[:200], exc_info=True)
+        return f"SQL failed: {e}"
+
+    rows, columns = result["rows"], result["columns"]
+    if not rows:
+        return (f"0 rows for: {sql}. The query RAN and matched nothing - that is real evidence, but check the "
+                f"column values are spelled as the schema lists them (e.g. rarity='celestial', not 'Celestial').")
+
+    body = _format_rows(columns, rows)
+    if len(body) > _SQL_OBS_MAX:
+        body = body[:_SQL_OBS_MAX].rsplit("\n", 1)[0] + "\n… (cut here)"
+        note = " PARTIAL - the text was cut, re-run with fewer columns or an aggregate if you need the rest."
+    elif result["truncated"]:
+        note = (f" PARTIAL - only the first {len(rows)} rows are shown; there are MORE. Do NOT count these "
+                f"rows and report that as a total: re-run as SELECT count(*) for the real number.")
+    else:
+        note = " This is the COMPLETE result for that query."
+    return f"{len(rows)} row(s) for: {sql}\n{body}\n{note}"
 
 
 _CALENDAR_LINK_HTML = f'<a href="{CALENDAR_URL_UK}">📅 Переглянути календар подій</a>'
@@ -2754,6 +2871,35 @@ _TOOLS_TEXT = (
     "the user, only what you eventually finish with) - retry with a simpler form rather than giving up.\n"
     "- query(args={...}): search the full item/monster/boss/class/spell/building/dungeon/follower/raid database "
     "by attributes - see the condition rules below.\n"
+    "- sql(action_input=<one read-only SELECT>): the SAME codex data as a real SQLite database, for the "
+    "questions a fixed filter CANNOT express: COUNT/SUM/AVG/MIN/MAX, GROUP BY breakdowns, joining a record to "
+    "its drops'/materials' own stats, and full-text search over every field at once. Use this for \"how many\", "
+    "\"what is the total/average/breakdown\", \"which X has the most Y per Z\", and for anything about "
+    "STATUSES/buffs/debuffs/class abilities as things in their own right (those are NOT codex records - they "
+    "live in the `terms` table with their descriptions). Prefer query() for a plain \"which records match these "
+    "attributes\" filter; reach for sql() when you need to aggregate, join, or count. Read-only: SELECT (or "
+    "WITH ... SELECT) only, one statement, no ';'. Send action_input=\"schema\" to get the exact tables, "
+    "columns and the real spelling of every enum value - do that FIRST rather than guessing a column name. "
+    "NEVER count the rows it returns and report that as a total: the result is capped, so a count needs an "
+    "actual SELECT count(*). Abridged schema:\n"
+    "    records(rid, category, id, name, description, tier, rarity, useable_by, item_type, place, family, "
+    "type, targets, spell_type, hp, price, exotic, new, hidden, json)\n"
+    "    stats(rid, field, value, raw) -- long/narrow: ANY of 157 stats, e.g. field='magic'\n"
+    "    effects(rid, kind, code, name, chance) -- kind: immunities|causes|gives|cures\n"
+    "    links(rid, relation, target_category, target_id, target_name) -- drops, dropped_by, "
+    "upgrade_materials, skills, used_by, ...\n"
+    "    labels(rid, kind, value) -- tags, events;  bonds(rid, bond_tier, type, name, value, raw) -- followers\n"
+    "    terms(kind, code, name, description) -- kind='status' (312 buffs/debuffs), 'abilities' (134, with "
+    "descriptions), 'stats', 'rarity', 'element', ...\n"
+    "    search(name, description, body) -- FTS5 over records; `WHERE search MATCH 'sword'`, 'name: sword', "
+    "'blind*', and join back on search.rid = records.rid\n"
+    "  Materials are records: category='items' AND item_type='material'. Pets are category='followers'. "
+    "Examples: SELECT count(*) FROM records WHERE category='items' | SELECT category, count(*) FROM records "
+    "GROUP BY category | SELECT r.name, s.value FROM stats s JOIN records r USING(rid) WHERE s.field='magic' "
+    "ORDER BY s.value DESC LIMIT 10 | SELECT t.name, t.description FROM terms t WHERE t.kind='status' AND "
+    "t.name LIKE '%bleed%' | SELECT l.target_name, s.value FROM links l JOIN records r USING(rid) JOIN stats s "
+    "ON s.rid=(SELECT rid FROM records WHERE category=l.target_category AND id=l.target_id) WHERE "
+    "r.name='Fallen King Centaurus' AND l.relation='drops' AND s.field='attack'\n"
     "- events(action_input=<keyword, or empty>): the current/near-term event calendar - ONLY for a scheduled, "
     "time-limited game EVENT (a double-orns weekend, an EXP event, a limited-time special raid/gauntlet event "
     "that appears and disappears on the calendar) - ALREADY filtered to what's live or upcoming (anything fully "
@@ -2963,7 +3109,14 @@ _TOOLS_TEXT = (
 _CONDITION_RULES = (
     "query's args: {\"conditions\": [<condition>, ...], \"combinator\": \"and\"|\"or\", \"category\": \"<one of "
     'items, monsters, bosses, raids, followers, classes, spells, buildings, dungeons, or empty for all>", '
-    '"sort_by": "<stat field or empty>", "sort_dir": "asc"|"desc"}. ONE query call = one filter - if the request '
+    '"sort_by": "<stat field or empty>", "sort_dir": "asc"|"desc", "count": true|false, '
+    '"group_by": "<field or empty>"}. '
+    'For "HOW MANY ...?" / "what is the TOTAL/BREAKDOWN of ...?" set "count": true (and "group_by" for a '
+    'per-value split, e.g. group_by "category" for what the whole codex holds, or "tier"/"rarity"/"item_type"/'
+    '"place"/"useable_by"): that returns EXACT full-database totals. NEVER count a listing yourself - a plain '
+    'query returns at most the first 50 rows, so counting what you see gives the cap (50), not the real number. '
+    'A count needs no conditions at all ("how many items are in the codex" = count with category "items"). '
+    "ONE query call = one filter - if the request "
     "names several separate things to look up (different slots, different classes, different items), call query "
     "multiple times, once per thing (see the worked example below) - never cram unrelated asks into one call's "
     "conditions.\n"
@@ -3225,6 +3378,51 @@ _DEAD_END_MARKERS = (
     "couldn't parse", "lookup failed", "query failed", "isn't assessable",
     "computed NOTHING", "nothing found", "no further tool calls",
 )
+
+
+# "How many / what is the total / breakdown" phrasings, EN + UK. Deliberately
+# narrow: this gates a forced retry, so it must not fire on a pleasantry or a
+# capability question ("what can you do"), which legitimately need no tool.
+_AGGREGATION_RE = re.compile(
+    r"\b(how many|how much|what('s| is) the (total|average|sum|count|breakdown)|"
+    r"total number|count of|average |median |most common|least common|"
+    r"скільки|яка (загальна|середня)|загальна кількість|у середньому|найпоширеніш)",
+    re.IGNORECASE)
+
+
+def _looks_aggregation_request(text: str) -> bool:
+    """True for a question whose answer is a NUMBER derived from the whole
+    database. These are exactly the questions the model will answer from
+    memory if left alone - it reads as a simple factual question, so there is
+    no obvious reason to call a tool, and a plausible wrong number comes back
+    looking identical to a right one."""
+    return bool(_AGGREGATION_RE.search(text or ""))
+
+
+def _forced_evidence_note(session) -> Optional[str]:
+    """The note to send a zero-evidence finish back with, or None to let it
+    through. Returns a note only for an aggregation question that made NO
+    tool call at all, and only ONCE per request.
+
+    Why this is code and not another prompt rule: verified live on this exact
+    change. With sql() fully described in the prompt, "how many items are in
+    the codex?" finished with a confident "2773" and an EMPTY action trace
+    3/3 - the number was right, which is the dangerous part: it came from the
+    model's memory of a public website, not from the database, and a stale or
+    invented one would have looked exactly as convincing. CLAUDE.md's own
+    history says a tool description alone does not get a new tool called
+    (class_guide was 0/3 before its rule); this file's other finding says a
+    prompt rule is a reduction, not a guarantee. So the guarantee lives here."""
+    if session.pushed_for_evidence or session.seen_calls:
+        return None
+    if not _looks_aggregation_request(session.original_request):
+        return None
+    session.pushed_for_evidence = True
+    return ("You are about to answer a HOW-MANY/total question without having called a single tool, so that "
+            "number can only have come from memory - it is a guess, and a wrong one would look identical. "
+            "Call sql() with a real SELECT count(*) (or a GROUP BY for a breakdown) against the codex database "
+            "and answer from what it returns. Send action_input=\"schema\" first if you need the exact table "
+            "and column names.")
 
 
 def _evidence_ceiling(session) -> tuple:
@@ -3696,6 +3894,9 @@ class OrnaSession:
     use_plan_review: bool = False
     review_rounds: int = 0
     original_request: str = ""
+    # One-shot: a count/aggregation question that tried to finish with no tool
+    # call at all has been sent back once already. See _forced_evidence_note.
+    pushed_for_evidence: bool = False
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -3754,8 +3955,10 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_query_tool(
                 message, args.get("conditions") or [], str(args.get("combinator") or "and"),
                 str(args.get("category") or ""), str(args.get("sort_by") or ""), str(args.get("sort_dir") or "desc"),
-                session=session,
+                session=session, count=bool(args.get("count")), group_by=str(args.get("group_by") or ""),
             )
+        if action == "sql":
+            return await _run_sql_tool(message, action_input or str(args.get("sql") or ""), args, session)
         if action == "events":
             return await _run_events_tool(message, action_input)
         if action == "open_entry":
@@ -3837,6 +4040,7 @@ _ACTION_LABELS = {
     "need": "🧮 Рахую, скільки потрібно…",
     "search_codex": "🔎 Шукаю в кодексі…",
     "query": "🔎 Підбираю за характеристиками…",
+    "sql": "🗃 Запит до бази кодексу…",
     "events": "🎪 Дивлюся календар подій…",
     "open_entry": "📖 Читаю сторінку кодексу…",
     "calculate": "🧮 Рахую…",
@@ -4168,6 +4372,18 @@ async def _advance_inner(sid: str, message) -> None:
             # round; past that, or on any call failure, this is a no-op and
             # the draft proceeds exactly as it would have without REVIEW.
             draft_answer = action_input or "Не вдалося сформувати відповідь."
+
+            # A count answered with zero tool calls goes back once - see
+            # _forced_evidence_note. Placed before REVIEW because REVIEW is
+            # gated to complex requests and "how many items are in the codex"
+            # is 7 words, so it would never reach that check.
+            evidence_note = _forced_evidence_note(session)
+            if evidence_note:
+                logger.info("orna: forcing evidence for aggregation ask sid=%s", sid)
+                session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
+                session.messages.append({"role": "user", "content": f"{_SYSTEM_NOTE} {evidence_note}"})
+                continue
+
             if session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS:
                 opened_preview = [e for e in session.viewed_entries if e.get("opened")]
                 candidates_preview = opened_preview or session.viewed_entries
@@ -4804,6 +5020,20 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
         lines.append(f"  {cat}: {count}")
     lines.append(f"stats: {stats['stats_vocab']}, status: {stats['status_vocab']}")
     lines.append("playorna codex cache cleared")
+
+    # The SQLite mirror is DERIVED from the dump we just refetched, so it has
+    # to be rebuilt in the same command - otherwise the `sql` tool keeps
+    # answering from pre-patch data while every other tool is current, which
+    # is exactly the stale mix this command exists to prevent. The rebuild is
+    # atomic (temp file + rename) and refuses to replace a good DB with an
+    # empty one, so a failure here leaves the previous DB serving.
+    try:
+        db = await asyncio.to_thread(orna_codex_db.build)
+        lines.append(f"SQL-база: {db['records']} записів, {db['stats']} статів, "
+                     f"{db['links']} зв'язків, {db['terms']} термінів")
+    except Exception as e:
+        logger.warning("update_codex: sqlite rebuild failed", exc_info=True)
+        lines.append(f"SQL-база: не вдалося перебудувати ({e})")
     if "error" in rel:
         lines.append(f"патч-ноти: не вдалося оновити ({rel['error']})")
     else:
@@ -5106,8 +5336,35 @@ def _demo() -> None:
     assert _parse_confidence({"confidence": 140}) == 100 and _parse_confidence({"confidence": -5}) == 0
 
     class _S:
-        def __init__(self, calls):
+        def __init__(self, calls, request="", pushed=False):
             self.seen_calls = calls
+            self.original_request = request
+            self.pushed_for_evidence = pushed
+
+    # _forced_evidence_note: a HOW-MANY question that made no tool call at all
+    # is sent back ONCE. Live 2026-10-04: "how many items are in the codex?"
+    # finished with a confident, memory-sourced "2773" and an empty action
+    # trace 3/3 with sql() fully described in the prompt.
+    def _agg_session(request, seen=None, pushed=False):
+        return _S(seen or {}, request, pushed)
+
+    assert _looks_aggregation_request("how many items are in the codex?")
+    assert _looks_aggregation_request("скільки предметів у кодексі?")
+    assert _looks_aggregation_request("what's the average attack of celestials")
+    # Must NOT fire where no tool call is legitimate, or the guard would force
+    # a pointless step onto every greeting and capability question.
+    assert not _looks_aggregation_request("what can you do?")
+    assert not _looks_aggregation_request("дякую!")
+    assert not _looks_aggregation_request("balor sword")
+    assert _forced_evidence_note(_agg_session("how many items are in the codex?")), "a bare count must be pushed back"
+    # ...but only once, and never when evidence already exists.
+    assert _forced_evidence_note(_agg_session("how many items?", pushed=True)) is None, "must be one-shot"
+    assert _forced_evidence_note(_agg_session("how many items?", seen={"sql …": "2773"})) is None, \
+        "a count WITH a tool observation must pass straight through"
+    assert _forced_evidence_note(_agg_session("balor sword")) is None, "non-aggregation asks are untouched"
+    _once = _agg_session("how many items are in the codex?")
+    assert _forced_evidence_note(_once) and _forced_evidence_note(_once) is None, "flag must latch"
+
     assert _evidence_ceiling(_S({}))[0] == 40, "no tool call means nothing was verified"
     assert _evidence_ceiling(_S({"a": "0 results for 'x'"}))[0] == 60, "all dead ends"
     assert _evidence_ceiling(_S({"a": "open_entry did NOT run: bad url"}))[0] == 60

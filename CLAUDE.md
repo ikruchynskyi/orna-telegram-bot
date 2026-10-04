@@ -71,6 +71,13 @@ glue around three live, unmocked external services.
   "mag > 250 and crit > 3%" or "what gives immunity to X" as a real search
   instead of guessing. Also cached to disk (`.aussies_cache/`), 24h TTL.
   See the `/orna` section.
+- `orna_codex_db.py` / `codex.sqlite3` (gitignored) — the codex as a real
+  queryable DB, built in 0.29s from the same dump `orna_aussies` caches.
+  Exists because `query_records` is a FILTER, not a query language: it cannot
+  COUNT, GROUP BY, join a record to its drops' stats, or full-text search.
+  SQLite, not MySQL/MongoDB — see `README-db.md` for the measured comparison.
+  Backs `/orna`'s `sql` tool; rebuilt by `/update_codex`. Read-only connection
+  (`mode=ro`) is the write guarantee, not a prompt rule.
 - `telegram_orna.py` — `/orna <text>`, a real ReAct loop (today/next/need/
   search_codex/query/events/open_entry/research/calculate/assess/compare/
   build_optimize/towers/class_guide/knowledge_search/web_search/ask/finish
@@ -1205,6 +1212,178 @@ only** - a short single-item lookup should stay exactly as fast as before.
   have posted as-is.
 - Tier 0 (`orna_test_suite.py`) re-run clean after this change - 100%, no
   regressions.
+
+### `sql` — the codex as a database, and why SQLite (2026-10-04)
+
+Design ask: the codex tool read `codex.json` and built search criteria against
+it, so it could not answer an aggregation ("how many items are in the codex").
+MySQL vs MongoDB was the question; the answer is **SQLite**, because on the
+ask's own two criteria it wins both — reads dominate (an in-process query beats
+a localhost round-trip) and there is nothing to be consistent about (2.4MB,
+5,080 records, ZERO writers, a derived cache of someone else's dump refreshed
+weekly). It also does the third requirement better than either: MongoDB allows
+**one text index per collection**, which is a hard ceiling on "full-text search
+by any field", while FTS5 gives per-column matching, prefixes and BM25.
+Measured: parse 14ms, in-memory filter scan 5.4ms, DB build 0.29s, GROUP BY
+0.34ms. Full comparison and the "if you still want MySQL" path: `README-db.md`.
+
+- **The bug under the ask was NOT storage, and it was reporting a cap as a
+  total.** `query_records` returns `results[offset:offset+limit]`, and
+  `_run_query_tool` reported `len(matches)` — so "how many items can mages
+  use" answered **50** (the cap) instead of **1598**. That is the
+  observation-honesty rule's exact failure, in the one place it was never
+  applied. Fixed in two layers: `orna_aussies.count_records` (true total +
+  optional `group_by`, sharing ONE scan with `query_records` via
+  `_matching_records`), surfaced as `query`'s `count`/`group_by` args; and the
+  listing path now reports the real total with an explicit `PARTIAL` marker,
+  paying for the second scan only when the cap was actually hit.
+- **Schema shape is forced by the data**: 37 top-level fields (most absent on
+  most records) and **157 distinct stat keys**, so `stats(rid, field, value,
+  raw)` is long/narrow — any stat filterable/sortable/aggregatable with no
+  schema change when the game adds one — plus the whole record in a `json`
+  column for `json_extract`. `links` carries every `[category, id]` edge WITH
+  the target's name joined in, which is what makes "the stats of what this raid
+  drops" one query instead of N lookups.
+- **`terms` is the table that did not exist anywhere before.** Statuses,
+  buffs/debuffs and class abilities are NOT codex records — they live only in
+  `translations.en.json` and appear on records as bare codes. So "how many
+  statuses exist" / "what does Life Siphon do" had no answer in any source.
+  846 rows: 312 statuses, 134 abilities WITH descriptions, 156 stat names, and
+  every enum. Materials are records (`item_type='material'`), pets are
+  `category='followers'` — both already covered, and `_demo` now pins that
+  every KIND of codex thing is both filterable (indexed WHERE) and searchable
+  (findable by its own name through FTS), because those three are the ones
+  easy to miss.
+- **Read-only is enforced by the ENGINE, not the prompt** — the connection is
+  `file:...?mode=ro`, so no model-written statement can write whatever the
+  prompt says. Plus: one statement only, SELECT/WITH only, a 5s
+  progress-handler abort (a cartesian join over 5,080 records would otherwise
+  hang the thread), and a row cap whose truncation is reported as `PARTIAL`.
+  All pinned in `_demo`, including that the connection itself refuses a CREATE.
+- **A tool description was NOT enough to get it called, exactly as this file
+  predicted.** Live, 3/3: "how many items are in the codex?" finished with a
+  confident **"2773"** and an EMPTY action trace. The number was RIGHT, which
+  is the dangerous part — it came from the model's memory of a public site, not
+  the database, and a stale one would have looked identical. Same shape as
+  `class_guide` being 0/3 before `_CLASS_GUIDE_RULE`. The fix is CODE, per the
+  standing "close it in the tool, not the prompt" rule: `_forced_evidence_note`
+  sends a HOW-MANY/total/average question back ONCE when it reached `finish`
+  with zero tool calls. Deliberately narrow (`_AGGREGATION_RE`, EN+UK) so it
+  cannot fire on a pleasantry or a capability question, where no tool call is
+  correct; one-shot and fails open, so it can never cost a reply. It sits
+  BEFORE the REVIEW block because REVIEW is gated to complex requests and this
+  question is 7 words. Measured after: 3/3 call a tool first — and the model
+  picks `query count` for the simple count and `sql` (schema first, then a
+  correct GROUP BY and a JOIN+AVG) for what `query` cannot express.
+- **`/update_codex` rebuilds the DB** in the same command that refetches the
+  dump it is derived from — refreshing one and not the other is the stale mix
+  that command exists to prevent. Atomic (temp + rename), and a build
+  producing under 1000 records REFUSES to replace a good DB, so a failure
+  leaves the previous one serving.
+- **`query_records`/`count_records` now RUN on SQL** (they delegate to
+  `orna_codex_db.query`/`.count`; the in-memory scan stays as the fallback if
+  the DB file is missing or unreadable). This reverses an earlier decision in
+  this very section not to migrate `_eval_condition` - the stated reason was
+  that every branch in it exists because of a documented live bug, so a hand
+  port would re-litigate all of them. **That reasoning was wrong about which
+  way the oracle cuts**: the in-memory evaluator being present is exactly what
+  makes the port verifiable, by running both over all 5,080 records and
+  requiring identical results.
+- **The port splits in two, and only one half is new code.** VOCABULARY
+  resolution is reused verbatim (`_resolve_stat_field`, `_resolve_attr_field`,
+  `resolve_codes`/`_parse_buff_query`'s "T Mag 3" -> `t__mag_uuu` shorthand,
+  `_USEABLE_BY_ALIASES`) - that is where most of the subtlety lives. Only the
+  COMPARISON semantics became SQL, which is what the differential covers.
+- **The differential found FOUR real bugs in the port**, 156 mismatching
+  conditions out of 4,220 comparisons on the first run, and every one would
+  have shipped looking plausible:
+  * a top-level `hp` MIRRORED into the `stats` table "so ORDER BY hp works
+    across categories" - which silently redefined `{stat hp > 100}`, since the
+    in-memory kind reads ONLY `record["stats"]` and a boss's 3,000,000 must not
+    match. Top-level values get their own `hp_num`/`price_num` columns instead;
+  * the attr -> `stats[original_field]` fallback dropped: `{attr hp = 10}`
+    matched 20 items in memory and 0 in SQL;
+  * the label branch taken BEFORE that fallback: `{attr element = fire}` was
+    91 vs 0. `_resolve_attr_field("element")` fuzzy-resolves to **"events"** - a
+    wrong resolution - and the in-memory answer is only correct BECAUSE the
+    fallback rescues it, so the port had to reproduce that order exactly;
+  * the character-array shape: `element` is `['f','i','r','e']` on **288
+    items** (and `["fire"]` on 354 spells). That branch had been dismissed here
+    as defensive and unreachable. It is neither - 91 vs 63. Normalised at build
+    time in `_stat_raw` so no query path needs to know.
+- **ONE deliberate deviation, asserted so it stays deliberate**: a condition on
+  a field that resolves to NOTHING matches EVERY record in memory (the bool-flag
+  branch reading absent-as-False, so "items where bogus_field = false" -> all
+  5,080). The SQL layer fails closed. Unreachable either way -
+  `unresolvable_condition_fields` refuses such a query upstream.
+- **A trimmed differential is PINNED in `orna_codex_db._demo`** - one case per
+  condition kind plus the four regressions above, each stating whether it
+  expects hits (a case matching nothing in BOTH paths agrees vacuously and
+  would keep "passing" after the data shifted under it). The full ~4,200
+  comparison matrix is a scratch script, not committed.
+- **Behaviour CHANGE, not a parity bug**: grouping a count by a list field
+  (`tags`/`events`) now returns per-value counts (`found_in_chests: 382`) where
+  the in-memory version returned one key per list COMBINATION
+  (`"['found_in_shops', 'found_in_chests']"`). The SQL shape is the useful one,
+  but it is a change in output, not a fix.
+
+### Running it anywhere — `install.sh`, `Dockerfile`, `docker-compose.yml`
+
+- **The image exists for the three SYSTEM binaries `pip` cannot provide**:
+  tesseract **with Ukrainian traineddata** (the OCR runs `lang="eng+ukr"` and
+  degrades silently to English without it, which reads as "the bot ignored my
+  screenshot"), ffmpeg, and yt-dlp — all at fixed absolute paths passed in by
+  env var, since this repo's launchd history is several outages' worth of "a
+  binary was not on a minimal PATH". The build FAILS if any of them, or the
+  `ukr` language data, or FTS5, is missing — loudly at build time rather than
+  on a user's first screenshot.
+- **No database service in compose, and that is the point** — a MySQL/Mongo
+  service would mean a second container, a volume, credentials, a healthcheck
+  and startup-order retries for a 2.4MB read-only dataset read by one process.
+- **The repo is bind-mounted (`.:/app`) rather than state being volume-mounted
+  per file.** The state files (`reminders.json`, `usage_stats.json`,
+  `amities.json`, `nicknames.json`) are written with temp-file + `os.replace`,
+  which REPLACES the target — so a single-file bind mount or a symlink gets
+  silently eaten on the first write, and persistence would look fine until the
+  first reload. A whole-directory mount is the one shape that works without
+  refactoring every module's paths. That bind mount also means
+  `codex.sqlite3` DOES persist on the host (it is written to `/app`), which an
+  earlier version of this note wrongly denied - harmless either way, since it
+  is gitignored and rebuilds in ~0.3s.
+- **Secrets only ever at runtime** (`env_file`), never an image layer, and
+  `.dockerignore` excludes `.env*` — this repo has already leaked a committed
+  `.env` once (see `.gitignore`'s own note).
+- **Ollama is its own container with the model BAKED IN** (`Dockerfile.ollama`),
+  not a profile and not the host's. The point is migration: a new host needs
+  Docker, the repo and `.env`, with no Ollama install and no model pull, so the
+  first request cannot race a 13GB download. Cost is an image as large as the
+  model. Three things to know:
+  * **`.env`'s `OLLAMA_MODEL` is an MLX build** (`nemotron-3.5-lightning:30b-mlx`)
+    and MLX runs ONLY on Apple Silicon - it cannot run in a Linux container at
+    all. So compose pins `OLLAMA_MODEL` to the baked `gpt-oss:20b` (the repo's
+    own code default, portable GGUF, and the model every harmony/tool-calling
+    measurement in this file was taken against) rather than inheriting it.
+  * `OLLAMA_HOST` is set in compose to `http://ollama:11434`, overriding
+    `.env`'s localhost. An earlier version left this at
+    `host.docker.internal` while also shipping the ollama service, so the
+    profile started a container the bot then ignored.
+  * the baked models live in the image; the `ollama-models` volume keeps
+    anything pulled LATER. Docker seeds a NEW named volume from the image, but
+    an existing one SHADOWS it - so remove the volume after changing which
+    models are baked.
+  * `pkill -f "ollama serve"` ends the build-time server. The pull's exit
+    status fails the build, so a bad model name is caught at build rather than
+    at runtime.
+- `install.sh` is the native path (macOS/brew or Debian/apt), idempotent,
+  `--no-deps` to skip system packages. It never overwrites an existing `.env`
+  (that would lose a working bot token) and ends with a real verification pass:
+  imports, tesseract languages, the video binaries, and a record count out of
+  the codex DB.
+- **NOT VERIFIED: neither image has ever been built** — the Docker daemon was
+  not running on this machine, and the Ollama image was prepared for a future
+  host migration rather than tested. `docker compose config` validates and
+  resolves both services, and `install.sh` parses; `docker build` has not run
+  once. Build both before relying on either.
 
 ### The ephemeral status message (shared by `/orna` AND `/go`)
 

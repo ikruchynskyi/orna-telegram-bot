@@ -77,6 +77,9 @@ the game adds new materials.
 
 ## Prerequisites
 
+None of these are needed if you run it with [Docker](#docker-the-whole-stack-in-two-containers)
+— the images carry all of them, including the Ollama model. For a native run:
+
 - Python 3.11+
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract), with the
   Ukrainian language pack (for the screenshot features)
@@ -87,6 +90,72 @@ the game adds new materials.
   material on which date (see [Google Sheets setup](#4-google-sheets-api-key--spreadsheet) below)
 
 ## Installation
+
+Three ways, in increasing order of effort:
+
+| | Needs on the host | Use when |
+|---|---|---|
+| **[Docker](#docker-the-whole-stack-in-two-containers)** | Docker only | moving to a new host, or you want nothing installed |
+| **[`./install.sh`](#scripted-native-install)** | Python + a package manager | running natively on your own machine |
+| **[Manual](#1-clone-and-install-python-dependencies)** | everything below | you want to understand each piece |
+
+### Docker: the whole stack in two containers
+
+```bash
+git clone https://github.com/ikruchynskyi/orna-telegram-bot.git
+cd orna-telegram-bot
+cp .env.dist .env          # then fill in BOT_TOKEN and SHEETS_API_KEY
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+That is the whole install. Two containers:
+
+- **`bot`** — the bot, plus Tesseract (with the Ukrainian language data),
+  ffmpeg and yt-dlp. The codex database is a SQLite *file* inside it, built
+  automatically on first use in about a third of a second — there is no
+  database service, no port and no database credentials.
+- **`ollama`** — Ollama with the local model **already baked into the image**
+  (`Dockerfile.ollama`). Nothing is downloaded on first run, so a fresh host
+  cannot have its first few requests race a multi-gigabyte model pull.
+
+The model baked in is `gpt-oss:20b`. To bake a different one:
+
+```bash
+OLLAMA_MODELS="qwen3:32b" docker compose build ollama
+```
+
+> **Note for Apple Silicon users:** an `*-mlx` model (such as the
+> `nemotron-3.5-lightning:30b-mlx` this project's own `.env` uses natively)
+> runs **only** on Apple Silicon and cannot run inside a Linux container.
+> Compose therefore pins the container's `OLLAMA_MODEL` to the baked
+> `gpt-oss:20b` rather than inheriting the value from `.env`. Run natively if
+> you want the MLX model.
+
+The repo directory is bind-mounted into the container, so the bot's state
+files (`reminders.json`, `usage_stats.json`, `amities.json`, `nicknames.json`)
+persist on the host exactly as they do for a native run.
+
+**Moving to another host:** copy the repo and `.env`, then
+`docker compose up -d --build`. Nothing else is needed — no Ollama install, no
+model pull, no Tesseract, no Python.
+
+> The Docker images have not yet been built and run end to end; they were
+> prepared for a future host migration. Expect to debug the first build.
+
+### Scripted native install
+
+```bash
+./install.sh              # system packages + venv + deps + codex DB
+./install.sh --no-deps    # skip the system packages
+```
+
+Idempotent, so it is safe to re-run after a `git pull`. It never overwrites an
+existing `.env`, and it finishes with a verification pass: Python imports,
+Tesseract's language data, the video binaries, and a record count out of the
+codex database.
+
+### Manual install
 
 ### 1. Clone and install Python dependencies
 
