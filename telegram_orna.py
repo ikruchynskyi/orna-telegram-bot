@@ -829,7 +829,11 @@ async def _run_query_tool(message, conditions: list, combinator: str, category: 
     conditions = [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
     aggregate = bool(count) or bool(group_by)
     if not conditions and not sort_by and not aggregate:
-        return "query needs at least one condition, or a sort_by for a ranking ask"
+        return ('query needs ONE of: "count": true (for "how many"/a total/a breakdown - add '
+                '"group_by" for a per-value split), at least one condition (to filter), or a '
+                '"sort_by" (to rank). If you are counting, use "count": true - do NOT add a '
+                'sort_by to get a list and then count its rows: a listing is capped at 50, so '
+                'counting what you can see gives 50, not the real total.')
 
     # An unusable field name must not come back as "0 results" - that reads as
     # "nothing in the game has this" and gets reported to the user as fact. Say
@@ -3399,10 +3403,32 @@ def _looks_aggregation_request(text: str) -> bool:
     return bool(_AGGREGATION_RE.search(text or ""))
 
 
+# What a real aggregate observation looks like. `query`'s count path opens with
+# "COUNT for", and a sql() aggregate echoes its own statement, so the function
+# name appears. Matched case-insensitively against every observation.
+_AGG_EVIDENCE_MARKERS = ("count for", "count(", "sum(", "avg(", "min(", "max(", "group by")
+
+
+def _has_aggregate_evidence(session) -> bool:
+    return any(any(m in str(obs or "").lower() for m in _AGG_EVIDENCE_MARKERS)
+               for obs in session.seen_calls.values())
+
+
+def _counted_a_capped_list(session) -> bool:
+    """True when the only thing the loop has to count from is a TRUNCATED
+    listing. That is the live failure of 2026-10-04 exactly: "how many items
+    are in the codex" was refused on an empty-conditions query, so the model
+    added sort_by=attack to make the call legal, got back a 50-row capped
+    list, and answered "there are 50 items in the codex" with confidence 82.
+    A listing's row count is the CAP, never a total."""
+    return (not _has_aggregate_evidence(session)
+            and any("partial" in str(obs or "").lower() for obs in session.seen_calls.values()))
+
+
 def _forced_evidence_note(session) -> Optional[str]:
-    """The note to send a zero-evidence finish back with, or None to let it
-    through. Returns a note only for an aggregation question that made NO
-    tool call at all, and only ONCE per request.
+    """The note to send a finish back with, or None to let it through. Fires
+    ONCE per request, for an aggregation question that either made NO tool
+    call at all or has nothing to count from but a CAPPED listing.
 
     Why this is code and not another prompt rule: verified live on this exact
     change. With sql() fully described in the prompt, "how many items are in
@@ -3413,16 +3439,29 @@ def _forced_evidence_note(session) -> Optional[str]:
     history says a tool description alone does not get a new tool called
     (class_guide was 0/3 before its rule); this file's other finding says a
     prompt rule is a reduction, not a guarantee. So the guarantee lives here."""
-    if session.pushed_for_evidence or session.seen_calls:
+    if session.pushed_for_evidence:
         return None
     if not _looks_aggregation_request(session.original_request):
         return None
+
+    if not session.seen_calls:
+        why = ("without having called a single tool, so that number can only have come from memory - it is a "
+               "guess, and a wrong one would look identical to a right one")
+    elif _counted_a_capped_list(session):
+        # The narrow, verified case - do NOT widen this to "any aggregation
+        # question without an aggregate", or every "how much defense does X
+        # have" would burn a step: those answer from a complete observation,
+        # and only a PARTIAL one is evidence that something was cut.
+        why = ("counting the rows of a result that is explicitly marked PARTIAL. That number is the display "
+               "CAP (50), not the total - the observation states the real total separately")
+    else:
+        return None
+
     session.pushed_for_evidence = True
-    return ("You are about to answer a HOW-MANY/total question without having called a single tool, so that "
-            "number can only have come from memory - it is a guess, and a wrong one would look identical. "
-            "Call sql() with a real SELECT count(*) (or a GROUP BY for a breakdown) against the codex database "
-            "and answer from what it returns. Send action_input=\"schema\" first if you need the exact table "
-            "and column names.")
+    return (f"You are about to answer a HOW-MANY/total/breakdown question {why}. Get the real number: call "
+            "query with args {\"count\": true, ...} (add \"group_by\" for a per-value split), or sql() with a "
+            "real SELECT count(*). Send sql action_input=\"schema\" first if you need the exact table and "
+            "column names. Never report the length of a capped list as a total.")
 
 
 def _evidence_ceiling(session) -> tuple:
@@ -5362,6 +5401,27 @@ def _demo() -> None:
     assert _forced_evidence_note(_agg_session("how many items?", seen={"sql …": "2773"})) is None, \
         "a count WITH a tool observation must pass straight through"
     assert _forced_evidence_note(_agg_session("balor sword")) is None, "non-aggregation asks are untouched"
+
+    # The LIVE failure of 2026-10-04, reproduced from its own log: the model
+    # was refused on an empty-conditions query, added sort_by=attack to make
+    # the call legal, got a capped 50-row listing, and answered "there are 50
+    # items in the Orna codex" at confidence 82. A tool HAD been called, so
+    # the original zero-tool-call guard let it straight through.
+    capped = {"query items attack": "2773 matches for [items] attack (PARTIAL: showing the first 50 of 2773): "
+                                    "Celestial Axe [attack=410]; Celestial Bow [attack=410]"}
+    assert _forced_evidence_note(_agg_session("how many items are in the codex?", seen=capped)), \
+        "counting a PARTIAL listing must be sent back - this is the 50-vs-2773 bug"
+    # ...but a REAL count passes through, however it was obtained.
+    for ok in ("COUNT for [items] everything in the codex = 2773.",
+               "1 row(s) for: SELECT count(*) FROM records\n2773",
+               "9 row(s) for: SELECT category, count(*) FROM records GROUP BY category"):
+        assert _forced_evidence_note(_agg_session("how many items?", seen={"c": ok})) is None, ok
+    # And a COMPLETE (non-PARTIAL) observation is not second-guessed, so a
+    # "how much defense does X have" ask does not burn a step on a count.
+    assert _forced_evidence_note(_agg_session(
+        "how much defense does the Lost Helmet have?",
+        seen={"assess": "Lost Helmet: defense 318 at lv1, 726 at lv10"})) is None, \
+        "a complete observation must not be pushed back"
     _once = _agg_session("how many items are in the codex?")
     assert _forced_evidence_note(_once) and _forced_evidence_note(_once) is None, "flag must latch"
 
