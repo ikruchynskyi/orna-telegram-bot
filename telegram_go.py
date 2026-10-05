@@ -79,6 +79,14 @@ GO_ALLOWED_USER_IDS = {
 }
 
 MAX_STEPS = 6
+# Wall-clock backstop for one /go request. MAX_STEPS alone bounds how many
+# steps run, not how long one takes - and /go's steps are the slowest in the
+# bot: a `youtube` action downloads a video over whatever connection this
+# command exists for (slow, metered plane wifi) and then re-encodes it. Set
+# GENEROUSLY on purpose: this is a hang backstop, not a latency target, and
+# firing it on legitimately-slow video work would break the main use case.
+# Running out of it does NOT fail blank - see _close_out.
+LOOP_TIMEOUT_SECONDS = 900
 MAX_VIDEO_MB = 50
 MAX_AUDIO_MB = 20
 AUDIO_BITRATE_KBPS = 64
@@ -928,6 +936,43 @@ async def _send_finish(sid: str, session: GoSession, message, answer: str) -> No
     await _reply_markdown(message, answer, reply_markup=markup)
 
 
+async def _close_out(sid: str, session: GoSession, message, limit_hit: str, fallback: str) -> None:
+    """Take ONE more model call to answer with whatever the loop already
+    gathered, instead of ending on a bare "gave up".
+
+    Ported from /orna's own _close_out, which exists because of a measured
+    incident there: runs that ended on the step budget had already collected
+    every number they needed and simply never got a turn to SAY it, and the
+    user was shown only a failure string. /go had the unfixed version of
+    exactly that, and it is WORSE here - on a metered connection the user has
+    already paid for those searches and downloads.
+
+    Goes through _send_finish rather than a plain reply, so a closed-out
+    answer still carries the Sources / Next image / Continue buttons -
+    Continue especially, since "keep going from here" is the natural next
+    move after a budget ran out.
+
+    This call is beyond MAX_STEPS (and, on the timeout path, beyond
+    LOOP_TIMEOUT_SECONDS), but it cannot loop: whatever comes back IS the
+    reply, and `fallback` is sent if it fails. It is bounded by _call_model's
+    own cloud->local fallback timeouts."""
+    session.messages.append({
+        "role": "user",
+        "content": f"Observation: {limit_hit} - no further tool calls are possible. Reply NOW with action "
+                   '"finish", putting the best answer you can give from everything gathered so far into '
+                   "action_input, and say plainly which parts you could not confirm.",
+    })
+    try:
+        final = str((await _call_model(session.messages, nsfw=session.nsfw)).get("action_input") or "").strip()
+    except (OllamaError, _UnsupportedMultimodal):
+        logger.warning("go: forced closing answer failed (%s)", limit_hit, exc_info=True)
+        final = ""
+    try:
+        await _send_finish(sid, session, message, final or fallback)
+    except Exception:
+        logger.warning("go: failed to send closing answer", exc_info=True)
+
+
 async def _advance(sid: str, message) -> None:
     session = _SESSIONS.get(sid)
     if session is None:
@@ -944,7 +989,20 @@ async def _advance(sid: str, message) -> None:
     # rather than trying to edit a message from the previous turn.
     session.status = _Status(message)
     try:
-        await _advance_steps(sid, session, message)
+        try:
+            await asyncio.wait_for(_advance_steps(sid, session, message),
+                                   timeout=LOOP_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            # Cancels _advance_steps mid-step. A `youtube` step's subprocesses
+            # are asyncio ones, so the await raises and its TemporaryDirectory
+            # unwinds; an ffmpeg already running may briefly outlive the
+            # cancellation and then fail writing into the removed directory.
+            # Accepted: the ceiling is set high enough that this fires on a
+            # hang, not on normal slow work.
+            logger.warning("go: wall-clock timeout after %ss sid=%s", LOOP_TIMEOUT_SECONDS, sid)
+            await _close_out(sid, session, message,
+                             f"this request hit its {LOOP_TIMEOUT_SECONDS // 60}-minute time limit",
+                             "That took too long - try a narrower request.")
     finally:
         await session.status.clear()
         session.status = None
@@ -1024,7 +1082,8 @@ async def _advance_steps(sid: str, session, message) -> None:
 
         session.messages.append({"role": "user", "content": f"Observation: {observation}"})
 
-    await message.reply_text("Gave up after too many steps without a final answer.")
+    await _close_out(sid, session, message, f"you have used all {MAX_STEPS} of your steps",
+                     "Gave up after too many steps without a final answer.")
 
 
 async def _mark_done(query, note: str) -> None:
@@ -1227,6 +1286,95 @@ def _demo() -> None:
     # Every row's first column is padded to the widest cell in it ("Longname"),
     # not just its own header width - real column alignment, not per-cell.
     assert "Longname | B" in got and "1        | 22" in got, got
+
+    # _close_out: BOTH ways a request can end without finish() must answer from
+    # what the loop already gathered. The out-of-steps path used to reply
+    # "Gave up after too many steps without a final answer." and discard
+    # everything - the same incident /orna's own _close_out was written for,
+    # and worse here because a metered connection already paid for the work.
+    # Stubbed because the real path needs Ollama and Telegram; what is pinned
+    # is the CONTROL FLOW, which is where the bug was.
+    class _Spy:
+        def __init__(self): self.sent = []
+
+        async def reply_text(self, t, **k):
+            self.sent.append(t)
+            return self
+
+        async def reply_photo(self, *a, **k):
+            return self
+
+        def __getattr__(self, n):
+            async def _f(*a, **k):
+                return None
+            return _f
+
+    # Swapped through globals() rather than `global` statements: assigning
+    # these names anywhere in _demo would otherwise make them local to it for
+    # the whole function, including the reads above.
+    _g = globals()
+    _keys = ("_call_model", "_run_search", "LOOP_TIMEOUT_SECONDS")
+    _saved = {k: _g[k] for k in _keys}
+    try:
+        async def _check_close_out():
+            # (a) out of steps, with a real observation in context
+            sid = _new_session([{"role": "user", "content": "q"}], steps_left=1)
+            _SESSIONS[sid].messages.append(
+                {"role": "user", "content": "Observation: search found: Burj Khalifa, 828 m."})
+            seen = []
+
+            async def _m(messages, nsfw=False):
+                seen.append(messages[-1]["content"])
+                if len(seen) == 1:
+                    return {"action": "search", "action_input": "x"}
+                return {"action": "finish", "action_input": "It is the Burj Khalifa (828 m)."}
+
+            async def _s(*a, **k):
+                return ("more", {"images": [], "sources": []})
+
+            _g["_call_model"], _g["_run_search"] = _m, _s
+            spy = _Spy()
+            await _advance(sid, spy)
+            assert any("Burj Khalifa" in t for t in spy.sent), spy.sent
+            assert not any("Gave up" in t for t in spy.sent), "must not discard what it gathered"
+            assert "no further tool calls are possible" in seen[-1], seen[-1]
+
+            # (b) wall clock: a step that hangs must STILL produce a reply
+            _g["LOOP_TIMEOUT_SECONDS"] = 1
+            sid2 = _new_session([{"role": "user", "content": "q"}], steps_left=6)
+            hung = {"n": 0}
+
+            async def _hang(messages, nsfw=False):
+                hung["n"] += 1
+                if hung["n"] == 1:
+                    await asyncio.sleep(30)
+                return {"action": "finish", "action_input": "Partial answer."}
+
+            _g["_call_model"] = _hang
+            spy2 = _Spy()
+            await _advance(sid2, spy2)
+            assert any("Partial answer." in t for t in spy2.sent), spy2.sent
+
+            # (c) the closing call failing must still send the fallback, so
+            #     this can never make the bot LESS likely to reply.
+            async def _boom(messages, nsfw=False):
+                raise OllamaError("down")
+
+            _g["_call_model"] = _boom
+            sid3 = _new_session([{"role": "user", "content": "q"}], steps_left=0)
+            spy3 = _Spy()
+            # _close_out logs this deliberate failure with a full traceback;
+            # muted so a PASSING demo run does not print one and read as broken.
+            logger.setLevel(logging.CRITICAL)
+            try:
+                await _close_out(sid3, _SESSIONS[sid3], spy3, "out of steps", "FALLBACK")
+            finally:
+                logger.setLevel(logging.NOTSET)
+            assert any("FALLBACK" in t for t in spy3.sent), spy3.sent
+
+        asyncio.run(_check_close_out())
+    finally:
+        _g.update(_saved)
 
     print("telegram_go._demo: all checks passed")
 

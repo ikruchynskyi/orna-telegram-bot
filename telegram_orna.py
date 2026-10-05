@@ -3543,15 +3543,23 @@ def _low_confidence_banner(pct: Optional[int], why: str, ukrainian: bool) -> str
     """The "I don't know" lead-in. The partial answer is kept BELOW it rather
     than discarded: the user asked for the bot to say it does not know, and a
     clearly-labelled partial beats a blank refusal - but the label has to come
-    first so it cannot be skim-read past."""
+    first so it cannot be skim-read past.
+
+    MARKDOWN, not HTML - this is the one thing to keep right here. The finish
+    answer is sent through _reply_markdown, which runs telegram_go.
+    _markdown_to_html and therefore ESCAPES <, > and & before Telegram sees
+    them. A `<b>` written here arrives as `&lt;b&gt;` and renders as the
+    literal text "<b>" (live report 2026-10-05: the user saw
+    "<b>I don't know this reliably</b>" in the chat). `**bold**` is what this
+    pipeline turns into real bold."""
     shown = f"~{pct}%" if pct is not None else "низька" if ukrainian else "low"
     if ukrainian:
         tail = f" Причина: {why}." if why else ""
-        return (f"⚠️ <b>Не можу відповісти впевнено</b> (впевненість {shown}, "
+        return (f"⚠️ **Не можу відповісти впевнено** (впевненість {shown}, "
                 f"поріг {_CONFIDENCE_FLOOR}%).{tail} Нижче — лише те, що вдалося зібрати; "
                 "це не перевірена відповідь.")
     tail = f" Reason: {why}." if why else ""
-    return (f"⚠️ <b>I don't know this reliably</b> (confidence {shown}, bar is "
+    return (f"⚠️ **I don't know this reliably** (confidence {shown}, bar is "
             f"{_CONFIDENCE_FLOOR}%).{tail} Below is only what I could gather - treat it as "
             "unverified.")
 
@@ -5436,6 +5444,24 @@ def _demo() -> None:
     assert "Не можу відповісти впевнено" in banner_uk and "поріг" in banner_uk
     assert "I don't know this reliably" in banner_en and str(_CONFIDENCE_FLOOR) in banner_en
     assert _CYRILLIC_RE.search(banner_uk) and not _CYRILLIC_RE.search(banner_en)
+    # It must RENDER as bold, not merely contain a bold marker. Live report
+    # 2026-10-05: the banner was written with a literal `<b>` and the user saw
+    # "<b>I don't know this reliably</b>" in the chat, because the finish
+    # answer goes through _reply_markdown -> telegram_go._markdown_to_html,
+    # which escapes <, > and & before Telegram ever sees them. Asserting the
+    # banner's TEXT (as the two lines above do) could not catch that - only
+    # running it through the real converter can, which is why this pins the
+    # PIPELINE. If _markdown_to_html ever stops supporting **bold**, this
+    # fails instead of the chat quietly filling with tag soup.
+    from telegram_go import _markdown_to_html as _md
+    for _b in (banner_uk, banner_en):
+        _rendered = _md(_b)
+        assert "<b>" in _rendered and "&lt;b&gt;" not in _rendered, _rendered
+    # ...and the same through the whole gate, which is what actually ships.
+    _gated, _ = _confidence_gate(_S({}), {"confidence": 20}, "Partial answer.")
+    _gated_html = _md(_gated)
+    assert "<b>" in _gated_html and "&lt;" not in _gated_html.split("</b>")[0], _gated_html
+    assert _gated_html.rstrip().endswith("Partial answer."), "the partial answer must stay BELOW the banner"
 
     # The BROWSE tools must post nothing and record instead: a request that read
     # twelve entries used to post twelve cards and bury its own answer. A card
