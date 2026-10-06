@@ -104,6 +104,7 @@ from telegram_go import (
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
 from telegram_remind import schedule_reminder  # towers tool's "remind me at floor 50" buttons
+from orna_material_names_uk import EN_TO_UK, UK_TO_EN
 from telegram_resources import build_report, pre_table, send_report_blocks
 import usage_stats
 
@@ -369,12 +370,30 @@ _REMINDER_NUDGE = (
 # "today" / "next" - same data the existing /res_today, /res_next serve
 # -----------------------------------------------------------------------------
 
-async def _today_text() -> str:
+# Cards a tool posts itself are rendered in the USER's language by code (see
+# _MONUMENT_UK): material names from the game's own Ukrainian table, dates and
+# labels from these. Guild/tower names are proper nouns and stay as they are.
+_UK_MONTHS = {"January": "січня", "February": "лютого", "March": "березня", "April": "квітня",
+              "May": "травня", "June": "червня", "July": "липня", "August": "серпня",
+              "September": "вересня", "October": "жовтня", "November": "листопада", "December": "грудня"}
+
+
+def _uk_date(month_day: str) -> str:
+    """'October 5' -> '5 жовтня'; anything else unchanged."""
+    month, _, day = (month_day or "").partition(" ")
+    return f"{day} {_UK_MONTHS[month]}" if month in _UK_MONTHS and day.isdigit() else month_day
+
+
+def _fetch_failed(e, uk: bool) -> str:
+    return f"Не вдалося отримати дані: {e}" if uk else f"Could not load the data: {e}"
+
+
+async def _today_text(uk: bool = True, values: Optional[list] = None) -> str:
     today = get_today_month_day()
     try:
-        values = await fetch_sheet_data()
+        values = values if values is not None else await fetch_sheet_data()
     except Exception as e:
-        return f"Не вдалося отримати дані: {e}"
+        return _fetch_failed(e, uk)
 
     tdg: dict[str, list[str]] = defaultdict(list)
     for res in values:
@@ -385,22 +404,23 @@ async def _today_text() -> str:
                 tdg[GUILD_NAMES[i]].append(res[0])
 
     if not tdg:
-        return f"Сьогодні ({today}) немає ресурсів."
+        return f"Сьогодні ({_uk_date(today)}) немає ресурсів." if uk else f"No resources today ({today})."
 
-    table = pre_table([[guild, ", ".join(materials)] for guild, materials in tdg.items()])
-    return f"<b>Ресурси {html.escape(today)}</b>\n{table}"
+    table = pre_table([[guild, ", ".join(_mon_item(m, uk) for m in materials)] for guild, materials in tdg.items()])
+    return (f"📦 <b>Ресурси на {html.escape(_uk_date(today))}</b>" if uk else
+            f"📦 <b>Resources for {html.escape(today)}</b>") + f"\n{table}"
 
 
-async def _next_text(resource_query: str) -> Optional[str]:
+async def _next_text(resource_query: str, uk: bool = True, values: Optional[list] = None) -> Optional[str]:
     """None means: not a known Material Forecast resource - caller should
     fall through to codex search instead."""
     try:
-        values = await fetch_sheet_data()
+        values = values if values is not None else await fetch_sheet_data()
     except Exception as e:
-        return f"Не вдалося отримати дані: {e}"
+        return _fetch_failed(e, uk)
 
     text = resource_query.lower().strip()
-    lines = [f"Наступні гільдії і дати коли з'явиться ресурс {html.escape(resource_query)}"]
+    lines = ["📅 <b>Коли й у якій гільдії з'явиться</b>" if uk else "📅 <b>When and where it appears next</b>"]
     found = False
     for res in values:
         if not res or text not in res[0].lower():
@@ -415,26 +435,41 @@ async def _next_text(resource_query: str) -> Optional[str]:
         # a header-only, non-None string, so callers treated that as a
         # successful answer instead of falling through to codex search.
         found = True
-        lines.append(f"<b>{html.escape(res[0])}:</b>")
-        lines.append(pre_table([[g, d] for g, d in guild_dates]))
+        lines.append(f"<b>{html.escape(_mon_item(res[0], uk))}:</b>")
+        lines.append(pre_table([[g, _uk_date(d) if uk else d] for g, d in guild_dates]))
 
     return "\n".join(lines) if found else None
 
 
-async def _run_today_tool(message) -> str:
-    text = await _today_text()
+def _plain(html_text: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", html_text or ""))
+
+
+async def _sheet_or_none():
+    try:
+        return await fetch_sheet_data()
+    except Exception:
+        return None          # the text builders report the failure themselves
+
+
+async def _run_today_tool(message, uk: bool = True) -> str:
+    # The model gets the DATA, not "sent it": live 2026-10-05 it could not tell
+    # whether Red Draconite was in today's list and called today() twice.
+    values = await _sheet_or_none()
+    text = await _today_text(uk, values)
     await message.reply_text(text, parse_mode="HTML")
-    return "sent today's resources to the user"
+    return "Today's guild-shop materials (posted to the chat):\n" + _plain(await _today_text(False, values))
 
 
-async def _run_next_tool(message, material: str) -> str:
+async def _run_next_tool(message, material: str, uk: bool = True) -> str:
     if not material:
         return "next needs a material name in action_input"
-    result = await _next_text(material)
+    values = await _sheet_or_none()
+    result = await _next_text(material, uk, values)
     if result is None:
         return f"{material!r} is not a known Material Forecast resource - try search_codex or query instead"
     await message.reply_text(result, parse_mode="HTML", disable_web_page_preview=True)
-    return f"sent next-appearance dates for {material} to the user"
+    return "Guild shops and dates (posted to the chat):\n" + _plain(await _next_text(material, False, values) or "")
 
 
 async def _run_need_tool(message, text: str) -> str:
@@ -703,6 +738,18 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
             logger.info("orna: %r found nothing, %r did - using that", query, collapsed)
             query, results = collapsed, retry_results
 
+    # A ONE-LETTER typo must be tried before the lossy ladder below. Live
+    # 2026-10-05: "Red Dragonite" (real: Red Draconite) hit nothing, the ladder
+    # dropped the leading word, found plain "Dragonite" - a different material -
+    # and the answer described the wrong thing. A near-exact correction keeps
+    # every word the user said; dropping one throws meaning away.
+    if not results:
+        near = await asyncio.to_thread(fuzzy_codex_name, query, _NEAR_EXACT_CUTOFF)
+        if near:
+            observation = await _corrected_search(query, near, session, sources)
+            if observation:
+                return observation
+
     # Two more transliteration slips, seen live together on one request
     # ("клятий ортаніт" -> "Cursed Ortannite"/then "Ortannite", both 0
     # results - the real name is "Ortanite"): (1) a doubled letter from an
@@ -779,26 +826,39 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
         # fallback so it can only turn a dead end into a hit.
         corrected = await asyncio.to_thread(fuzzy_codex_name, query)
         if corrected:
-            try:
-                results = (await asyncio.to_thread(codex_search, corrected, "en")).get("results") or []
-            except Exception:
-                logger.warning("orna: fuzzy-name retry failed for %r", corrected)
-                results = []
-            if results:
-                logger.info("orna: %r looks like %r - searched that instead", query, corrected)
-                _remember_entries(session, results)
-                _cite_entries(sources, results)
-                # The model MUST be told it was a correction, or it will present
-                # the answer as if the user's spelling was right - and the user
-                # never learns the real name.
-                return (f"0 results for {query!r}, but that looks like a misspelling of {corrected!r} "
-                        f"({len(results)} result(s)): {_names_observation(results)}. Answer about "
-                        f"{corrected!r} and SAY that is how you read the question.")
+            observation = await _corrected_search(query, corrected, session, sources)
+            if observation:
+                return observation
         return f"0 results for {query!r}"
 
     _remember_entries(session, results)
     _cite_entries(sources, results)
     return f"{len(results)} results for {query!r}: {_names_observation(results)}"
+
+
+# difflib ratio for a correction trusted BEFORE the word-dropping ladder: one
+# wrong letter in a two-word name ("red dragonite" vs "red draconite" = 0.92).
+_NEAR_EXACT_CUTOFF = 0.88
+
+
+async def _corrected_search(query: str, corrected: str, session, sources) -> str:
+    """Search `corrected` in place of a misspelled `query`; the observation
+    says it was a correction, or "" when the corrected name finds nothing."""
+    try:
+        results = (await asyncio.to_thread(codex_search, corrected, "en")).get("results") or []
+    except Exception:
+        logger.warning("orna: fuzzy-name retry failed for %r", corrected)
+        return ""
+    if not results:
+        return ""
+    logger.info("orna: %r looks like %r - searched that instead", query, corrected)
+    _remember_entries(session, results)
+    _cite_entries(sources, results)
+    # The model MUST be told it was a correction, or it will present the answer
+    # as if the user's spelling was right - and the user never learns the name.
+    return (f"0 results for {query!r}, but that looks like a misspelling of {corrected!r} "
+            f"({len(results)} result(s)): {_names_observation(results)}. Answer about "
+            f"{corrected!r} and SAY that is how you read the question.")
 
 
 _FIELD_LABELS = {"immunities": "імунітет до", "causes": "спричиняє", "gives": "дає", "cures": "лікує"}
@@ -1065,7 +1125,7 @@ async def _run_events_tool(message, keyword: str) -> str:
     return "\n".join(summaries)
 
 
-async def _run_towers_tool(message) -> str:
+async def _run_towers_tool(message, uk: bool = True) -> str:
     """Current floor of all 5 "Wild Towers of Olympia" - pure
     deterministic math (orna_towers.py, ported line-for-line from
     OrnaCodex's own tower.ts and cross-checked against the original TS
@@ -1082,18 +1142,27 @@ async def _run_towers_tool(message) -> str:
     floors = orna_towers.get_tower_floors(now)
 
     NAME_W = 11
-    table_rows = ["Вежа".ljust(NAME_W) + "Поверх"]
+    # The time to floor 50 is ON the card: when only the buttons carried it, the
+    # model re-listed every tower with its ETA under the card (live 2026-10-05).
+    table_rows = [("Вежа" if uk else "Tower").ljust(NAME_W) + ("Поверх" if uk else "Floor").ljust(8)
+                  + ("До 50" if uk else "To 50")]
     for tf in floors:
-        label = "МАКС" if tf.floor >= 50 else str(tf.floor)
-        table_rows.append(tf.kind.capitalize().ljust(NAME_W) + label)
+        label = ("МАКС" if uk else "MAX") if tf.floor >= 50 else str(tf.floor)
+        eta = orna_towers.time_to_floor(now, tf.kind, 50)
+        left = "" if eta is None else (lambda h: f"{h} год" if uk else f"{h}h")(
+            int(-(-(eta - now).total_seconds() // 3600)))
+        table_rows.append(tf.kind.capitalize().ljust(NAME_W) + label.ljust(8) + left)
     table_text = "\n".join(table_rows)
-    lines = ["🗼 <b>Вежі Олімпії зараз:</b>", f"<pre>{html.escape(table_text)}</pre>"]
+    lines = ["🗼 <b>Вежі Олімпії зараз:</b>" if uk else "🗼 <b>Towers of Olympia now:</b>",
+             f"<pre>{html.escape(table_text)}</pre>"]
 
     upcoming = orna_towers.get_tower_floors_in_next_days(now, 1)
     if upcoming:
         nxt = upcoming[0]
         delta_min = int((nxt["time"] - now).total_seconds() // 60)
-        lines.append(f"Наступна зміна поверхів: {nxt['time'].strftime('%Y-%m-%d %H:%M')} UTC (за {delta_min} хв)")
+        when = nxt["time"].strftime("%Y-%m-%d %H:%M")
+        lines.append(f"Наступна зміна поверхів: {when} UTC (за {delta_min} хв)" if uk else
+                     f"Next floor change: {when} UTC (in {delta_min} min)")
 
     # One button per tower not yet at 50 - tapping schedules a plain
     # elapsed-delay reminder (telegram_remind.schedule_reminder) for the
@@ -1116,14 +1185,16 @@ async def _run_towers_tool(message) -> str:
             "kind": tf.kind,
             "eta": eta.isoformat(),
             "hours": hours,
-            "text": f"🗼 Вежа {tf.kind.capitalize()} досягла 50 поверху!",
+            "text": (f"🗼 Вежа {tf.kind.capitalize()} досягла 50 поверху!" if uk else
+                     f"🗼 Tower {tf.kind.capitalize()} has reached floor 50!"),
         })
 
     if reminders:
         key = _remember({"reminders": reminders, "scheduled": set()})
         rows = [
             [InlineKeyboardButton(
-                f"🔔 {r['kind'].capitalize()} — 50 поверх (за {r['hours']} год)",
+                (f"🔔 {r['kind'].capitalize()} — 50 поверх (за {r['hours']} год)" if uk else
+                 f"🔔 {r['kind'].capitalize()} — floor 50 (in {r['hours']}h)"),
                 callback_data=f"orna|towerrem|{key}|{i}")]
             for i, r in enumerate(reminders)
         ]
@@ -2428,6 +2499,54 @@ def _monument_line(group: list) -> str:
     return ", ".join(parts)
 
 
+_MONUMENT_ICONS = {"materials": "🪨", "potions": "🧪", "proofs": "📜", "orns": "💠", "arena tokens": "🎟",
+                   "skeleton keys": "🗝", "armor": "🛡", "weapon": "⚔️", "accessory": "💍",
+                   "monster remains": "🦴", "astralseed": "🌱"}
+
+
+# The card is rendered in the USER's language by code, not by a model: the
+# reward categories are a closed set, and material names come from the game's
+# own Ukrainian table (orna_material_names_uk, scraped from the codex). So no
+# translation call, no closing line repeating the card. Potions have no table
+# entry and stay English - proper nouns, like everywhere else in the bot.
+_MONUMENT_UK = {"materials": "Матеріали", "potions": "Зілля", "proofs": "Докази", "orns": "Орни",
+                "arena tokens": "Жетони арени", "skeleton keys": "Відмички", "armor": "Броня",
+                "weapon": "Зброя", "accessory": "Аксесуар", "monster remains": "Рештки монстрів",
+                "astralseed": "Астральне насіння", "rare materials": "Рідкісні матеріали",
+                "gear": "Спорядження"}
+
+
+def _uk(session) -> bool:
+    """Whether a card a tool posts itself should be in Ukrainian."""
+    return getattr(session, "user_lang", "") == "Ukrainian"
+
+
+def _mon_label(value: str, uk: bool) -> str:
+    return _MONUMENT_UK.get(value.lower(), value) if uk else value.title() if value.islower() else value
+
+
+def _mon_item(name: str, uk: bool) -> str:
+    return EN_TO_UK.get(name, name) if uk else name
+
+
+def _monument_floor_html(floor: int, group: list, uk: bool = False) -> str:
+    """One floor for the CHAT (the model reads _monument_line instead): an icon
+    per reward, and a named material/potion replaces its generic slot -
+    "Materials" + "Material: Pure Darkstone" is one bold "🪨 Pure Darkstone"."""
+    named = {r["kind"]: _mon_item(r["name"], uk) for r in group if r["kind"] != "category"}
+    cells = []
+    for r in group:
+        if r["kind"] != "category":
+            continue
+        kind = {"materials": "material", "potions": "potion"}.get(r["value"].lower())
+        icon = _MONUMENT_ICONS.get(r["value"].lower(), "▫️")
+        cells.append(f"{icon} <b>{html.escape(named.pop(kind))}</b>" if kind in named
+                     else f"{icon} {html.escape(_mon_label(r['name'], uk))}")
+    for kind, name in named.items():          # a named item with no generic slot
+        cells.append(f"{_MONUMENT_ICONS[kind + 's']} <b>{html.escape(name)}</b>")
+    return f"<code>{floor:>2}</code>  " + " · ".join(cells)
+
+
 async def _run_monuments_tool(message, query: str, args: dict, sources: Optional[list] = None,
                               session=None) -> str:
     """Which monument and floor gives what THIS WEEK (floorchart.top).
@@ -2482,19 +2601,30 @@ async def _run_monuments_tool(message, query: str, args: dict, sources: Optional
         summary = "; ".join(f"{m} - {len(f)} floor(s): {', '.join(map(str, f))}"
                             for m, f in sorted(per.items(), key=lambda kv: -len(kv[1])))
         summary = f"BY MONUMENT (exact floors; copy these, do not re-derive them): {summary}"
-        card = [f"🏛 <b>{html.escape(str(res['matched_as']).split(chr(39))[1].title())}</b> - "
-                f"monuments, week {res['week']}" + (" (STALE - new week not entered yet)" if res["stale"] else "")]
+        uk = _uk(session)
+        cat = str(res["matched_as"]).split(chr(39))[1]
+        label = html.escape(_mon_label(cat, uk))
+        blocks = [f"{_MONUMENT_ICONS.get(cat, '🏛')} <b>{label}</b> " + (
+            f"у монументах · тиждень {res['week']}" + (" ⚠️ застаріло - новий тиждень ще не внесено"
+                                                       if res["stale"] else "") if uk else
+            f"in the monuments · week {res['week']}" + (" ⚠️ stale - the new week is not entered yet"
+                                                        if res["stale"] else ""))]
+        floors_word = "пов." if uk else "floors"
         for mon, floors in sorted(per.items(), key=lambda kv: -len(kv[1])):
-            cells = []
+            rows = []
             for fl in floors:
-                specific = [r["name"] for r in by_floor[(mon, fl)] if r["kind"] != "category"]
-                cells.append(f"{fl}" + (f" ({', '.join(specific)})" if specific else ""))
-            card.append(f"<b>{mon}</b>: {html.escape('; '.join(cells))}")
-        card.append(f'<a href="{orna_monuments.SITE_URL}">floorchart.top</a>')
+                specific = [_mon_item(r["name"], uk) for r in by_floor[(mon, fl)] if r["kind"] != "category"]
+                rows.append(f"<code>{fl:>2}</code>  " + (f"<b>{html.escape(', '.join(specific))}</b>"
+                                                          if specific else label))
+            if all("<b>" not in r for r in rows):   # nothing named: the floors are the whole story
+                blocks.append(f"🏛 <b>{mon}</b> · {len(floors)} {floors_word}: "
+                              f"<code>{', '.join(map(str, floors))}</code>")
+            else:
+                blocks.append(f"🏛 <b>{mon}</b> · {len(floors)} {floors_word}\n" + "\n".join(rows))
+        blocks[-1] += f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>'
         try:
-            await message.reply_text("\n".join(card), parse_mode="HTML", disable_web_page_preview=True)
-            posted = ("The exact list above was POSTED to the chat - do not re-list the floors in finish(); "
-                      "give a one-line takeaway (e.g. which monument has the most floors).")
+            await send_report_blocks(message, blocks)
+            posted = _POSTED_NOTE
             if session is not None:
                 session.posted_note = "the monument list was already posted to the chat above the answer"
         except Exception:
@@ -2514,19 +2644,22 @@ async def _run_monuments_tool(message, query: str, args: dict, sources: Optional
         # nothing, and the model answered "Ось список нагород..." - pointing at a
         # list the user never received (REVIEW flagged it; the redo repeated
         # it). One message per monument keeps each under Telegram's 4096 limit.
-        week = f"тиждень {res['week']}" + (" (ЗАСТАРІЛО - новий тиждень ще не внесено)" if res["stale"] else "")
-        blocks: dict = {}
+        uk = _uk(session)
+        title = (f"Нагороди монументів</b> · тиждень {res['week']}" + (
+                     " ⚠️ застаріло - новий тиждень ще не внесено" if res["stale"] else "") if uk else
+                 f"Monument rewards</b> · week {res['week']}" + (
+                     " ⚠️ stale - the new week is not entered yet" if res["stale"] else ""))
+        rows_by: dict = {}
         for (mon, fl), grp in sorted(by_floor.items()):
-            blocks.setdefault(mon, []).append(f"{fl}: {html.escape(_monument_line(grp))}")
+            rows_by.setdefault(mon, []).append(_monument_floor_html(fl, grp, uk))
+        blocks = [f"🏛 <b>{mon}</b>\n" + "\n".join(rows) for mon, rows in rows_by.items()]
+        blocks[0] = f"🏛 <b>{title}\n\n" + blocks[0]
+        blocks[-1] += f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>'
         posted = ""
         try:
-            for i, (mon, rows) in enumerate(blocks.items()):
-                top = f"🏛 <b>Нагороди монументів - {week}</b>\n\n" if i == 0 else ""
-                end = f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>' if i == len(blocks) - 1 else ""
-                await message.reply_text(f"{top}<b>{mon}</b> (поверх: нагороди)\n" + "\n".join(rows) + end,
-                                         parse_mode="HTML", disable_web_page_preview=True)
-            posted = ("The full chart above was POSTED to the chat, one message per monument - do NOT list the "
-                      "floors again in finish(); give a short takeaway in one or two lines.")
+            # packed into as few messages as fit (was one message per monument)
+            await send_report_blocks(message, blocks)
+            posted = _POSTED_NOTE
             if session is not None:
                 session.posted_note = "the full monument chart was already posted to the chat above the answer"
         except Exception:
@@ -3017,6 +3150,9 @@ def _class_names_text(kind: str) -> str:
 
 _TOOLS_TEXT = (
     "- today(): no input. Materials available today in the guild shops (Material Forecast sheet). Posts the list.\n"
+    "  WHERE TO GET A MATERIAL has three sources, and a \"where do I get X\" question checks all three: monster "
+    "drops (search_codex/open_entry, its Dropped by), the guild shops (next), and this week's monuments "
+    "(monuments).\n"
     "- next(action_input=<material name, English>): when/where a SPECIFIC named crafting material next appears, "
     "no quantity involved. If it's not a known Material Forecast resource, try search_codex or query instead - "
     "it might still be a real codex entry (a monster, a non-shop item, ...).\n"
@@ -3202,9 +3338,10 @@ _TOOLS_TEXT = (
     "gives proofs/orns/keys/arena tokens\", \"what does Thor floor 5 give\". Pass the specific name "
     "(\"adamantine\", \"perfect runestone\", \"nostrum\") or a category (\"materials\", \"rare materials\", "
     "\"potions\", \"items\" for gear, \"proofs\", \"orns\", \"skeleton keys\", \"arena tokens\", "
-    "\"monster remains\"). For the whole chart, a category, or any result longer than three floors, the tool "
-    "POSTS the list to the chat itself - then answer in one or two lines (a takeaway) and never re-list the "
-    "floors. It rotates WEEKLY - always say which week, and if it reports STALE, say the new week's chart is not "
+    "\"monster remains\"). Leave it empty ONLY when the user asks for everything - a question about one kind "
+    "of reward (\"what materials are in the monuments\") passes that category, so the user gets that list, not "
+    "the whole chart. For the whole chart, a category, or any result longer than three floors, the tool POSTS "
+    "the list to the chat itself - see finish() for what to send after it. It rotates WEEKLY - always say which week, and if it reports STALE, say the new week's chart is not "
     "out yet. Use it instead of knowledge_search or web_search for anything about monument rewards.\n"
     "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets, "
     "AMITY and CRUCIBLE tables (the gear-bonus affixes: their tiers, roll ranges and which equipment slots each "
@@ -3268,7 +3405,9 @@ _TOOLS_TEXT = (
     'change the results and there\'s no reasonable default (e.g. "good gear for my class" names no class, or a '
     'name/search matches several unrelated things and it genuinely matters which). Most requests do NOT need '
     "this. Never ask twice in the same conversation.\n"
-    "- finish(action_input=<short closing text>): end the turn. Results a TOOL already showed the user (search "
+    "- finish(action_input=<short closing text, or EMPTY>): end the turn. When a tool POSTED a result that "
+    "fully answers the question (monuments/today/next/towers say so), finish with an EMPTY action_input - "
+    "nothing more is sent. Results a TOOL already showed the user (search "
     "hits, reports, event cards) don't need repeating - finish is just a short closing sentence (e.g. \"Ось "
     'варіанти для обох слотів."), or, for the two fixed-reply cases below, the exact fixed text. This INCLUDES '
     "codex item stats: when you looked at 1-2 codex entries (open_entry/search_codex/query), the full entry card "
@@ -3635,6 +3774,55 @@ def _forced_evidence_note(session) -> Optional[str]:
             "column names. Never report the length of a capped list as a total.")
 
 
+# Tools whose posted output IS the whole answer to a "show me" question: the
+# monuments chart, the guild-shop schedule (today/next), the tower floors.
+_LISTING_TOOLS = {"monuments", "today", "next", "towers"}
+
+_POSTED_NOTE = "This result was POSTED to the chat. If it fully answers the user's question, call finish with an EMPTY action_input - nothing more is sent. Otherwise finish with only what it does not show (the takeaway or judgment asked for) and never re-list it."
+
+
+class _PostRecorder:
+    """Wraps the Telegram message a tool posts through, remembering the last
+    message it sent. Everything else passes straight through. Inline mode's
+    sink returns nothing from reply_text, so there nothing is recorded and the
+    normal closing line is kept - inline is a single message anyway."""
+
+    def __init__(self, message):
+        self._message = message
+        self.last = None
+
+    async def reply_text(self, *args, **kwargs):
+        sent = await self._message.reply_text(*args, **kwargs)
+        if sent is not None:
+            self.last = sent
+        return sent
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+
+async def _run_listing(session, message, run):
+    """Run a listing tool through a _PostRecorder; when it actually posted,
+    note it on the session so finish() knows the card already answered."""
+    rec = _PostRecorder(message)
+    observation = await run(rec)
+    if session is not None and rec.last is not None and _POSTED_NOTE not in observation:
+        observation += "\n" + _POSTED_NOTE
+    if session is not None and rec.last is not None:
+        session.posted_note = session.posted_note or \
+            "the tool's full result was already posted to the chat above the answer"
+        session.last_post = rec.last
+    return observation
+
+
+def _listing_only(session, action_input: str) -> bool:
+    """The model finished with NO text after a tool posted its card: it judged
+    the card the whole answer, so no closing line is sent. The model decides -
+    not a regex over the question (tried 2026-10-05: "які матеріали" is not a
+    "judgment", so the real materials answer was dropped)."""
+    return bool(session.posted_note and session.last_post is not None and not (action_input or "").strip())
+
+
 def _leaked_observation(session, answer: str) -> bool:
     """True when the draft answer contains a tool observation verbatim.
     Observations are INTERNAL - they carry instructions to the model ("never
@@ -3866,9 +4054,16 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
                 "not transliterated: " + "; ".join(names[:25]) + ".")
 
     async def _once(extra: str) -> Optional[str]:
+        # Same language in and out is a REWRITE, not a translation: the loop
+        # model sometimes writes the user's language itself, badly, and the
+        # translation model then polishes it rather than being asked to
+        # "translate Ukrainian into Ukrainian".
+        task = (f"Rewrite the user's message in natural, correct {target}: fix awkward phrasing, calques and "
+                f"any Russian words or spellings, without changing its meaning or facts."
+                if source and source == target else
+                f"Translate the user's message into {target}." + (f" It is written in {source}." if source else ""))
         prompt = (
-            f"Translate the user's message into {target}."
-            + (f" It is written in {source}." if source else "")
+            task
             + " Reply with JSON only: {\"text\": \"<the translation>\"}. Rules: translate the MEANING, not word "
               "by word. NEVER translate or transliterate a proper noun - Orna item, class, specialization, "
               "monster, spell, guild, event and material names keep their original spelling exactly (they are "
@@ -3921,6 +4116,20 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
     return out
 
 
+def _uk_material_names(text: str) -> list:
+    """[(ukrainian, english)] for every material named in `text`, inflection-
+    tolerant: each word matches on its stem ("червоного драконіту" finds
+    "Червоний драконіт"). A short stem can over-match ("камінь" inside "камінь
+    ночі"); harmless, the model reads the list as candidates."""
+    low = (text or "").lower()
+    found = []
+    for uk_low, en in UK_TO_EN.items():
+        stems = [w[:max(4, len(w) - 2)] for w in uk_low.split()]
+        if re.search(r"\b" + r"\w*\s+".join(re.escape(st) for st in stems), low):
+            found.append((EN_TO_UK[en], en))
+    return found
+
+
 async def build_loop_messages(text: str, allow_ask: bool = True) -> tuple:
     """-> (messages, user_lang). The INPUT GATE.
 
@@ -3935,6 +4144,11 @@ async def build_loop_messages(text: str, allow_ask: bool = True) -> tuple:
         if english != text:
             body = (f"{english}\n\n[The user wrote this in {user_lang}. Original, verbatim - prefer THIS "
                     f"spelling for any item/material/class name you pass to a tool: {text}]")
+        known = _uk_material_names(text)
+        if known:
+            # From the game's own name table - exact, unlike the translation
+            # (live: "червоний драконіт" came back "Red Dragonite").
+            body += "\n[Game names in the original: " + "; ".join(f"{uk} = {en}" for uk, en in known) + "]"
     return ([{"role": "system", "content": _orna_system_prompt(text, allow_ask=allow_ask)},
              {"role": "user", "content": f"{_USER_QUESTION}\n{body}"}], user_lang)
 
@@ -4178,6 +4392,9 @@ class OrnaSession:
     # live 2026-10-05 that made the model paste the raw observation as its answer.
     posted_note: str = ""
     pushed_for_leak: bool = False
+    # The Telegram message a listing tool posted last - where the /clarify hint
+    # goes when the closing line is dropped (see _listing_only).
+    last_post: object = None
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -4225,9 +4442,9 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         sources = []
     try:
         if action == "today":
-            return await _run_today_tool(message)
+            return await _run_listing(session, message, lambda m: _run_today_tool(m, _uk(session)))
         if action == "next":
-            return await _run_next_tool(message, action_input)
+            return await _run_listing(session, message, lambda m: _run_next_tool(m, action_input, _uk(session)))
         if action == "need":
             return await _run_need_tool(message, action_input)
         if action == "search_codex":
@@ -4249,7 +4466,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
         if action == "monuments":
-            return await _run_monuments_tool(message, action_input, args, sources, session=session)
+            return await _run_listing(session, message,
+                                      lambda m: _run_monuments_tool(m, action_input, args, sources, session=session))
         if action == "estimate_stats":
             return await _run_estimate_stats_tool(message, args, sources)
         if action == "releases":
@@ -4273,7 +4491,7 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
                 str(args.get("useable_by") or ""), str(args.get("quality") or ""),
             )
         if action == "towers":
-            return await _run_towers_tool(message)
+            return await _run_listing(session, message, lambda m: _run_towers_tool(m, _uk(session)))
         if action == "class_guide":
             return await _run_class_guide_tool(message, str(args.get("topic") or ""), str(args.get("query") or ""))
     except Exception as e:
@@ -4405,6 +4623,10 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
                           if m.get("role") == "user" and _TAG_RE.match(str(m.get("content") or ""))), "")
         logger.info("orna: turn sid=%s user=%s\n  %s", sid, session.user_id,
                     last_user[:800].replace("\n", "\n  "))
+        # "A card already answered" is per TURN. Live 2026-10-05 a /clarify
+        # after a `next` card inherited it, so the follow-up's real answer was
+        # dropped as "the card answers it" (and the hint edit hit "not modified").
+        session.posted_note, session.last_post, session.pushed_for_leak = "", None, False
     try:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -4638,6 +4860,8 @@ async def _advance_inner(sid: str, message) -> None:
         # got "" and spent a step answering "calculate needs a numeric
         # expression". Accept either placement.
         action_input = str(step.get("action_input") or args.get("action_input") or "").strip()
+        if action_input.lower() in ("none", "null", "undefined"):
+            action_input = ""   # a model's "no value" written as text, for every tool
         # The call chain, one line per step, grouped by sid - grep "orna: step"
         # to read a whole request's trace. The harness prints this for a request
         # you run yourself; in production this log was the only thing missing.
@@ -4679,7 +4903,15 @@ async def _advance_inner(sid: str, message) -> None:
                 session.messages.append({"role": "user", "content": f"{_SYSTEM_NOTE} {evidence_note}"})
                 continue
 
-            if session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS:
+            listing_only = _listing_only(session, action_input)
+            # No REVIEW once a tool has POSTED the deliverable. REVIEW never sees
+            # the posted card, so it judges a one-line closing remark without the
+            # data that remark is about - and it made it worse in all three
+            # measured cases (2026-10-05): "Materials are those listed in the
+            # monument table" (a tautology), a full answer cut to "Demeter", and
+            # a CORRECT "Demeter - 8 floors" revised into "impossible to
+            # determine which monument gives the most".
+            if session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS and not session.posted_note:
                 opened_preview = [e for e in session.viewed_entries if e.get("opened")]
                 candidates_preview = opened_preview or session.viewed_entries
                 card_note = ("a codex card for this will auto-post above your answer" if
@@ -4759,10 +4991,21 @@ async def _advance_inner(sid: str, message) -> None:
             # tells the model to copy verbatim are Ukrainian, and re-translating
             # them would both cost a call and paraphrase deterministic text.
             answer_text = action_input or "Не вдалося сформувати відповідь."
-            if (session.user_lang != _LOOP_LANGUAGE
-                    and _detect_lang(answer_text) != session.user_lang):
-                answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE,
-                                               model=TRANSLATION_MODEL)
+            # The loop is meant to answer in English, but the loop model often
+            # writes the user's language directly (live 2026-10-05: every draft
+            # in Ukrainian) - and the old "only translate when not already in
+            # that language" rule then let its Russian-tinged Ukrainian ("зелья")
+            # straight through, untouched by the translation model. So a draft
+            # already in the target language is REWRITTEN by TRANSLATION_MODEL,
+            # except the fixed replies the prompt says to copy verbatim.
+            # Skipped entirely when the closing line is being dropped anyway.
+            fixed = any(f.strip()[:40] in answer_text for f in (_capabilities_text(), _REMINDER_NUDGE))
+            if session.user_lang != _LOOP_LANGUAGE and not fixed and not listing_only:
+                from telegram_announce import game_names
+                same = _detect_lang(answer_text) == session.user_lang
+                answer_text = await _translate(answer_text, session.user_lang,
+                                               source=session.user_lang if same else _LOOP_LANGUAGE,
+                                               pin=game_names(answer_text), model=TRANSLATION_MODEL)
             answer, effective = _confidence_gate(session, step, answer_text)
             logger.info("orna: finish sid=%s confidence=%s\n  %s", sid, effective, answer[:1500].replace("\n", "\n  "))
             # Keep the answer in the transcript: a /clarify follow-up is read
@@ -4779,6 +5022,22 @@ async def _advance_inner(sid: str, message) -> None:
                              and session.asks_made < MAX_ASKS_PER_REQUEST)
                 session.asks_made += asked
                 _arm_text_wait(sid, asked)
+                if not listing_only:
+                    answer += "\n\n" + _clarify_hint(session)
+            # The card already answered and there is no low-confidence banner to
+            # show: send no closing line. The /clarify hint goes ONTO the card,
+            # so a follow-up still works without an extra message in the chat.
+            if listing_only and answer == answer_text and not markup:
+                logger.info("orna: closing line dropped sid=%s - the posted card answers it", sid)
+                if session.allow_ask:
+                    try:
+                        await session.last_post.edit_text(
+                            session.last_post.text_html + "\n\n" + html.escape(_clarify_hint(session)),
+                            parse_mode="HTML", disable_web_page_preview=True)
+                    except Exception:
+                        logger.warning("orna: could not attach the clarify hint to the card", exc_info=True)
+                return
+            if listing_only and session.allow_ask:
                 answer += "\n\n" + _clarify_hint(session)
             await _reply_markdown(message, answer, reply_markup=markup)
             return
@@ -5700,6 +5959,30 @@ def _demo() -> None:
         {"slot": "Material", "kind": "material", "name": "Perfect Runestone", "value": "P Runestone"}])
     assert _ml == "Proofs, Material: Perfect Runestone (P Runestone)", _ml
     assert "monuments" in _ACTIONS
+    _fl = _monument_floor_html(2, [
+        {"slot": "Reward 1", "kind": "category", "name": "Arena Tokens", "value": "Arena Tokens"},
+        {"slot": "Reward 2", "kind": "category", "name": "Materials", "value": "Materials"},
+        {"slot": "Material", "kind": "material", "name": "Pure Darkstone", "value": "P Darkstone"}])
+    assert _fl == "<code> 2</code>  🎟 Arena Tokens · 🪨 <b>Pure Darkstone</b>", _fl
+    _fl = _monument_floor_html(2, [
+        {"slot": "Reward 1", "kind": "category", "name": "Arena Tokens", "value": "Arena Tokens"},
+        {"slot": "Reward 2", "kind": "category", "name": "Materials", "value": "Materials"},
+        {"slot": "Material", "kind": "material", "name": "Red Draconite", "value": "Red Draconite"},
+        {"slot": "Potion", "kind": "potion", "name": "Nostrum", "value": "Nostrum"}], uk=True)
+    assert _fl == "<code> 2</code>  🎟 Жетони арени · 🪨 <b>Червоний драконіт</b> · 🧪 <b>Nostrum</b>", _fl
+    assert set(_MONUMENT_UK) >= set(_MONUMENT_ICONS), "every icon category needs a Ukrainian label"
+    assert _uk_date("October 5") == "5 жовтня" and _uk_date("Febuary 3") == "Febuary 3"
+    assert ("Червоний драконіт", "Red Draconite") in _uk_material_names("де взяти червоний драконіт?")
+    assert ("Червоний драконіт", "Red Draconite") in _uk_material_names("скільки червоного драконіту треба")
+    assert not _uk_material_names("що зараз в монументах?")
+    assert _plain("<b>a &amp; b</b>") == "a & b"
+    # the closing line is the model's call: empty finish after a posted card -> none
+    class _LO:
+        posted_note, last_post = "posted", object()
+    assert _listing_only(_LO, "") and _listing_only(_LO, "  ")
+    assert not _listing_only(_LO, "Demeter gives proofs on the most floors - 8.")
+    _LO.last_post = None
+    assert not _listing_only(_LO, ""), "nothing posted -> an empty finish is not an answer"
     # a pasted observation is caught; a normal answer quoting a value is not
     class _LS:
         seen_calls = {"m": "MONUMENT REWARDS, week 41 (floorchart.top, community-entered each week; matched "
@@ -5804,6 +6087,12 @@ def _demo() -> None:
     import orna_aussies as _aussies
     for not_a_name in ("what is the best weapon", "how do i level up", "mag > 250", "sword"):
         assert _aussies.fuzzy_codex_name(not_a_name) == "", not_a_name
+    # a one-letter typo is corrected near-exactly (before the word-dropping
+    # ladder can turn "Red Dragonite" into plain Dragonite), case-insensitively;
+    # a real name is never "corrected"
+    assert _aussies.fuzzy_codex_name("red dragonite", _NEAR_EXACT_CUTOFF) == "Red Draconite"
+    for real in ("Dragonite", "dragonite", "Red Draconite", "Balor Sword"):
+        assert _aussies.fuzzy_codex_name(real, _NEAR_EXACT_CUTOFF) == "", real
 
     # English-first pipeline: the loop reasons in English and the gates sit at
     # the edges. _detect_lang is what both keys off.

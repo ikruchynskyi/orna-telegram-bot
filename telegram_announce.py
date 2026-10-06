@@ -206,7 +206,8 @@ def restore(text: str, tokens: list) -> str:
 
 
 # Names the game data does not carry but announcements use constantly.
-_EXTRA_NAMES = {"orna", "northern forge", "hero of aethric", "odie", "orna rpg"}
+_EXTRA_NAMES = {"orna", "northern forge", "hero of aethric", "odie", "orna rpg",
+                "ithra", "thor", "vulcan", "demeter"}  # the four Monuments - not codex records
 _vocab: Optional[set] = None
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 
@@ -224,6 +225,13 @@ def _names_vocab() -> set:
                     _vocab.add(n.lower())
         except Exception:
             logger.warning("announce: codex names unavailable - only the fixed list is pinned", exc_info=True)
+        # Classes and specializations are NOT codex records - and a translated
+        # one ("Duelist" -> "Дулїст") is the failure pinning was built for.
+        try:
+            import orna_classes
+            _vocab.update(n.lower() for kind in ("class", "specialization") for n in orna_classes.all_names(kind))
+        except Exception:
+            logger.warning("announce: class names unavailable", exc_info=True)
     return _vocab
 
 

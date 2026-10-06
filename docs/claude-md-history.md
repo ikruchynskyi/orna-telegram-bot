@@ -2880,3 +2880,45 @@ blocking, lossy-query retrieval, cache staleness, double-delivered
 callbacks, regex ordering, fixing the shared function not the symptom); and
 `evals/trigger-evals.json` for re-tuning the skill's own triggering. Reach
 for it - and its harness - when writing or debugging any bot change.
+
+### When the closing line is sent, and who writes the Ukrainian (2026-10-05)
+
+- **The model decides whether a posted card is the whole answer; tools never
+  read the question.** `monuments`, `today`, `next` and `towers` post their own
+  card (through `_PostRecorder`/`_run_listing`), and their observation then says
+  so (`_POSTED_NOTE`): if the card fully answers, `finish` with an EMPTY
+  action_input and nothing more is sent (the `/clarify` hint is edited onto the
+  card); otherwise send only what the card does not show. A first version decided
+  this in code from the question's words (`_JUDGMENT_RE`) and dropped a real
+  answer ("які матеріали" is not a "judgment"); a tool that guessed its category
+  from the question was also tried and removed. Rule kept: tools have one
+  question-agnostic API, the model forms the params and finalises.
+  `posted_note`/`last_post` reset every turn - a `/clarify` once inherited the
+  previous card's flag and its real answer was dropped.
+- **Cards are rendered in the user's language by CODE**, not by a model: reward
+  categories, labels and dates from small tables, material names from
+  `orna_material_names_uk.json` (the game's own names). Potions, guilds, towers and
+  monuments stay as proper nouns. The model still reads English data - `today`/`next`
+  now return the posted list in their observation (they used to return "sent it",
+  and the model re-called `today` blind). The towers card carries the hours-to-50
+  column, or the model re-lists it.
+- **Material names in a Ukrainian question are glossed from that table** at the
+  input gate (`_uk_material_names`, stem match so inflections hit): the
+  translation turned "червоний драконіт" into "Red Dragonite". `search_codex` also
+  tries a near-exact fuzzy correction (`_NEAR_EXACT_CUTOFF`, case-insensitive)
+  BEFORE its word-dropping ladder, which had turned "Red Dragonite" into plain
+  Dragonite.
+- **No REVIEW once a tool posted the deliverable.** REVIEW never sees the posted
+  card, and in all three measured cases it made the closing line worse: a
+  tautology ("Materials are those listed in the monument table"), a sentence cut
+  to "Demeter", and a correct "Demeter - 8 floors" revised into "impossible to
+  determine which monument gives the most".
+- **TRANSLATION_MODEL (gemma4:31b) writes ALL the user-facing Ukrainian.** The
+  loop model (deepseek-v4.1-flash via /model) often answers in Ukrainian itself,
+  and the old "translate only if not already in the target language" rule then
+  let its Ukrainian through untouched ("зелья", English leftovers). A draft
+  already in the target language is now REWRITTEN (`_translate` with
+  source == target is a rewrite prompt, not "translate Ukrainian into
+  Ukrainian"); only the fixed verbatim replies are exempt. Names are pinned with
+  `telegram_announce.game_names` - codex names plus classes/specializations and
+  the four Monuments - instead of every capitalised word.

@@ -624,10 +624,12 @@ def fuzzy_codex_name(query: str, cutoff: float = 0.72) -> str:
     query = (query or "").strip()
     if len(query) < 4:
         return ""                      # too short to disambiguate anything
-    names = all_codex_names()
-    matches = difflib.get_close_matches(query, names, n=1, cutoff=cutoff)
-    if matches and matches[0].lower() != query.lower():
-        return matches[0]
+    # Case-insensitive: the loop often lowercases a name ("red dragonite"), and
+    # difflib counts every case flip as a miss.
+    by_lower = {n.lower(): n for n in all_codex_names()}
+    matches = difflib.get_close_matches(query.lower(), list(by_lower), n=1, cutoff=cutoff)
+    if matches and matches[0] != query.lower():
+        return by_lower[matches[0]]
     return ""
 
 
