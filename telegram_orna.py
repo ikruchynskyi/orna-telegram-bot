@@ -104,7 +104,7 @@ from telegram_go import (
 from telegram_nlp import OLLAMA_HOST as LOCAL_OLLAMA_HOST, OLLAMA_MODEL as LOCAL_OLLAMA_MODEL
 from telegram_nlp import extract_quantities, extract_resources
 from telegram_remind import schedule_reminder  # towers tool's "remind me at floor 50" buttons
-from orna_material_names_uk import EN_TO_UK, UK_TO_EN
+from orna_material_names_uk import EN_TO_UK, ITEM_EN_TO_UK, UK_TO_EN
 from telegram_resources import build_report, pre_table, send_report_blocks
 import usage_stats
 
@@ -371,7 +371,7 @@ _REMINDER_NUDGE = (
 # -----------------------------------------------------------------------------
 
 # Cards a tool posts itself are rendered in the USER's language by code (see
-# _MONUMENT_UK): material names from the game's own Ukrainian table, dates and
+# _mon_item): material names from the game's own Ukrainian table, dates and
 # labels from these. Guild/tower names are proper nouns and stay as they are.
 _UK_MONTHS = {"January": "січня", "February": "лютого", "March": "березня", "April": "квітня",
               "May": "травня", "June": "червня", "July": "липня", "August": "серпня",
@@ -2221,20 +2221,30 @@ async def _run_calculate_tool(message, expression: str) -> str:
     # ponytail: a plain "2 * 3" still gets the note. It is clearly labelled
     # and the model can ignore it; tightening this needs to know the caller's
     # intent, which the expression alone doesn't carry.
-    if "*" in expression and "+" not in expression and "-" not in expression:
+    if _is_pure_product(expression):
         try:
             value = float(out.rsplit("=", 1)[-1].strip())
         except ValueError:
             return out
         if value > 1:
             return f"{out}  [as a stacking bonus: x{value:g} total = +{(value - 1) * 100:g}% bonus]"
-    elif "(1 +" in expression or "(1+" in expression:
-        try:
-            value = float(out.rsplit("=", 1)[-1].strip())
-        except ValueError:
-            return out
-        return f"{out}  [as a stacking bonus: x{value:g} total = +{(value - 1) * 100:g}% bonus]"
     return out
+
+
+def _is_pure_product(expression: str) -> bool:
+    """True when the result IS a multiplier: only "*" between the top-level
+    terms. Live 2026-10-05 the old "(1 +" branch also labelled
+    "(1+0.575)*(1+0.575) - 1" = 1.48 (already the BONUS, +148%) as "x1.48 =
+    +48%", and "((...)-1)*100" = 148 as "x148 = +14706%" - and the model
+    repeated the tool's wrong label. Anything subtracted, added or scaled by
+    100 at the top level is no longer a multiplier."""
+    top = expression
+    while True:
+        stripped = re.sub(r"\([^()]*\)", "", top)
+        if stripped == top:
+            break
+        top = stripped
+    return "*" in expression and not re.search(r"[+\-]|\b100\b", top)
 
 
 _GUIDE_EXCERPT_CHARS = 20000
@@ -2499,52 +2509,50 @@ def _monument_line(group: list) -> str:
     return ", ".join(parts)
 
 
-_MONUMENT_ICONS = {"materials": "🪨", "potions": "🧪", "proofs": "📜", "orns": "💠", "arena tokens": "🎟",
-                   "skeleton keys": "🗝", "armor": "🛡", "weapon": "⚔️", "accessory": "💍",
-                   "monster remains": "🦴", "astralseed": "🌱"}
+# Cards a tool posts are localized by CODE from the game's OWN Ukrainian text,
+# never by a model and never by hand: names from the codex item list
+# (orna_item_names_uk.json, paired by slug), and each reward category below
+# from the Ukrainian codex where the game says it. Live 2026-10-05 hand-written
+# labels ("Відмички", "Броня") were wrong - the game says Ключ, Обладунки.
+_MONUMENT_UK = {
+    "materials": "Матеріали",          # codex item-type filter
+    "potions": "Цілющі засоби",        # codex item-type filter ("useable" = Curative)
+    "armor": "Обладунки",              # codex item-type filter
+    "weapon": "Зброя",                 # codex item-type filter / Місце
+    "accessory": "Аксесуар",           # an accessory's Місце fact
+    "proofs": "Відзнаки",              # items "Відзнака агонії", ...
+    "orns": "Орни",                    # the orns CURRENCY (game: "Бонус орн")
+}
+# Categories that ARE a codex item - rendered by that item's own Ukrainian name.
+_MONUMENT_ITEM = {"skeleton keys": "Skeleton Key", "arena tokens": "Arena Token",
+                  "monster remains": "Monster Remains", "astralseed": "Astralseed"}
 
 
-# The card is rendered in the USER's language by code, not by a model: the
-# reward categories are a closed set, and material names come from the game's
-# own Ukrainian table (orna_material_names_uk, scraped from the codex). So no
-# translation call, no closing line repeating the card. Potions have no table
-# entry and stay English - proper nouns, like everywhere else in the bot.
-_MONUMENT_UK = {"materials": "Матеріали", "potions": "Зілля", "proofs": "Докази", "orns": "Орни",
-                "arena tokens": "Жетони арени", "skeleton keys": "Відмички", "armor": "Броня",
-                "weapon": "Зброя", "accessory": "Аксесуар", "monster remains": "Рештки монстрів",
-                "astralseed": "Астральне насіння", "rare materials": "Рідкісні матеріали",
-                "gear": "Спорядження"}
-
-
+def _mon_label(value: str, uk: bool) -> str:
+    low = value.lower()
+    if not uk:
+        return value
+    return _MONUMENT_UK.get(low) or ITEM_EN_TO_UK.get(_MONUMENT_ITEM.get(low, value), value)
 def _uk(session) -> bool:
     """Whether a card a tool posts itself should be in Ukrainian."""
     return getattr(session, "user_lang", "") == "Ukrainian"
 
 
-def _mon_label(value: str, uk: bool) -> str:
-    return _MONUMENT_UK.get(value.lower(), value) if uk else value.title() if value.islower() else value
-
-
 def _mon_item(name: str, uk: bool) -> str:
-    return EN_TO_UK.get(name, name) if uk else name
+    return (EN_TO_UK.get(name) or ITEM_EN_TO_UK.get(name, name)) if uk else name
 
 
-def _monument_floor_html(floor: int, group: list, uk: bool = False) -> str:
-    """One floor for the CHAT (the model reads _monument_line instead): an icon
-    per reward, and a named material/potion replaces its generic slot -
-    "Materials" + "Material: Pure Darkstone" is one bold "🪨 Pure Darkstone"."""
+def _monument_floor_cells(group: list, uk: bool = False) -> str:
+    """One floor for the CHAT (the model reads _monument_line instead): a named
+    material/potion replaces its generic slot - "Materials" + "Material: Pure
+    Darkstone" is just "Pure Darkstone"."""
     named = {r["kind"]: _mon_item(r["name"], uk) for r in group if r["kind"] != "category"}
     cells = []
     for r in group:
-        if r["kind"] != "category":
-            continue
-        kind = {"materials": "material", "potions": "potion"}.get(r["value"].lower())
-        icon = _MONUMENT_ICONS.get(r["value"].lower(), "▫️")
-        cells.append(f"{icon} <b>{html.escape(named.pop(kind))}</b>" if kind in named
-                     else f"{icon} {html.escape(_mon_label(r['name'], uk))}")
-    for kind, name in named.items():          # a named item with no generic slot
-        cells.append(f"{_MONUMENT_ICONS[kind + 's']} <b>{html.escape(name)}</b>")
-    return f"<code>{floor:>2}</code>  " + " · ".join(cells)
+        if r["kind"] == "category":
+            kind = {"materials": "material", "potions": "potion"}.get(r["value"].lower())
+            cells.append(named.pop(kind) if kind in named else _mon_label(r["name"], uk))
+    return ", ".join(cells + list(named.values()))   # + a named item with no generic slot
 
 
 async def _run_monuments_tool(message, query: str, args: dict, sources: Optional[list] = None,
@@ -2603,24 +2611,20 @@ async def _run_monuments_tool(message, query: str, args: dict, sources: Optional
         summary = f"BY MONUMENT (exact floors; copy these, do not re-derive them): {summary}"
         uk = _uk(session)
         cat = str(res["matched_as"]).split(chr(39))[1]
-        label = html.escape(_mon_label(cat, uk))
-        blocks = [f"{_MONUMENT_ICONS.get(cat, '🏛')} <b>{label}</b> " + (
-            f"у монументах · тиждень {res['week']}" + (" ⚠️ застаріло - новий тиждень ще не внесено"
-                                                       if res["stale"] else "") if uk else
-            f"in the monuments · week {res['week']}" + (" ⚠️ stale - the new week is not entered yet"
-                                                        if res["stale"] else ""))]
+        label = _mon_label(cat.title(), uk)
+        blocks = [f"<b>{html.escape(label)}</b> " + (
+            f"у монументах, тиждень {res['week']}" + (" (застаріло - новий тиждень ще не внесено)"
+                                                      if res["stale"] else "") if uk else
+            f"in the monuments, week {res['week']}" + (" (stale - the new week is not entered yet)"
+                                                       if res["stale"] else ""))]
         floors_word = "пов." if uk else "floors"
         for mon, floors in sorted(per.items(), key=lambda kv: -len(kv[1])):
-            rows = []
-            for fl in floors:
-                specific = [_mon_item(r["name"], uk) for r in by_floor[(mon, fl)] if r["kind"] != "category"]
-                rows.append(f"<code>{fl:>2}</code>  " + (f"<b>{html.escape(', '.join(specific))}</b>"
-                                                          if specific else label))
-            if all("<b>" not in r for r in rows):   # nothing named: the floors are the whole story
-                blocks.append(f"🏛 <b>{mon}</b> · {len(floors)} {floors_word}: "
-                              f"<code>{', '.join(map(str, floors))}</code>")
+            rows = [[str(fl), ", ".join(_mon_item(r["name"], uk) for r in by_floor[(mon, fl)]
+                                        if r["kind"] != "category") or label] for fl in floors]
+            if all(r[1] == label for r in rows):   # nothing named: the floors are the whole story
+                blocks.append(f"<b>{mon}</b> ({len(floors)} {floors_word}): {', '.join(map(str, floors))}")
             else:
-                blocks.append(f"🏛 <b>{mon}</b> · {len(floors)} {floors_word}\n" + "\n".join(rows))
+                blocks.append(f"<b>{mon}</b> ({len(floors)} {floors_word})\n" + pre_table(rows))
         blocks[-1] += f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>'
         try:
             await send_report_blocks(message, blocks)
@@ -2645,15 +2649,15 @@ async def _run_monuments_tool(message, query: str, args: dict, sources: Optional
         # list the user never received (REVIEW flagged it; the redo repeated
         # it). One message per monument keeps each under Telegram's 4096 limit.
         uk = _uk(session)
-        title = (f"Нагороди монументів</b> · тиждень {res['week']}" + (
-                     " ⚠️ застаріло - новий тиждень ще не внесено" if res["stale"] else "") if uk else
-                 f"Monument rewards</b> · week {res['week']}" + (
-                     " ⚠️ stale - the new week is not entered yet" if res["stale"] else ""))
+        title = (f"Нагороди монументів</b>, тиждень {res['week']}" + (
+                     " (застаріло - новий тиждень ще не внесено)" if res["stale"] else "") if uk else
+                 f"Monument rewards</b>, week {res['week']}" + (
+                     " (stale - the new week is not entered yet)" if res["stale"] else ""))
         rows_by: dict = {}
         for (mon, fl), grp in sorted(by_floor.items()):
-            rows_by.setdefault(mon, []).append(_monument_floor_html(fl, grp, uk))
-        blocks = [f"🏛 <b>{mon}</b>\n" + "\n".join(rows) for mon, rows in rows_by.items()]
-        blocks[0] = f"🏛 <b>{title}\n\n" + blocks[0]
+            rows_by.setdefault(mon, []).append([str(fl), _monument_floor_cells(grp, uk)])
+        blocks = [f"<b>{mon}</b>\n" + pre_table(rows) for mon, rows in rows_by.items()]
+        blocks[0] = f"<b>{title}\n\n" + blocks[0]
         blocks[-1] += f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>'
         posted = ""
         try:
@@ -5959,18 +5963,19 @@ def _demo() -> None:
         {"slot": "Material", "kind": "material", "name": "Perfect Runestone", "value": "P Runestone"}])
     assert _ml == "Proofs, Material: Perfect Runestone (P Runestone)", _ml
     assert "monuments" in _ACTIONS
-    _fl = _monument_floor_html(2, [
-        {"slot": "Reward 1", "kind": "category", "name": "Arena Tokens", "value": "Arena Tokens"},
-        {"slot": "Reward 2", "kind": "category", "name": "Materials", "value": "Materials"},
-        {"slot": "Material", "kind": "material", "name": "Pure Darkstone", "value": "P Darkstone"}])
-    assert _fl == "<code> 2</code>  🎟 Arena Tokens · 🪨 <b>Pure Darkstone</b>", _fl
-    _fl = _monument_floor_html(2, [
+    _fl = _monument_floor_cells([
         {"slot": "Reward 1", "kind": "category", "name": "Arena Tokens", "value": "Arena Tokens"},
         {"slot": "Reward 2", "kind": "category", "name": "Materials", "value": "Materials"},
         {"slot": "Material", "kind": "material", "name": "Red Draconite", "value": "Red Draconite"},
         {"slot": "Potion", "kind": "potion", "name": "Nostrum", "value": "Nostrum"}], uk=True)
-    assert _fl == "<code> 2</code>  🎟 Жетони арени · 🪨 <b>Червоний драконіт</b> · 🧪 <b>Nostrum</b>", _fl
-    assert set(_MONUMENT_UK) >= set(_MONUMENT_ICONS), "every icon category needs a Ukrainian label"
+    assert _fl == "Жетон арени, Червоний драконіт, Прополіс", _fl
+    assert [_mon_label(c, True) for c in ("Skeleton Keys", "Orns", "Armor", "Proofs")] == \
+        ["Ключ", "Орни", "Обладунки", "Відзнаки"]
+    assert _mon_label("Skeleton Keys", False) == "Skeleton Keys"
+    assert _is_pure_product("(1 + 0.575) * (1 + 0.575)") and _is_pure_product("21.757 * 1.25 * 2")
+    assert not _is_pure_product("(1 + 0.575) * (1 + 0.575) - 1"), "already the bonus, not a multiplier"
+    assert not _is_pure_product("((1 + 57.5/100) * (1 + 57.5/100) - 1) * 100"), "already a percent"
+    assert not _is_pure_product("3 + 4")
     assert _uk_date("October 5") == "5 жовтня" and _uk_date("Febuary 3") == "Febuary 3"
     assert ("Червоний драконіт", "Red Draconite") in _uk_material_names("де взяти червоний драконіт?")
     assert ("Червоний драконіт", "Red Draconite") in _uk_material_names("скільки червоного драконіту треба")

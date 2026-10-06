@@ -21,3 +21,9 @@ with _DATA_PATH.open(encoding="utf-8") as _f:
     EN_TO_UK: Dict[str, str] = json.load(_f)
 
 UK_TO_EN: Dict[str, str] = {uk.lower(): en for en, uk in EN_TO_UK.items()}
+
+# Every item (potions, keys, tokens, gear) - for rendering cards, never for
+# fuzzy matching (see orna_scrape_material_names.ITEMS_OUTPUT_PATH).
+_ITEMS_PATH = Path(__file__).with_name("orna_item_names_uk.json")
+ITEM_EN_TO_UK: Dict[str, str] = (json.loads(_ITEMS_PATH.read_text(encoding="utf-8"))
+                                 if _ITEMS_PATH.exists() else dict(EN_TO_UK))
