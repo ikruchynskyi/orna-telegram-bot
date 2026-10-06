@@ -124,6 +124,14 @@ while offensive buffs multiply only AFTER it. So buffing Attack or Magic on a
 skill that cannot already penetrate adds nothing - any multiplier on zero is
 zero. Single-tier and double-tier buffs stack with each other, and temporary
 buffs add another independent layer.
+Buff tier sizes (two independent community sources agree - the orn-bonus sheet
+and Ornabook): T. ↑ +25%, T. ↑↑ +50%, T. ↑↑↑ +100%; debuffs T. ↓ -20%, T. ↓↓
+-80%, T. ↓↓↓ -100%. Different buffs multiply: Def ↑ with Def ↑↑ is
+1.25 x 1.5 = x1.875.
+SOURCES DISAGREE on T. Crit ↑↑↑ - the community sheet says +80% crit chance,
+Ornabook says +60% (and that it also gives +10% Attack but nothing to Magic). No
+developer comment settles it. Give both figures and say it is unconfirmed rather
+than quoting either one as fact.
 Multi-strike skills roll M2 independently per strike, but the chance to apply a
 status/debuff is rolled ONCE, on the first successful hit - a miss forfeits the
 debuff entirely, which is what makes evasion valuable against multi-hit enemies.
@@ -148,6 +156,58 @@ passive world bonuses (exp/orn multipliers) instead, with a citation. The guild
 rejected that figure. Recorded because it also means that document's cited
 numbers are not automatically reliable - treat its prose as claims to check, not
 as data.
+Ornabook (book.cadelabs.ovh, Gear > Dual-wielding) gives the BONUS side
+independently, and it agrees with the guild's 0.65, not with that document's
+50%: when dual-wielding, each weapon's bonus counts at 0.65 and the two
+MULTIPLY - (1 + 0.65*B)^2 against (1 + B) for one weapon. Worked example from
+that page: one godforged Questing Staff gives +57.5% orns; two dual-wielded give
+1.37375^2 = +88.7%, so dual-wielding bonus weapons always beats wielding one.
+
+=== Character stat calculation (Rubenir's stat calculator v0.7) ===
+How a character's displayed stats are built, read from the FORMULAS of Rubenir's
+"Orna Character Stat Calculator v0.7" (Google Sheets; credits Baalinor for
+ascension/ward data and Knight411 for the Swashbuckler formula). The sheet is
+built to reproduce the in-game STATUS SCREEN. Its class and specialization data
+tables are in knowledge_search as "Class base stats and per-level growth rates"
+and "Specialization stat modifiers and secondary bonuses". Every stage TRUNCATES
+to a whole number, which is why a naive single multiplication can be off by one.
+Stage order, per stat:
+  1. class base = base x (1 + level x growth% / 100), per class and per stat;
+  2. + specialization % of THAT base;
+  3. + gear stats, added flat;
+  4. x (world bonuses x class passives + Ascension Level / 100). World bonuses:
+     Origin Town x1.1, Dukedom x1.05, Party x1.1. Ascension is ADDED to that
+     product, not multiplied by it: with Origin Town and AL 100 the factor is
+     1.1 + 1.0 = 2.1, not 2.2. HP uses (1 + AL/100);
+  5. offensive multipliers on Attack/Magic: Proficiency x1.05; a party bonus
+     of +0.15 for Duelist and Sequencer; +0.12 for Zwei-Fencer;
+  6. Swashbuckler: Attack x1.5, but the bonus shrinks by one point for every
+     point of Defense gained above the class base (gear, spec, bonuses), and
+     never below plain Attack - min(ATK x 1.5, max(ATK, ATK x 1.5 - DEF gained)).
+     That is why players run broken or zero-Defense gear for it ("keep defence
+     below ~380 for the swash bonus" in the player Q&A says the same);
+  7. hybrid CLASSES add part of their Magic to Attack: Beowulf 25%, Bahamut
+     20% (this is the class conversion - a different thing from hybrid SKILLS,
+     which use 65% Attack + 65% Magic, see the damage formula section).
+PvP doubles HP only, and Ascension multiplies gear too - both AGREE with the
+bot's own estimator. The sheet notes that world bonuses like Origin Town wrongly
+still count in Arena ("as declared by Odie, expect a fix"), and that tier-10
+class passives are left out because the status screen does not show them.
+SOURCES DISAGREE on whether a specialization's % applies to GEAR. This sheet
+applies it to the class base only (stage 2, before gear is added). The bot's
+estimate_stats applies it to gear as well - an assumption in its code, not a
+verified game rule. On a real loadout the gap is large: a Sequencer's +15% on
+~13,700 gear magic at AL 102 is about 4,160 magic. Settled by the status screen:
+note a stat, equip one item, and see whether the stat rises by exactly the
+item's value or by more. Until then, say the estimate may overstate gear stats
+by the specialization's percentage.
+SOURCES DISAGREE on four specializations. The sheet gives Berserker +10% Attack
+and +2% Defense/Resistance (the bot's data: +5% Attack), Brawler +2% HP (bot:
++5%), and nothing for Chronomancer or Time Mage (bot: +10% and +7% Magic). The
+bot's data is the NEWER source - the sheet predates Titanfelled, Conqueror,
+Benefactor and five other specializations - so the bot uses it, but give both
+when one of these four is asked about. The other 28 specializations match
+exactly in both sources.
 
 === Survivability: Second Chance, DoT and Steadfast ===
 "Second Chance" (and class variants such as the Heretic's "Mana Rush") gives a

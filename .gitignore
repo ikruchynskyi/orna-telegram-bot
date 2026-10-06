@@ -32,3 +32,5 @@ codex.sqlite3
 codex.sqlite3-shm
 codex.sqlite3-wal
 codex.sqlite3.tmp
+.monuments_cache/
+announce_chats.json

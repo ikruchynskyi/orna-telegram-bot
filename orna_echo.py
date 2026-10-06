@@ -48,7 +48,9 @@ _MAX_BODY_CHARS = 6000
 _ARTICLE_RE = re.compile(r"^=== (?P<title>.+?) \((?P<url>[^)]+)\) ===$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
-_SECTIONS: list | None = None
+# path -> parsed sections. A dict, not one global: the same reader serves
+# more than one corpus file (orna_ornabook.txt too), with one parse each.
+_SECTIONS: dict = {}
 
 
 @dataclass
@@ -93,24 +95,29 @@ def _parse(text: str) -> list:
     return out
 
 
-def _load() -> list:
-    global _SECTIONS
-    if _SECTIONS is None:
+def _load(path: str = CORPUS_PATH) -> list:
+    """Parse one `=== Title (url) ===` / `## Heading` corpus file, once.
+
+    Shared by every corpus in that format (orna_echo.txt, orna_ornabook.txt)
+    rather than copied per site: this repo has already had two copies of one
+    function drift apart (orna_classes.scale), and the section format is the
+    contract each scraper writes to."""
+    if path not in _SECTIONS:
         try:
-            with open(CORPUS_PATH, encoding="utf-8") as fh:
-                _SECTIONS = _parse(fh.read())
+            with open(path, encoding="utf-8") as fh:
+                _SECTIONS[path] = _parse(fh.read())
         except FileNotFoundError:
             # Degrade, never raise: knowledge_search must keep working for the
             # other corpora on a checkout that predates the first scrape.
-            logger.warning("orna_echo: %s not found - run orna_scrape_echo.py", CORPUS_PATH)
-            _SECTIONS = []
+            logger.warning("orna_echo: %s not found - run its scraper", path)
+            _SECTIONS[path] = []
         except Exception:
-            logger.warning("orna_echo: could not read %s", CORPUS_PATH, exc_info=True)
-            _SECTIONS = []
-    return _SECTIONS
+            logger.warning("orna_echo: could not read %s", path, exc_info=True)
+            _SECTIONS[path] = []
+    return _SECTIONS[path]
 
 
-def search(query: str, limit: int = 6) -> list:
+def search(query: str, limit: int = 6, path: str = CORPUS_PATH) -> list:
     """Sections mentioning `query`, best first, scored by how many DISTINCT
     query words appear - heading and title hits weighted above body hits.
 
@@ -118,7 +125,7 @@ def search(query: str, limit: int = 6) -> list:
     orna_knowledge learned the hard way: nobody phrases a question the way a
     guide phrases its heading, and a query naming several subjects at once
     ("ward absorption turns") matches no single substring anywhere."""
-    sections = _load()
+    sections = _load(path)
     words = {w for w in _WORD_RE.findall(query.lower()) if len(w) >= _MIN_WORD_LEN}
     if not words or not sections:
         return []
@@ -138,9 +145,9 @@ def search(query: str, limit: int = 6) -> list:
     return [sec for _score, _len, sec in scored[:limit]]
 
 
-def search_text(query: str, limit: int = 6) -> str:
+def search_text(query: str, limit: int = 6, path: str = CORPUS_PATH) -> str:
     """`search` rendered as one labelled block for a tool observation."""
-    hits = search(query, limit)
+    hits = search(query, limit, path)
     if not hits:
         return ""
     parts = []
@@ -173,8 +180,7 @@ def _demo() -> None:
     assert secs[3].title == "Fishing Guide"
     assert secs[1].label == "Ward Guide: Capacity - Ward Capacity: The Base Formula"
 
-    global _SECTIONS
-    _SECTIONS = secs
+    _SECTIONS[CORPUS_PATH] = secs
     # A heading word must outrank a body-only mention: "capacity" is in the
     # Ward section's heading and nowhere else.
     assert search("ward capacity formula")[0].heading == "Ward Capacity: The Base Formula"
@@ -182,7 +188,7 @@ def _demo() -> None:
     assert search("fishing line")[0].title == "Fishing Guide"
     assert search("") == [] and search("a") == []          # too-short words cannot match everything
     assert search("nonexistentsubject") == []
-    _SECTIONS = None
+    _SECTIONS.pop(CORPUS_PATH, None)
 
     if os.path.exists(CORPUS_PATH):
         real = _load()

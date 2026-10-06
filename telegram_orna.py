@@ -74,6 +74,7 @@ from orna_aussies import has_aussies_page
 from orna_aussies import fuzzy_codex_name
 from orna_aussies import count_records, query_records, refetch_now, resolve_codes as resolve_effect_codes
 import orna_codex_db
+import orna_monuments
 from orna_aussies import unresolvable_condition_fields
 from orna_aussies import build_supergraph, resolve_entity
 from orna_aussies import class_abilities as orna_aussies_class_abilities
@@ -140,7 +141,7 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
-            "knowledge_search", "releases", "web_search", "ask", "finish")
+            "knowledge_search", "monuments", "releases", "web_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -2326,6 +2327,39 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "FORMULA or a mechanic the codex has no field for: Ward capacity, Ascension altar costs, "
             "dungeon cooldowns and godforging, anguish proofs, per-event tier gates. Indented lines are "
             "verbatim formulas - use them as written rather than reasoning one out):\n" + _truncate_lines(echo, _KN_BLOCK_MAX, _KN_TRIM))
+    # Ornabook (book.cadelabs.ovh): a community mechanics book, read by the SAME
+    # section reader as orna_echo (orna_echo.search with its own path) rather
+    # than a second search engine. Audited against the other corpora on
+    # 2026-10-05 by READING them, after a regex pass mislabelled two covered
+    # facts as new:
+    #   * genuinely new: the dual-wield BONUS formula, (1 + 0.65*B)^2 - the
+    #     repo had only a rejected "50% for world bonuses" claim for that -
+    #     raid "sanding", per-stat buff rows (T. Crit ↑↑↑ also gives +10% Att,
+    #     not Mag), Drakeblight's 500 cap;
+    #   * already covered, now independently CORROBORATED: buff tiers
+    #     +25/+50/+100% and that they stack multiplicatively (orna_knowledge),
+    #     hybrid fighting the mean of Def and Res (orna_mechanics);
+    #   * one CONFLICT, unresolved: T. Crit ↑↑↑ is +60% here and +80% in the
+    #     community sheet, and no dev comment settles it - recorded in
+    #     orna_mechanics.txt so an answer states both rather than picking one.
+    try:
+        book = await asyncio.to_thread(orna_echo.search_text, query, 6, _ORNABOOK_PATH)
+    except Exception as e:
+        logger.warning("orna: ornabook lookup failed for %r (%s)", query[:60], e)
+        book = ""
+    if book:
+        if sources is not None:
+            for sec in await asyncio.to_thread(orna_echo.search, query, 6, _ORNABOOK_PATH):
+                _add_source(sources, sec.label[:60], sec.url)
+        blocks.append(
+            "ORNABOOK MECHANICS (book.cadelabs.ovh, a community-written guide - quote it for the dual-wield "
+            "BONUS formula, how buffs stack, per-stat status-effect tiers, dungeon modes/options and key-cost "
+            "multipliers, raids and sanding, gauntlets, Anguish 2.0. Where it and another source give a "
+            "DIFFERENT number, say so and give both rather than picking one. Labels in [brackets] are decoded game icons: "
+            "[T. Att ↑↑↑] is the temporary triple attack buff, [Def] the defense stat; '—' is an empty "
+            "table cell, kept so every number stays under its own column. It is community-written: the "
+            "codex and releases() outrank it for any number they also state):\n"
+            + _truncate_lines(book, _KN_BLOCK_MAX, _KN_TRIM))
     # Player Q&A, indexed by the QUESTION rather than by an answer's wording -
     # the one axis none of the other corpora have, and the only source carrying
     # a CORRECTED PREMISE ("those are summons, not followers").
@@ -2374,6 +2408,132 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
         out.append(f"[{dropped} further source block(s) omitted to keep this observation readable - "
                    "ask a NARROWER question if you need them.]")
     return "\n\n".join(out)
+
+
+# The Ornabook corpus, read by orna_echo's section reader (see
+# orna_scrape_ornabook.py for why the format is shared, not duplicated).
+_ORNABOOK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_ornabook.txt")
+
+def _monument_line(group: list) -> str:
+    """One floor of one monument: its matched cells. A category cell is shown
+    WITHOUT its slot label on purpose: the slots are named "Reward 1/2/3", and
+    live (2026-10-05) "Reward 3: Proofs" was read as "3 proofs" - the answer
+    claimed floors "each give 3 proofs" and "Ithra only gives up to 2" from a
+    chart that has no quantities at all. Material/Potion keep their label,
+    since there the label says what KIND of thing is named."""
+    parts = []
+    for r in group:
+        name = r["name"] + (f" ({r['value']})" if r["name"] != r["value"] else "")
+        parts.append(name if r["kind"] == "category" else f"{r['slot']}: {name}")
+    return ", ".join(parts)
+
+
+async def _run_monuments_tool(message, query: str, args: dict, sources: Optional[list] = None,
+                              session=None) -> str:
+    """Which monument and floor gives what THIS WEEK (floorchart.top).
+
+    A specific-name lookup ("where do I get adamantine") posts nothing: it is
+    one or two floors, and the model's one-sentence answer was right every time
+    measured. A CATEGORY lookup ("which monument gives proofs") POSTS the exact
+    floor list itself, like `towers` posts its table - because it is a list of
+    numbers, and live (2026-10-05) the model re-typing one got a floor wrong 1
+    run in 3 even with the exact list in its observation. Code does not mis-copy.
+    Week staleness and an empty match are said outright, never left to infer."""
+    args = args if isinstance(args, dict) else {}
+    floor = args.get("floor")
+    try:
+        floor = int(floor) if floor not in (None, "") else None
+    except (TypeError, ValueError):
+        floor = None
+    try:
+        res = await asyncio.to_thread(orna_monuments.search, (query or "").strip(),
+                                      str(args.get("monument") or ""), floor)
+    except Exception as e:
+        logger.warning("orna: monuments failed for %r", query, exc_info=True)
+        return f"monuments did NOT run: the floorchart.top chart could not be loaded ({e})."
+    if sources is not None:
+        _add_source(sources, "floorchart.top monument rewards", orna_monuments.SITE_URL)
+
+    head = (f"MONUMENT REWARDS, week {res['week']} (floorchart.top, community-entered each week; matched "
+            f"{res['matched_as']}). It says WHAT drops on each floor, never HOW MANY - the chart has no "
+            "quantities, so never state an amount. A generic category (\"Proofs\", \"Materials\") is shown "
+            "alone; \"Material:\"/\"Potion:\" name the exact item.")
+    if res["stale"]:
+        head += (f" STALE: the site still shows week {res['week']} but it is now week {res['current_week']} - "
+                 "the new chart has not been entered yet. Say so; do not present these as this week's rewards.")
+    if not res["matches"]:
+        return (head + f"\n0 matches for {query!r} on any monument floor this week. Not in this week's "
+                "rotation - it may appear in a later week.")
+
+    by_floor: dict = {}
+    for r in res["matches"]:
+        by_floor.setdefault((r["monument"], r["floor"]), []).append(r)
+    lines = [f"- {mon} floor {fl}: {_monument_line(grp)}" for (mon, fl), grp in sorted(by_floor.items())]
+    if str(res["matched_as"]).startswith("category"):
+        # "Which monument gives the most X" needs a real number, and the only
+        # real one is how many FLOORS carry it - so hand it over, labelled as
+        # floors, rather than leave the model to invent a quantity. With the
+        # EXACT floor list inline: live 2026-10-05, re-listing proofs from 25
+        # near-identical lines, the model added floors that are not there
+        # (Demeter 9, Ithra 11, Thor 12). Copying one line beats rebuilding it.
+        per: dict = {}
+        for mon, fl in sorted(by_floor):
+            per.setdefault(mon, []).append(fl)
+        summary = "; ".join(f"{m} - {len(f)} floor(s): {', '.join(map(str, f))}"
+                            for m, f in sorted(per.items(), key=lambda kv: -len(kv[1])))
+        summary = f"BY MONUMENT (exact floors; copy these, do not re-derive them): {summary}"
+        card = [f"🏛 <b>{html.escape(str(res['matched_as']).split(chr(39))[1].title())}</b> - "
+                f"monuments, week {res['week']}" + (" (STALE - new week not entered yet)" if res["stale"] else "")]
+        for mon, floors in sorted(per.items(), key=lambda kv: -len(kv[1])):
+            cells = []
+            for fl in floors:
+                specific = [r["name"] for r in by_floor[(mon, fl)] if r["kind"] != "category"]
+                cells.append(f"{fl}" + (f" ({', '.join(specific)})" if specific else ""))
+            card.append(f"<b>{mon}</b>: {html.escape('; '.join(cells))}")
+        card.append(f'<a href="{orna_monuments.SITE_URL}">floorchart.top</a>')
+        try:
+            await message.reply_text("\n".join(card), parse_mode="HTML", disable_web_page_preview=True)
+            posted = ("The exact list above was POSTED to the chat - do not re-list the floors in finish(); "
+                      "give a one-line takeaway (e.g. which monument has the most floors).")
+            if session is not None:
+                session.posted_note = "the monument list was already posted to the chat above the answer"
+        except Exception:
+            logger.warning("orna: monuments card failed to send", exc_info=True)
+            posted = ""
+        # When every cell matched is the same generic word ("Proofs"), the
+        # per-floor lines carry nothing the summary does not - drop them.
+        if len({r["name"] for r in res["matches"]}) == 1:
+            return head + "\n" + summary + ("\n" + posted if posted else "")
+        lines.append(summary)
+        if posted:
+            lines.append(posted)
+    elif len(by_floor) > 3:
+        # A list-shaped result that is NOT a category - the whole chart ("що
+        # зараз в монументах?"), one monument, one floor across monuments - is
+        # also posted by the tool. Live 2026-10-05: the whole-chart ask posted
+        # nothing, and the model answered "Ось список нагород..." - pointing at a
+        # list the user never received (REVIEW flagged it; the redo repeated
+        # it). One message per monument keeps each under Telegram's 4096 limit.
+        week = f"тиждень {res['week']}" + (" (ЗАСТАРІЛО - новий тиждень ще не внесено)" if res["stale"] else "")
+        blocks: dict = {}
+        for (mon, fl), grp in sorted(by_floor.items()):
+            blocks.setdefault(mon, []).append(f"{fl}: {html.escape(_monument_line(grp))}")
+        posted = ""
+        try:
+            for i, (mon, rows) in enumerate(blocks.items()):
+                top = f"🏛 <b>Нагороди монументів - {week}</b>\n\n" if i == 0 else ""
+                end = f'\n\n<a href="{orna_monuments.SITE_URL}">floorchart.top</a>' if i == len(blocks) - 1 else ""
+                await message.reply_text(f"{top}<b>{mon}</b> (поверх: нагороди)\n" + "\n".join(rows) + end,
+                                         parse_mode="HTML", disable_web_page_preview=True)
+            posted = ("The full chart above was POSTED to the chat, one message per monument - do NOT list the "
+                      "floors again in finish(); give a short takeaway in one or two lines.")
+            if session is not None:
+                session.posted_note = "the full monument chart was already posted to the chat above the answer"
+        except Exception:
+            logger.warning("orna: monuments chart failed to send", exc_info=True)
+        if posted:
+            lines.append(posted)
+    return head + "\n" + "\n".join(lines)
 
 
 async def _run_knowledge_tool(message, query: str, sources: Optional[list] = None) -> str:
@@ -3035,6 +3195,17 @@ _TOOLS_TEXT = (
     "Weakness\" are different gear), so dropping the mode word can land on the wrong one. Without any query you only "
     "see the guide's own opening, which may not be the relevant part for a long guide. No reply_text - like "
     "knowledge_search/web_search, read this as source material and write the real answer in finish().\n"
+    "- monuments(action_input=<a thing, a category, or empty>, args={\"monument\": \"<optional: ithra|thor|"
+    "vulcan|demeter>\", \"floor\": <optional int>}): THIS WEEK's rewards at the four Monuments (Ithra, Thor, "
+    "Vulcan, Demeter) - which monument and FLOOR gives what. The answer to \"what's in the monuments\" (leave "
+    "action_input EMPTY for the whole chart), \"where can I get <material/potion> this week\", \"which monument "
+    "gives proofs/orns/keys/arena tokens\", \"what does Thor floor 5 give\". Pass the specific name "
+    "(\"adamantine\", \"perfect runestone\", \"nostrum\") or a category (\"materials\", \"rare materials\", "
+    "\"potions\", \"items\" for gear, \"proofs\", \"orns\", \"skeleton keys\", \"arena tokens\", "
+    "\"monster remains\"). For the whole chart, a category, or any result longer than three floors, the tool "
+    "POSTS the list to the chat itself - then answer in one or two lines (a takeaway) and never re-list the "
+    "floors. It rotates WEEKLY - always say which week, and if it reports STALE, say the new week's chart is not "
+    "out yet. Use it instead of knowledge_search or web_search for anything about monument rewards.\n"
     "- knowledge_search(action_input=<search term>): a curated community reference - player-maintained sheets, "
     "AMITY and CRUCIBLE tables (the gear-bonus affixes: their tiers, roll ranges and which equipment slots each "
     "can appear on), CLASS and SPECIALIZATION data (each one's stat modifiers, bonus stats and passive "
@@ -3464,6 +3635,21 @@ def _forced_evidence_note(session) -> Optional[str]:
             "column names. Never report the length of a capped list as a total.")
 
 
+def _leaked_observation(session, answer: str) -> bool:
+    """True when the draft answer contains a tool observation verbatim.
+    Observations are INTERNAL - they carry instructions to the model ("never
+    state an amount"), not text for a player. Live 2026-10-05, told by REVIEW to
+    "list what drops", the model pasted the monuments observation, instructions
+    and all, as its whole reply. Matched on an observation's opening line, long
+    enough that an ordinary quoted value cannot trigger it."""
+    text = answer or ""
+    for obs in session.seen_calls.values():
+        head = str(obs or "").strip().split("\n", 1)[0][:60]
+        if len(head) >= 40 and head in text:
+            return True
+    return False
+
+
 def _evidence_ceiling(session) -> tuple:
     """(ceiling, why) - the highest confidence the EVIDENCE supports, whatever
     the model claims.
@@ -3633,16 +3819,47 @@ def _proper_nouns(text: str) -> list:
     return sorted(found, key=len, reverse=True)
 
 
-async def _translate(text: str, target: str, source: str = "") -> str:
+# Letters Russian has and Ukrainian does not. Their presence means the model
+# slid into Russian mid-sentence - live 2026-10-05: "экіпіровку" for
+# "спорядження". For a Ukrainian guild that is not a style nit.
+# Russian letters can't hide, but Russian WORDS spelled with letters the two
+# languages share can - and they were the more common slip live: "время",
+# "начали", "затем". These are high-frequency Russian words that are NOT valid
+# Ukrainian (so "все", "завтра", "так" are deliberately absent - they are).
+# The model for every TRANSLATION the bot makes (the /orna input and output
+# gates, announcements). Measured 2026-10-05, same announcement, 3 runs each,
+# all confirmed served by the cloud: nemotron-3-super (the loop's model)
+# produced non-words and rendered "redeem code" as "код для викупу" (RANSOM
+# code); gemma4:31b gave natural, near-identical Ukrainian every time. The
+# reasoning loop keeps its own model - this is only translation.
+TRANSLATION_MODEL = "gemma4:31b"
+# Scripts that have no business in a Ukrainian/English reply - live: "Demeter"
+# came back as "Де미터", Hangul mid-word.
+_FOREIGN_SCRIPT_RE = re.compile(r"[\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u4E00-\u9FFF\uAC00-\uD7AF]")
+_RUSSIAN_ONLY_RE = re.compile(
+    r"[ыэъёЫЭЪЁ]|\b(?:время|начали|начать|затем|потом|сейчас|только|нужно|также|если|когда|чтобы|что|"
+    r"или|еще|это|очень|сегодня|здесь|теперь|потому|который|которые|будет|нет)\b", re.I)
+
+
+async def _translate(text: str, target: str, source: str = "", pin: Optional[list] = None,
+                     model: Optional[str] = None) -> str:
     """`text` in `target`, or the original text unchanged on any failure.
 
     Proper nouns are pinned: an Orna item/class/spell name is an IDENTIFIER, and
     a translated one matches nothing in the data - the live failure that lock
-    already existed for ("Дудар", "Гільгармос" resolve to nothing)."""
+    already existed for ("Дудар", "Гільгармос" resolve to nothing).
+
+    `pin` overrides WHICH words are pinned. The default, _proper_nouns, takes
+    every capitalised word - right for /orna's answers, which are dense with
+    item names, but wrong for prose, where every sentence starts with a capital:
+    a game announcement came back as "Thank всім за гру", "Технічне
+    обслуговування Server", "Happy свята" because "Thank", "Server" and "Happy"
+    had been ORDERED to stay English. telegram_announce passes only names that
+    exist in the game data instead."""
     text = (text or "").strip()
     if not text:
         return text
-    names = _proper_nouns(text) if target != "English" else []
+    names = pin if pin is not None else (_proper_nouns(text) if target != "English" else [])
     keep = ""
     if names:
         keep = (" These are IDENTIFIERS and must appear in your output EXACTLY as written here, unchanged and "
@@ -3657,11 +3874,13 @@ async def _translate(text: str, target: str, source: str = "") -> str:
               "monster, spell, guild, event and material names keep their original spelling exactly (they are "
               "identifiers; a translated name matches nothing in the game data). Keep numbers, percentages and "
               "any HTML tags exactly as they are. Do not answer the message, add anything, or omit anything."
+            + (" Write natural UKRAINIAN, never Russian: Ukrainian has no letters ы, э, ъ or ё, and Russian words "
+               "or spellings in the reply are a mistake." if target == "Ukrainian" else "")
             + keep + extra
         )
         try:
             got = await chat_json_with_fallback(
-                ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL,
+                model or ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL,
                 [{"role": "system", "content": prompt}, {"role": "user", "content": text}],
                 api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
             )
@@ -3689,6 +3908,16 @@ async def _translate(text: str, target: str, source: str = "") -> str:
                 out = retry
             if still:
                 logger.warning("orna: translation still dropped %s", still[:5])
+    bad_re = _RUSSIAN_ONLY_RE if target == "Ukrainian" else None
+    if _FOREIGN_SCRIPT_RE.search(out) or (bad_re and bad_re.search(out)):
+        bad = sorted(set(_FOREIGN_SCRIPT_RE.findall(out) + (bad_re.findall(out) if bad_re else [])))
+        logger.info("orna: Ukrainian translation contains Russian %s - retrying once", bad)
+        retry = await _once(" Your previous attempt used text that is not " + target + " (" + ", ".join(bad[:8])
+                            + ") - Russian words, or another script entirely. Rewrite it in correct " + target
+                            + ", keeping every name exactly as written in the source.")
+        if retry is not None and not _FOREIGN_SCRIPT_RE.search(retry) and \
+                not (bad_re and bad_re.search(retry)):
+            out = retry
     return out
 
 
@@ -3702,7 +3931,7 @@ async def build_loop_messages(text: str, allow_ask: bool = True) -> tuple:
     user_lang = _detect_lang(text)
     body = text
     if user_lang != _LOOP_LANGUAGE:
-        english = await _translate(text, _LOOP_LANGUAGE, source=user_lang)
+        english = await _translate(text, _LOOP_LANGUAGE, source=user_lang, model=TRANSLATION_MODEL)
         if english != text:
             body = (f"{english}\n\n[The user wrote this in {user_lang}. Original, verbatim - prefer THIS "
                     f"spelling for any item/material/class name you pass to a tool: {text}]")
@@ -3944,6 +4173,11 @@ class OrnaSession:
     # One-shot: a count/aggregation question that tried to finish with no tool
     # call at all has been sent back once already. See _forced_evidence_note.
     pushed_for_evidence: bool = False
+    # Set by a tool that POSTED its own deliverable to the chat (the monuments
+    # chart). REVIEW is told, or it demands the list the user already has -
+    # live 2026-10-05 that made the model paste the raw observation as its answer.
+    posted_note: str = ""
+    pushed_for_leak: bool = False
 
 
 _ORNA_SESSIONS: dict[str, OrnaSession] = {}
@@ -4014,6 +4248,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_research_tool(message, action_input, args, sources, session)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
+        if action == "monuments":
+            return await _run_monuments_tool(message, action_input, args, sources, session=session)
         if action == "estimate_stats":
             return await _run_estimate_stats_tool(message, args, sources)
         if action == "releases":
@@ -4088,6 +4324,7 @@ _ACTION_LABELS = {
     "search_codex": "🔎 Шукаю в кодексі…",
     "query": "🔎 Підбираю за характеристиками…",
     "sql": "🗃 Запит до бази кодексу…",
+    "monuments": "🏛 Дивлюся нагороди монументів…",
     "events": "🎪 Дивлюся календар подій…",
     "open_entry": "📖 Читаю сторінку кодексу…",
     "calculate": "🧮 Рахую…",
@@ -4424,6 +4661,17 @@ async def _advance_inner(sid: str, message) -> None:
             # _forced_evidence_note. Placed before REVIEW because REVIEW is
             # gated to complex requests and "how many items are in the codex"
             # is 7 words, so it would never reach that check.
+            if not session.pushed_for_leak and _leaked_observation(session, draft_answer):
+                session.pushed_for_leak = True
+                logger.info("orna: draft answer pasted a tool observation sid=%s - sending it back", sid)
+                session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
+                session.messages.append({"role": "user", "content": (
+                    f"{_SYSTEM_NOTE} Your draft answer pasted a TOOL RESULT verbatim - that is internal text with "
+                    "instructions meant for you, never something to send a player. Write the answer in your own "
+                    "words." + (f" Note: {session.posted_note}, so a short takeaway is enough."
+                                if session.posted_note else ""))})
+                continue
+
             evidence_note = _forced_evidence_note(session)
             if evidence_note:
                 logger.info("orna: forcing evidence for aggregation ask sid=%s", sid)
@@ -4436,6 +4684,7 @@ async def _advance_inner(sid: str, message) -> None:
                 candidates_preview = opened_preview or session.viewed_entries
                 card_note = ("a codex card for this will auto-post above your answer" if
                              session.allow_ask and 0 < len(candidates_preview) <= _AUTO_CARD_MAX_ENTRIES else "")
+                card_note = "; ".join(x for x in (card_note, session.posted_note) if x)
                 session.review_rounds += 1
                 verdict = await _call_review_model(session.original_request, _working_state(session.messages),
                                                    draft_answer, card_note)
@@ -4512,7 +4761,8 @@ async def _advance_inner(sid: str, message) -> None:
             answer_text = action_input or "Не вдалося сформувати відповідь."
             if (session.user_lang != _LOOP_LANGUAGE
                     and _detect_lang(answer_text) != session.user_lang):
-                answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE)
+                answer_text = await _translate(answer_text, session.user_lang, source=_LOOP_LANGUAGE,
+                                               model=TRANSLATION_MODEL)
             answer, effective = _confidence_gate(session, step, answer_text)
             logger.info("orna: finish sid=%s confidence=%s\n  %s", sid, effective, answer[:1500].replace("\n", "\n  "))
             # Keep the answer in the transcript: a /clarify follow-up is read
@@ -4591,7 +4841,8 @@ async def _advance_inner(sid: str, message) -> None:
             ask_text = action_input or "Уточніть, будь ласка:"
             if (session.user_lang != _LOOP_LANGUAGE
                     and _detect_lang(ask_text) != session.user_lang):
-                ask_text = await _translate(ask_text, session.user_lang, source=_LOOP_LANGUAGE)
+                ask_text = await _translate(ask_text, session.user_lang, source=_LOOP_LANGUAGE,
+                                            model=TRANSLATION_MODEL)
             await _reply_markdown(message, ask_text + "\n\n" + _clarify_hint(session), reply_markup=keyboard)
             return
 
@@ -5102,6 +5353,14 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.warning("update_codex: bonuses refetch failed", exc_info=True)
         lines.append(f"амітіси/крусібли: не вдалося оновити ({e})")
+
+    try:
+        mon = await asyncio.to_thread(orna_monuments.refetch_now)
+        lines.append(f"монументи: тиждень {mon['week']}, {mon['rewards']} нагород")
+    except Exception as e:
+        logger.warning("update_codex: monuments refetch failed", exc_info=True)
+        lines.append(f"монументи: не вдалося оновити ({e})")
+
     await message.reply_text("\n".join(lines))
 
 
@@ -5432,6 +5691,29 @@ def _demo() -> None:
         "a complete observation must not be pushed back"
     _once = _agg_session("how many items are in the codex?")
     assert _forced_evidence_note(_once) and _forced_evidence_note(_once) is None, "flag must latch"
+
+    # monuments: a category cell must NOT carry its "Reward N" slot label - live
+    # 2026-10-05 "Reward 3: Proofs" was read as "3 proofs" and the answer
+    # invented quantities the chart does not have. Specific items keep theirs.
+    _ml = _monument_line([
+        {"slot": "Reward 3", "kind": "category", "name": "Proofs", "value": "Proofs"},
+        {"slot": "Material", "kind": "material", "name": "Perfect Runestone", "value": "P Runestone"}])
+    assert _ml == "Proofs, Material: Perfect Runestone (P Runestone)", _ml
+    assert "monuments" in _ACTIONS
+    # a pasted observation is caught; a normal answer quoting a value is not
+    class _LS:
+        seen_calls = {"m": "MONUMENT REWARDS, week 41 (floorchart.top, community-entered each week; matched "
+                           "everything).\n- Ithra floor 2: Materials"}
+    assert _leaked_observation(_LS, "MONUMENT REWARDS, week 41 (floorchart.top, community-entered each week; x")
+    assert not _leaked_observation(_LS, "Ithra floor 2 gives Materials this week (week 41).")
+    assert _FOREIGN_SCRIPT_RE.search("Де미터") and not _FOREIGN_SCRIPT_RE.search("Demeter, Деметра ✓ 41%")
+    # Every action must have its "- name(" bullet in the prompt. monuments lost
+    # its description when a neighbouring tool's span was cut out (2026-10-05),
+    # and nothing noticed: the model still saw the bare name in _STEP_TOOLS,
+    # called it with no arguments, and answered with nothing to show.
+    _described = set(re.findall(r"- (\w+)\(", _orna_system_prompt("x")))
+    _undescribed = [a for a in _ACTIONS if a not in _described]
+    assert not _undescribed, f"actions with no description in the prompt: {_undescribed}"
 
     assert _evidence_ceiling(_S({}))[0] == 40, "no tool call means nothing was verified"
     assert _evidence_ceiling(_S({"a": "0 results for 'x'"}))[0] == 60, "all dead ends"

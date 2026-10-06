@@ -20,3 +20,4 @@ codex.sqlite3-*
 .releases_cache/
 .bonuses_cache/
 .qa_cache/
+.monuments_cache/

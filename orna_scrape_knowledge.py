@@ -81,6 +81,17 @@ _TABLES = [
      "15ErGi6_9XnRiuG6v9AHsYML93pzK3Nsrp7kVVEcVzws", "0", "community calculator"),
     ("Gear Item Boost Values (per-item XP/Orn/Gold/Luck %, before quality scaling)",
      "15ErGi6_9XnRiuG6v9AHsYML93pzK3Nsrp7kVVEcVzws", "1495370665", "community calculator, GearInf tab"),
+    # Rubenir's "Orna Character Stat Calculator - v0.7" (added 2026-10-05). Only
+    # the two DATA tabs are crawled: the Calculator tab's CSV is just one default
+    # configuration's computed numbers, and its value is the FORMULA chain - that
+    # is written up as prose in orna_mechanics.txt ("Character stat calculation"),
+    # read from the sheet's formulas rather than its values.
+    ("Class base stats and per-level growth rates (stat calculator)",
+     "1HsuetDbQZnIAwHbT58YG3k2jj67bMlQwfXzX8gcTGL0", "1695414135",
+     "Rubenir's Orna Character Stat Calculator v0.7, Classes tab"),
+    ("Specialization stat modifiers and secondary bonuses (stat calculator)",
+     "1HsuetDbQZnIAwHbT58YG3k2jj67bMlQwfXzX8gcTGL0", "1312367202",
+     "Rubenir's Orna Character Stat Calculator v0.7, Specializations tab"),
 ]
 
 

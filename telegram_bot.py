@@ -1,4 +1,5 @@
 import html
+import asyncio
 import os
 import logging
 import re
@@ -29,6 +30,7 @@ from telegram_orna import (build_clarify_handler, build_chosen_inline_result_han
                           build_update_codex_handler)
 from telegram_orna import _next_text, _today_text
 import usage_stats
+import telegram_announce
 import ollama_client
 
 logging.basicConfig(
@@ -634,6 +636,12 @@ def main():
     # (force-refetch the aussiescodex cache now instead of waiting out its
     # 1-week TTL), not something a regular guild member needs.
     app.add_handler(build_update_codex_handler())
+    # Discord game announcements -> Ukrainian -> every group/channel the bot is
+    # in. The chat recorder sits in its own handler group (see
+    # telegram_announce.build_handlers) so it never takes an update away from
+    # the order-sensitive conversations registered below.
+    for handler, group in telegram_announce.build_handlers():
+        app.add_handler(handler, group=group)
     # Same hidden/gated treatment - reports usage_stats' counters.
     app.add_handler(CommandHandler("stats", handle_stats))
     app.add_handler(CommandHandler("model", handle_model))
@@ -680,6 +688,13 @@ def main():
     # (screenshot -> AWAITING_NAME) isn't currently handling for that chat.
     app.add_handler(build_resource_conversation())
     reschedule_pending(app)
+    # Only when both the token and the channel id are set: without them there
+    # is nothing to poll, and poll_once would just raise every two minutes.
+    if telegram_announce.configured():
+        app.job_queue.run_repeating(telegram_announce.poll_job,
+                                    interval=telegram_announce.POLL_INTERVAL_SECONDS,
+                                    first=30, name="discord_announce")
+        logger.info("announce: polling Discord every %ss", telegram_announce.POLL_INTERVAL_SECONDS)
     logger.info("🤖 Bot is running...")
     # Explicit allowed_updates so inline_query/chosen_inline_result are always
     # polled (the default set includes them, but a previously-set restrictive
@@ -687,6 +702,7 @@ def main():
     # bot handles - no chat_member/reaction noise.
     app.run_polling(allowed_updates=[
         "message", "edited_message", "callback_query", "inline_query", "chosen_inline_result",
+        "my_chat_member", "channel_post",
     ])
 
 
