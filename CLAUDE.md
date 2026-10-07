@@ -18,6 +18,24 @@ verifying: the `verifying-orna-changes` skill.
   `FFPROBE_PATH`, `YTDLP_PATH`); every yt-dlp call passes `--ffmpeg-location`.
 - Docker/compose files exist but have never been built - build before relying on them.
 
+## Layout
+
+```
+telegram_bot.py   entry point (launchd runs it from the repo root)
+paths.py          every file location: data/, data/cache/, data/state/
+bot/              Telegram handlers (telegram_*.py) + usage_stats
+llm/              ollama_client (THE Ollama call path), telegram_nlp
+orna/             game data and math: codex, aussies, assess, towers, sheets, ...
+knowledge/        corpora readers, Pinecone + keyword retrieval, Discord/Reddit search
+scrapers/         corpus builders - run as `python3 -m scrapers.<name>`
+tests/            `python3 tests/orna_test_suite.py`
+data/             corpora (committed); cache/ and state/ are gitignored
+deploy/           Dockerfile*, docker-compose.yml, install.sh
+```
+Imports are package-qualified (`from orna import orna_codex`); run a module's
+self-check with `python3 -m <package>.<module>` from the repo root. Never build a
+file path from `__file__` or the working directory - use `paths`.
+
 ## Module map
 
 Telegram features:
@@ -49,7 +67,7 @@ Data sources (each = reader module + cache or committed file + scraper):
   `orna_guides` + `orna_guide_*.txt` back `class_guide`.
 - `orna_pinecone.py` - semantic search over those text corpora (one namespace each; `PINECONE_API_KEY`).
   `_units(ns)` chunks every corpus with its own module's parser. Re-index after re-scraping:
-  `python3 orna_pinecone.py [ns ...]`. Also feeds the PLAN call a short primer (`_plan_primer`).
+  `python3 -m knowledge.orna_pinecone [ns ...]`. Also feeds the PLAN call a short primer (`_plan_primer`).
 - `orna_textindex.py` → `.textindex.sqlite3` - SQLite FTS5 over the same chunks; the fallback when
   Pinecone is off/failing. Rebuilds itself when a source file is newer.
 - `orna_questline.txt` (`scrapers/orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
@@ -90,7 +108,7 @@ Data sources (each = reader module + cache or committed file + scraper):
 4. **Never block the event loop**: disk/HTTP/CPU work goes through `asyncio.to_thread`.
 5. **New knowledge source ≠ new tool**: add it as a Pinecone namespace - a branch in
    `orna_pinecone._units` + `NAMESPACES`, a top-k in `_VECTOR_TOP_K`, a tag and trust note in
-   `_SOURCE_NOTES` - then `python3 orna_pinecone.py <ns>`. `knowledge_search` returns ONE ranked list
+   `_SOURCE_NOTES` - then `python3 -m knowledge.orna_pinecone <ns>`. `knowledge_search` returns ONE ranked list
    across namespaces (never fixed per-source blocks: a total cap then drops the best hit). Not a new
    action - the prompt is already large. Run the retrieval benchmark (tier 0) before and after.
 6. Add a label in `_ACTION_LABELS` (status line) and cite with `_add_source`.

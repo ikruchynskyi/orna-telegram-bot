@@ -63,7 +63,7 @@ if not os.environ.get("SHEETS_API_KEY"):
     sys.exit("SHEETS_API_KEY is not set - run `set -a && source .env && set +a` first "
              "(it is read at import time by orna_sheets, so the module won't even load without it).")
 
-import telegram_orna as T  # noqa: E402  (import after sys.path/env setup)
+from bot import telegram_orna as T  # noqa: E402  (import after sys.path/env setup)
 
 if os.environ.get("FORCE_LOCAL") == "1":
     # Every step tries cloud first now; MAX_CLOUD_CALLS is only a runaway

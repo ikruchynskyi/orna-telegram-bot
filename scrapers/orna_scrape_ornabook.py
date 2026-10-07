@@ -337,7 +337,7 @@ def _demo() -> None:
     assert "- one\n- two" in text
 
     # ...and orna_echo's reader parses it, with the empty TODO heading dropped
-    import orna_echo
+    from knowledge import orna_echo
     secs = orna_echo._parse(text)
     heads = [s.heading for s in secs]
     assert "Calls (TODO)" not in heads, heads

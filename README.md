@@ -300,7 +300,7 @@ developer comments, and curated Discord posts.
 still lands): put `PINECONE_API_KEY` in `.env`, then
 
 ```bash
-python3 orna_pinecone.py            # creates the index on first run, uploads every corpus
+python3 -m knowledge.orna_pinecone            # creates the index on first run, uploads every corpus
 ```
 
 This takes a few minutes on the starter plan, which allows 250k embedding tokens
@@ -315,9 +315,9 @@ use it only if you accept that. It is read-only, paced like a person, and your
 login token never leaves the browser.
 
 ```bash
-python3 orna_discord_search.py login       # a Chrome window opens: log in by hand, once
-python3 orna_discord_search.py harvest     # ~2 min: FAQ/guide channels + pinned posts, images transcribed
-python3 orna_pinecone.py discord
+python3 -m knowledge.orna_discord_search login       # a Chrome window opens: log in by hand, once
+python3 -m knowledge.orna_discord_search harvest     # ~2 min: FAQ/guide channels + pinned posts, images transcribed
+python3 -m knowledge.orna_pinecone discord
 ```
 
 Images (charts, tier lists) are transcribed to text by a vision model on Ollama
@@ -374,11 +374,11 @@ After re-scraping any knowledge corpus, re-index that namespace in Pinecone
 (the local keyword index rebuilds itself):
 
 ```bash
-python3 -m scrapers.orna_scrape_questline && python3 orna_pinecone.py questline
-python3 orna_discord_search.py harvest && python3 orna_pinecone.py discord
-python3 orna_pinecone.py --probe "<question>"   # raw scores per namespace, to tune PINECONE_MIN_SCORE
+python3 -m scrapers.orna_scrape_questline && python3 -m knowledge.orna_pinecone questline
+python3 -m knowledge.orna_discord_search harvest && python3 -m knowledge.orna_pinecone discord
+python3 -m knowledge.orna_pinecone --probe "<question>"   # raw scores per namespace, to tune PINECONE_MIN_SCORE
 ```
 
 `/update_codex` re-indexes the community sheets (`knowledge`) itself. If the
 Discord login expires, `harvest` and `discord_search` say so; run
-`python3 orna_discord_search.py login` again.
+`python3 -m knowledge.orna_discord_search login` again.

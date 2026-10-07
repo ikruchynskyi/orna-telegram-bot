@@ -2257,7 +2257,7 @@ error '500'" replies. Two halves, both needed:
   lives in the call's `name` instead, leftover keys are that action's own
   args and get nested under `"args"` (a `query`'s conditions/category/
   sort_by arrive flat). Pinned by asserts in `ollama_client._demo()`
-  against the three real shapes - run `python3 ollama_client.py`.
+  against the three real shapes - run `python3 -m llm.ollama_client`.
 - **Prompt wording alone cannot close this** (measured: 9/20 → 14/20 with
   an explicit "you have no callable functions" rule, 17/20 also
   de-function-ifying the tool bullets - never 20/20), so the rule was in

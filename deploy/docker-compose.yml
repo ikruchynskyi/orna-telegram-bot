@@ -45,7 +45,7 @@ services:
     healthcheck:
       # Proves the interpreter and the codex DB are both usable, which is the
       # part that silently breaks; a reply to Telegram cannot be checked here.
-      test: ["CMD", "python", "-c", "import orna_codex_db as d; d.run_sql('SELECT count(*) FROM records')"]
+      test: ["CMD", "python", "-c", "from orna import orna_codex_db as d; d.run_sql('SELECT count(*) FROM records')"]
       interval: 5m
       timeout: 30s
       start_period: 60s

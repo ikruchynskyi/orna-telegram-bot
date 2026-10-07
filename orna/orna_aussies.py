@@ -1,0 +1,1414 @@
+"""
+orna_aussies.py - Orna's full structured item/monster/etc. database, as
+exposed by aussiescodex.com's own frontend data files (not to be confused
+with orna_codex.py, which reads playorna.com's per-page rendered JSON -
+good for browsing one entry, but each page has to be fetched individually
+and doesn't expose buffs/debuffs/immunities as a searchable list).
+
+Two files:
+  - codex.json: every item/monster/boss/class/follower/raid/spell/
+    building/dungeon record in one dump. Buffs/debuffs/immunities/things
+    an item *causes* on a target are encoded as short internal codes
+    (e.g. "mag_u" = Mag Up I, "t__mag_uuu" = Temp. Mag Up III) - the
+    game's own internal effect-string vocabulary, not a display name. The
+    "t__" prefix's own displayed abbreviation ("T.") reads like it could
+    mean "Team", but it doesn't - verified directly against playorna.com's
+    own served icon filenames (e.g. "T. Def ↑" -> defense_up_temp.png,
+    vs. plain "Def ↑" -> defense_up.png, same pairing for Res): it's
+    "Temp[orary]", a status that came from something time-limited (a
+    follower's bond proc, a consumable) rather than a normal spell/skill
+    grant - not a whole-party effect.
+  - translations.en.json: maps every one of those codes straight to its
+    human-readable name/arrow notation (e.g. "mag_u" -> "Mag ↑",
+    "t__mag_uuu" -> "T. Mag ↑↑↑"), plus a `main` section
+    keyed by record id -> {name, description}. Decoding is a flat
+    dictionary lookup; no need to hand-parse the up/down/temp encoding -
+    _build_stem_directions derives the valid tiers per stat from this
+    file directly, so it stays correct if the game adds more later.
+
+This is what makes "what items give immunity to stunned" or "what gives
+T Mag 3" answerable as a real structured search (query_records) instead
+of free-text scraping. Record ids are the same slugs playorna.com uses
+for its own /codex/<category>/<id>/ URLs (verified directly against
+several items and a boss with a disambiguating suffix, e.g.
+"ankou-eef994e0") - so a match here can be hand off straight into
+orna_codex.fetch_codex_json for the full rendered page.
+
+query_records generalizes this further: any combination of stat
+comparisons (mag > 250), description/name substring search, effect
+matches, and flat-attribute filters (rarity, tier, useable_by, ...),
+combined with AND/OR - see _eval_condition for the condition shapes.
+Results link to aussiescodex.com's own pages (build_url) rather than
+playorna - but aussiescodex only actually has browsable pages for
+items/bosses/followers/spells (verified: every other category 404s
+there, and its own nav doesn't link them either), so build_url falls
+back to playorna.com for monsters/raids/classes/buildings/dungeons.
+
+Network: httpx. Both files (~2.2MB + ~0.8MB) are cached on disk
+(.aussies_cache/, gitignored) with a 1-week TTL, not re-downloaded on
+every query - the game's data doesn't change day to day, and a week is a
+reasonable staleness bound against Orna's own patch cadence.
+"""
+from __future__ import annotations
+
+import paths
+import difflib
+import json
+import logging
+import operator
+import re
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+BASE = "https://www.aussiescodex.com"
+CODEX_URL = f"{BASE}/api/data/codex.json"
+TRANSLATIONS_URL = f"{BASE}/api/data/translations.en.json"
+HEADERS = {
+    "accept": "*/*",
+    "referer": f"{BASE}/orna-items",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+}
+HTTP_TIMEOUT = 30.0
+
+CACHE_DIR = paths.CACHE / "aussies"
+CACHE_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _cache_path(name: str) -> Path:
+    return CACHE_DIR / name
+
+
+def _sane_codex(data: object) -> bool:
+    """A codex.json dump is usable only if it has the category dicts the whole
+    module indexes into, with the big one populated. Guards against a patch-day
+    HTTP 200 that returns an empty or half-written {"main": {}} - which would
+    make resolve/research/query/estimate all silently find nothing and, if
+    cached, stay broken for a WEEK. ~2764 items live; the floor catches a gutted
+    dump while allowing the roster to grow or shrink with a patch."""
+    main = data.get("main") if isinstance(data, dict) else None
+    if not isinstance(main, dict):
+        return False
+    needed = ("items", "monsters", "bosses", "raids", "followers", "classes", "spells")
+    if not all(isinstance(main.get(c), dict) and main.get(c) for c in needed):
+        return False
+    return len(main.get("items") or {}) >= 1000
+
+
+def _sane_translations(data: object) -> bool:
+    """translations.en.json is usable only with its name table plus the stats
+    and status vocabularies - display_name, effect resolution and the stat/attr
+    field resolvers all read these."""
+    if not isinstance(data, dict):
+        return False
+    return all(isinstance(data.get(k), dict) and data.get(k) for k in ("main", "stats", "status"))
+
+
+def _download(url: str) -> dict:
+    resp = httpx.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _read_cache(cache_name: str) -> Optional[dict]:
+    """The on-disk cache, or None if absent/unreadable (a file truncated by a
+    crash/kill mid-write - this repo reloads via launchctl often)."""
+    path = _cache_path(cache_name)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        logger.warning("aussies: cache %s unreadable", cache_name)
+        return None
+
+
+def _write_cache(cache_name: str, data: dict) -> None:
+    """Atomic write (temp then rename), so a crash mid-write can't leave a
+    half-written, unparseable cache file behind for the read path."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    path = _cache_path(cache_name)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _fetch_json(url: str, cache_name: str, validate=None) -> dict:
+    """Fresh cache -> live fetch (validated before it is cached) -> whatever is
+    on disk. A fetch that fails the network OR the sanity check NEVER overwrites
+    a good cache and NEVER caches a bad dump: it falls back to the existing
+    on-disk copy (stale beats bricked) and only raises if there is nothing to
+    fall back to. Same 'an empty/partial refresh must not be cached' rule
+    orna_releases/orna_bonuses/orna_knowledge already follow."""
+    path = _cache_path(cache_name)
+    if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL_SECONDS:
+        cached = _read_cache(cache_name)
+        if cached is not None:
+            return cached
+    try:
+        data = _download(url)
+    except Exception as e:
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            logger.warning("aussies: fetch %s failed (%s), serving the cached copy", cache_name, e)
+            return stale
+        raise
+    if validate is not None and not validate(data):
+        stale = _read_cache(cache_name)
+        if stale is not None:
+            logger.warning("aussies: fetched %s failed the sanity check, keeping the cached copy", cache_name)
+            return stale
+        raise ValueError(f"fetched {cache_name} failed the sanity check and there is no cache to fall back to")
+    _write_cache(cache_name, data)
+    return data
+
+
+_codex_cache: Optional[dict] = None
+_translations_cache: Optional[dict] = None
+_reverse_status_cache: Optional[dict] = None
+_stem_directions_cache: Optional[dict] = None
+
+
+def _codex() -> dict:
+    global _codex_cache
+    if _codex_cache is None:
+        _codex_cache = _fetch_json(CODEX_URL, "codex.json", _sane_codex)
+    return _codex_cache
+
+
+def _translations() -> dict:
+    global _translations_cache
+    if _translations_cache is None:
+        _translations_cache = _fetch_json(TRANSLATIONS_URL, "translations.en.json", _sane_translations)
+    return _translations_cache
+
+
+def refetch_now() -> dict:
+    """Download both dumps NOW (ignoring the TTL) and commit them ONLY if BOTH
+    pass the sanity check - so /update_codex on a patch day can never replace
+    good data with an empty/partial fetch. On any failure the current cache and
+    in-memory data are left exactly as they were and the error propagates to the
+    caller (which reports it). Returns record/vocab counts for the reply."""
+    codex = _download(CODEX_URL)
+    if not _sane_codex(codex):
+        raise ValueError("refetched codex.json failed the sanity check (empty or partial) - kept the current data")
+    translations = _download(TRANSLATIONS_URL)
+    if not _sane_translations(translations):
+        raise ValueError("refetched translations.en.json failed the sanity check - kept the current data")
+    # both good -> commit atomically, then drop every derived cache so the bot
+    # rebuilds from the new data on next use.
+    _write_cache("codex.json", codex)
+    _write_cache("translations.en.json", translations)
+    _reset_memory()
+    main = codex["main"]
+    return {
+        "categories": {cat: len(records) for cat, records in main.items()},
+        "stats_vocab": len(translations.get("stats", {})),
+        "status_vocab": len(translations.get("status", {})),
+    }
+
+
+def _reset_memory() -> None:
+    """Drop every in-memory cache derived from the two dumps, so the next call
+    rebuilds from whatever is now on disk. EVERY cache computed from
+    _codex()/_translations() must be listed here, or /update_codex leaves it
+    serving old data (that was the _CLASS_ABILITY_INDEX bug)."""
+    global _codex_cache, _translations_cache, _reverse_status_cache, _stem_directions_cache
+    global _stat_field_cache, _attr_field_cache, _NAME_INDEX, _ALL_NAMES, _CLASS_ABILITY_INDEX, _BOND_BONUS_NAMES
+    _codex_cache = _translations_cache = _reverse_status_cache = _stem_directions_cache = None
+    _stat_field_cache = _attr_field_cache = _NAME_INDEX = _ALL_NAMES = _CLASS_ABILITY_INDEX = _BOND_BONUS_NAMES = None
+
+
+def refresh_cache() -> None:
+    """Force a re-download next time either file is needed (drops the in-memory
+    caches AND the on-disk files). refetch_now is the safe, validated path for
+    /update_codex; this stays for a plain 'invalidate everything' need."""
+    _reset_memory()
+    for name in ("codex.json", "translations.en.json"):
+        _cache_path(name).unlink(missing_ok=True)
+
+
+def decode(code: str) -> str:
+    """Translate one raw code to its human-readable name."""
+    t = _translations()
+    if code in t.get("status", {}):
+        return t["status"][code]
+    ab = t.get("abilities", {}).get(code)
+    if ab:
+        return ab.get("name", code)
+    for section in ("stats", "place", "type", "item_type", "useable_by", "family", "rarity", "element", "targets", "spell_type", "tags"):
+        val = t.get(section, {}).get(code)
+        if val:
+            return val
+    return code.replace("_", " ").title()
+
+
+def display_name(category: str, record_id: str) -> str:
+    entry = _translations().get("main", {}).get(record_id)
+    if entry:
+        return entry.get("name", record_id)
+    return record_id.replace("-", " ").title()
+
+
+def description(record_id: str) -> str:
+    return _translations().get("main", {}).get(record_id, {}).get("description", "")
+
+
+# aussiescodex.com's own URL scheme (https://www.aussiescodex.com/orna-<segment>/<id>),
+# verified directly - only these four categories actually have pages there
+# (every other category 404s, and the site's own nav doesn't link them).
+_AUSSIES_URL_SEGMENTS = {
+    "items": "orna-items",
+    "bosses": "orna-bosses",
+    "followers": "orna-followers",
+    "spells": "orna-skills",  # note: not "orna-spells"
+}
+
+
+def build_url(category: str, record_id: str) -> str:
+    """aussiescodex.com's own page for this record if it has one, else
+    fall back to playorna.com's /codex/<category>/<id>/ (which does cover
+    every category) so a monster/raid/class/building/dungeon match still
+    links somewhere real instead of a dead aussiescodex 404."""
+    segment = _AUSSIES_URL_SEGMENTS.get(category)
+    if segment:
+        return f"{BASE}/{segment}/{record_id}"
+    return f"https://playorna.com/codex/{category}/{record_id}/"
+
+
+def has_aussies_page(category: str) -> bool:
+    """True only for the 4 categories aussiescodex actually has pages
+    for (see _AUSSIES_URL_SEGMENTS) - used to decide whether an "Assess"
+    link is worth showing at all, rather than one that's just a redundant
+    second link back to the same playorna page build_url already falls
+    back to for every other category."""
+    return category in _AUSSIES_URL_SEGMENTS
+
+
+# -----------------------------------------------------------------------------
+# resolving a human search term back to one or more effect codes
+# -----------------------------------------------------------------------------
+
+# The "t__" prefix means "Temp[orary]", not "Team" (see the module
+# docstring for the icon-filename evidence) - "team" is still accepted as
+# a recognized input synonym since that's the natural guess a player
+# would make from the "T." abbreviation alone, just not what it actually
+# means internally. Longest/most-specific alternative first ("temporary"
+# before "temp" before "team" before the bare "t\.?") - a bare "t" placed
+# earlier would greedily match and leave the rest of the word dangling,
+# the exact ordering bug already hit once with "team" vs "t\.?" alone.
+_TEMP_RE = re.compile(r"^\s*(?:temporary|temp|team|t\.?)\s*", re.IGNORECASE)
+_MAGNITUDE_WORDS = {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3}
+_STAT_ALIASES = {
+    "att": "att", "attack": "att",
+    "def": "def", "defense": "def", "defence": "def",
+    "mag": "mag", "magic": "mag",
+    "dex": "dex", "dexterity": "dex",
+    "res": "res", "resistance": "res",
+    "crit": "crit",
+    "all": "all",
+    "dmg": "dmg", "damage": "dmg",
+    "foresight": "foresight",
+}
+
+
+def _build_stem_directions() -> dict:
+    """{(is_temp, base_stem): {ud strings}} derived live from
+    translations['status'] keys - not hardcoded, so a new tier/stat the
+    game adds still resolves correctly. Temp and non-temp are genuinely
+    asymmetric in the real data (e.g. non-temp "Att Down" only goes to
+    tier 1, "T. Att Down" goes to tier 3) so they're kept as separate
+    keys rather than merged into one set per stem."""
+    global _stem_directions_cache
+    if _stem_directions_cache is not None:
+        return _stem_directions_cache
+    stems: dict = {}
+    for k in _translations().get("status", {}):
+        m = re.match(r"^(t__)?([a-z_]+?)_([ud]+)$", k)
+        if m:
+            temp_prefix, base, ud = m.groups()
+            stems.setdefault((bool(temp_prefix), base), set()).add(ud)
+    _stem_directions_cache = stems
+    return stems
+
+
+def _parse_buff_query(term: str) -> Optional[str]:
+    """Try to parse "T Mag 3" / "temp attack down 2" / "Mag Up" /
+    "t.mag ++" / "Def ↓↓" into an exact code like "t__mag_uuu". None if
+    it doesn't look like this pattern at all - caller falls back to
+    fuzzy status matching."""
+    text = term.strip().lower()
+    is_temp = bool(_TEMP_RE.match(text))
+    text = _TEMP_RE.sub("", text)
+
+    direction = None
+    magnitude = 1
+
+    # arrow runs encode direction + magnitude together in one token,
+    # exactly like the game's own display ("Mag ↑↑" = tier 2 up).
+    arrows = re.search(r"(↑{1,3}|↓{1,3})", text)
+    if arrows:
+        token = arrows.group(1)
+        direction = "u" if token[0] == "↑" else "d"
+        magnitude = len(token)
+        text = (text[:arrows.start()] + text[arrows.end():]).strip()
+    else:
+        if re.search(r"\bup\b", text):
+            direction = "u"
+        elif re.search(r"\bdown\b", text):
+            direction = "d"
+        text = re.sub(r"\b(up|down)\b", "", text).strip()
+
+        # "+"/"-" run notation is common shorthand for the same thing
+        # ("T Mag ++" = tier 2 up, "Def --" = tier 2 down).
+        signs = re.search(r"([+]{1,3}|-{1,3})", text)
+        if signs:
+            token = signs.group(1)
+            if direction is None:
+                direction = "u" if token[0] == "+" else "d"
+            magnitude = len(token)
+            text = (text[:signs.start()] + text[signs.end():]).strip()
+        else:
+            m = re.search(r"\b(i{1,3}|[123])\b", text)
+            if m:
+                magnitude = _MAGNITUDE_WORDS.get(m.group(1), 1)
+                text = text[:m.start()].strip()
+
+    stat = _STAT_ALIASES.get(text.strip())
+    if not stat:
+        return None
+    if direction is None:
+        direction = "u"  # bare "T Mag 3" - buffs are the far more common ask than debuffs
+
+    stems = _build_stem_directions()
+    same_direction = {ud for ud in stems.get((is_temp, stat), set()) if ud[0] == direction}
+    ud = direction * magnitude
+    if ud not in same_direction:
+        if not same_direction:
+            return None
+        ud = max(same_direction, key=len)  # requested tier doesn't exist - use the highest that does
+    return f"t__{stat}_{ud}" if is_temp else f"{stat}_{ud}"
+
+
+def _reverse_status() -> dict:
+    """normalized (lowercased, arrows spelled out) human text -> code."""
+    global _reverse_status_cache
+    if _reverse_status_cache is None:
+        rev = {}
+        for code, human in _translations().get("status", {}).items():
+            norm = human.lower().replace("↑", " up").replace("↓", " down").replace(".", "")
+            rev[re.sub(r"\s+", " ", norm).strip()] = code
+        _reverse_status_cache = rev
+    return _reverse_status_cache
+
+
+def resolve_codes(term: str, limit: int = 3) -> list:
+    """Best-effort: turn a human search term into one or more candidate
+    effect codes, most-likely first."""
+    exact = _parse_buff_query(term)
+    if exact and exact in _translations().get("status", {}):
+        return [exact]
+
+    rev = _reverse_status()
+    norm = re.sub(r"\s+", " ", term.strip().lower())
+    if norm in rev:
+        return [rev[norm]]
+    close = difflib.get_close_matches(norm, rev.keys(), n=limit, cutoff=0.6)
+    if close:
+        return [rev[c] for c in close]
+    subset = [code for human, code in rev.items() if norm in human]
+    return subset[:limit]
+
+
+# -----------------------------------------------------------------------------
+# searching records
+# -----------------------------------------------------------------------------
+
+@dataclass
+class EffectMatch:
+    category: str
+    id: str
+    name: str
+    field: str  # "immunities" | "causes" | "gives"
+    code: str
+    chance: Optional[str] = None
+    tier: Optional[int] = None
+    sort_value: Optional[str] = None  # set when query_records was called with sort_by
+
+
+
+# -----------------------------------------------------------------------------
+# generic multi-attribute query - any stat comparison, text substring,
+# effect, or flat attribute, combined with AND/OR
+# -----------------------------------------------------------------------------
+
+_CMP_OPS = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operator.le,
+            "=": operator.eq, "==": operator.eq, "!=": operator.ne}
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_EFFECT_LIST_FIELDS = ("immunities", "causes", "gives", "cures")
+_USEABLE_BY_ALIASES = {
+    "mage": "magic", "mages": "magic", "magic": "magic", "magic_user": "magic", "magic_users": "magic",
+    "warrior": "warrior", "warriors": "warrior", "melee": "melee",
+    "thief": "thief", "thieves": "thief", "rogue": "thief", "rogues": "thief",
+    "summoner": "summoner", "summoners": "summoner", "valhallan": "valhallan",
+}
+
+_stat_field_cache: Optional[dict] = None
+
+
+def _all_stat_fields() -> dict:
+    """normalized (lowercase, spaces/hyphens->underscore) -> real stats key,
+    from translations['stats'] - the authoritative list of every stat name
+    the game data uses (attack/magic/... plus long-tail ones like
+    follower_stats, crit_damage, multi-target_damage)."""
+    global _stat_field_cache
+    if _stat_field_cache is None:
+        keys = _translations().get("stats", {}).keys()
+        _stat_field_cache = {k.lower().replace(" ", "_").replace("-", "_"): k for k in keys}
+    return _stat_field_cache
+
+
+def _resolve_stat_field(field: str, record_keys=()) -> Optional[str]:
+    """LLM-provided field name -> real stats dict key. Tries an exact
+    (normalized) match first, then fuzzy match, so minor spelling/plural
+    drift from the model (e.g. 'follower_stat' vs 'follower_stats') still
+    resolves."""
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    fields = _all_stat_fields()
+    if norm in fields:
+        return fields[norm]
+    pool = list(fields.keys()) + list(record_keys)
+    close = difflib.get_close_matches(norm, pool, n=1, cutoff=0.6)
+    if not close:
+        return None
+    return fields.get(close[0], close[0])
+
+
+# flat top-level fields that are cross-links to OTHER codex entries (an
+# item's "dropped_by" monster, a spell's "learned_by" class, ...) - these
+# are already browsable via codex-bootstrap's own "sections", not
+# meaningful as a query_records filter value, so excluded from the
+# discovered attribute vocabulary below.
+_EXCLUDED_ATTR_FIELDS = {
+    "id", "category", "stats", "immunities", "causes", "gives", "cures",
+    "drops", "dropped_by", "skills", "abilities", "upgrade_materials",
+    "learned_by", "used_by", "off-hands", "summons", "celestial_classes",
+    "bestial_bond", "source", "ability", "follower",
+}
+
+_attr_field_cache: Optional[dict] = None
+
+
+def _all_attr_fields() -> dict:
+    """normalized -> real top-level field name, discovered by scanning
+    every real record across every category - the flat, filterable
+    (non-cross-link) attribute vocabulary. Built from live data rather
+    than hand-maintained, so a field like "events" or "exotic" (or
+    whatever the game adds next) is usable without a code change."""
+    global _attr_field_cache
+    if _attr_field_cache is None:
+        keys = set()
+        for records in _codex()["main"].values():
+            for rec in records.values():
+                keys.update(rec.keys())
+        keys -= _EXCLUDED_ATTR_FIELDS
+        _attr_field_cache = {k.lower().replace(" ", "_").replace("-", "_"): k for k in keys}
+    return _attr_field_cache
+
+
+def _resolve_attr_field(field: str) -> Optional[str]:
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    fields = _all_attr_fields()
+    if norm in fields:
+        return fields[norm]
+    close = difflib.get_close_matches(norm, fields.keys(), n=1, cutoff=0.6)
+    return fields[close[0]] if close else None
+
+
+_CLASS_ABILITY_INDEX: Optional[dict] = None
+
+
+def _class_ability_index() -> dict:
+    """alias (lowercased) -> class record id, for every class in codex.json.
+
+    aussies names the gendered pairs as ONE entry ("Beowulf / Bestla",
+    "Heretic Ara / Hera Ara"), so an exact lookup for "Beowulf" finds nothing -
+    each side of the slash is registered as its own alias."""
+    global _CLASS_ABILITY_INDEX
+    if _CLASS_ABILITY_INDEX is None:
+        index: dict = {}
+        for rid in _codex()["main"].get("classes", {}):
+            full = display_name("classes", rid) or ""
+            for alias in [full] + full.split(" / "):
+                alias = alias.strip().lower()
+                if alias:
+                    index.setdefault(alias, rid)
+        _CLASS_ABILITY_INDEX = index
+    return _CLASS_ABILITY_INDEX
+
+
+def class_abilities(name: str) -> list:
+    """Every ability of a class or tier-10 specialization, WITH what it does:
+    [{"slug", "name", "description"}].
+
+    This is the general answer to "the bot should work the nuances out itself
+    rather than having them hand-coded": all 82 classes - including every
+    tier-10 specialization and its celestial variants - carry a structured
+    `abilities` list in codex.json, and translations.en.json describes all 134
+    of them in plain English ("Resurgence: You become more powerful as your HP
+    decreases in battle"). So a conditional passive can be SURFACED for any
+    class without anyone writing a rule per specialization.
+
+    Note the two sources are complementary, not redundant: orna_classes.json
+    carries `passiveEffects` for 13 classes (and is the only place naming the
+    Dual Staffs / Dual Wield conditions) but has NOTHING for the tier-10
+    specializations, while this has all of them. Callers should show both."""
+    rid = _class_ability_index().get((name or "").strip().lower())
+    if rid is None:                      # fall back to fuzzy, as elsewhere here
+        close = difflib.get_close_matches((name or "").strip().lower(),
+                                          list(_class_ability_index()), n=1, cutoff=0.82)
+        rid = _class_ability_index().get(close[0]) if close else None
+    if rid is None:
+        return []
+    record = _codex()["main"]["classes"].get(rid) or {}
+    table = (_translations().get("abilities") or {})
+    out = []
+    for entry in record.get("abilities") or []:
+        slug = entry.get("name") if isinstance(entry, dict) else str(entry)
+        if not slug:
+            continue
+        info = table.get(slug) or {}
+        out.append({"slug": slug,
+                    "name": info.get("name") or slug.replace("_", " ").title(),
+                    "description": (info.get("description") or "").strip()})
+    return out
+
+
+_ALL_NAMES: Optional[list] = None
+
+
+def all_codex_names() -> list:
+    """Every display name in codex.json, across all nine categories (~5k)."""
+    global _ALL_NAMES
+    if _ALL_NAMES is None:
+        out = []
+        for category, records in _codex()["main"].items():
+            for rid in records:
+                name = display_name(category, rid)
+                if name:
+                    out.append(name)
+        _ALL_NAMES = out
+    return _ALL_NAMES
+
+
+def fuzzy_codex_name(query: str, cutoff: float = 0.72) -> str:
+    """The real codex name `query` most likely MEANT, or "".
+
+    Live 2026-09-26: "/orna what crest of feeling does?" - the real item is
+    `Crest of the Felling`, one substituted letter away - and the loop answered
+    "no such item exists in the current codex database" while its own search for
+    "crest" had listed the right name. `search_codex`'s mechanical ladder cannot
+    reach it (it strips quality words, possessives and trailing words; a typo
+    INSIDE a word is a different shape), so this matches the whole query against
+    the real name vocabulary instead. Same "fuzzy-correct against the corpus's
+    own words" fix _resolve_stat_field already uses.
+
+    Fast enough to call inline - difflib over ~5k names measured at under 10ms -
+    but callers still go through asyncio.to_thread because building the
+    vocabulary can trigger the aussies cache fetch."""
+    query = (query or "").strip()
+    if len(query) < 4:
+        return ""                      # too short to disambiguate anything
+    # Case-insensitive: the loop often lowercases a name ("red dragonite"), and
+    # difflib counts every case flip as a miss.
+    by_lower = {n.lower(): n for n in all_codex_names()}
+    matches = difflib.get_close_matches(query.lower(), list(by_lower), n=1, cutoff=cutoff)
+    if matches and matches[0] != query.lower():
+        return by_lower[matches[0]]
+    return ""
+
+
+_NAME_INDEX: Optional[dict] = None  # name.lower() -> [(category, id), ...]
+
+# For a name that spans categories, a bare mention most often means the
+# fightable thing ("how do I beat / what drops X") over an item of the same
+# name; items next; the rest after.
+_CATEGORY_PRIORITY = ("raids", "bosses", "monsters", "items", "followers",
+                      "spells", "classes", "dungeons", "buildings")
+
+
+def _name_index() -> dict:
+    """name.lower() -> [(category, id), ...], built once from codex.json +
+    translations. Records carry no name in codex.json (names live in
+    translations), so this is the reverse of display_name over every record."""
+    global _NAME_INDEX
+    if _NAME_INDEX is None:
+        idx: dict = {}
+        for category, records in _codex()["main"].items():
+            for rid in records:
+                nm = display_name(category, rid)
+                if nm:
+                    idx.setdefault(nm.lower(), []).append((category, rid))
+        _NAME_INDEX = idx
+    return _NAME_INDEX
+
+
+def resolve_entity(name: str) -> dict:
+    """Resolve a display name to a codex (category, id), entirely from the
+    local dump (no network). Exact name first, then fuzzy_codex_name for a
+    typo/transliteration. A name in several categories returns the
+    priority-ordered pick with the rest in `alternatives`, so the caller can
+    note them without a second round-trip. Nothing resolvable -> {"unresolved": name}."""
+    q = (name or "").strip()
+    if not q:
+        return {"unresolved": name}
+    hits = _name_index().get(q.lower())
+    if not hits:
+        fuzzy = fuzzy_codex_name(q)
+        if fuzzy:
+            hits = _name_index().get(fuzzy.lower())
+    if not hits:
+        return {"unresolved": name}
+    ordered = sorted(hits, key=lambda ci: _CATEGORY_PRIORITY.index(ci[0])
+                     if ci[0] in _CATEGORY_PRIORITY else 99)
+    cat, rid = ordered[0]
+    return {
+        "category": cat, "id": rid, "name": display_name(cat, rid) or rid,
+        "alternatives": [(c, i, display_name(c, i) or i) for c, i in ordered[1:]],
+    }
+
+
+# Every cross-link edge field in codex.json is a list of [category, id] pairs
+# (verified live); the category-aware default set to expand is _DEFAULT_EXPAND.
+_DEFAULT_EXPAND = {
+    "raids": ("drops", "skills"),
+    "bosses": ("drops", "skills"),
+    "monsters": ("drops", "skills"),
+    "dungeons": ("drops",),
+    "items": ("dropped_by", "upgrade_materials"),
+    "followers": ("skills",),
+    "spells": ("learned_by", "used_by"),
+    "classes": ("skills",),
+    "buildings": (),
+}
+# bestial_bond (a follower's spell/bond/bonus grants) is a nested list-of-tiers,
+# NOT [cat,id] pairs, so it isn't a _DEFAULT_EXPAND edge - build_supergraph
+# summarises it separately via _bond_summary (a follower's defining data), and
+# the query bond_bonus kind filters on its BONUS passives.
+
+
+def _effect_names(record: dict) -> list:
+    """Human effect labels from a record's causes/gives/immunities/cures
+    lists. Each entry is {"name": <status-code>, "chance"?: "10%"}; the code
+    is humanized via translations['status'], falling back to the raw code so
+    an unknown code degrades to text rather than crashing."""
+    status = _translations().get("status", {})
+    out = []
+    for field in ("causes", "gives", "immunities", "cures"):
+        for e in record.get(field) or []:
+            code = e.get("name") if isinstance(e, dict) else e
+            if not code:
+                continue
+            human = status.get(code, code)
+            chance = e.get("chance") if isinstance(e, dict) else None
+            out.append(f"{field}:{human}" + (f"({chance})" if chance else ""))
+    return out
+
+
+def _leaf(category: str, rid: str) -> dict:
+    """Compact analysis view of one cross-linked record. A dangling id (not in
+    the dump) degrades to just its id as the name, empty everything else."""
+    r = _codex()["main"].get(category, {}).get(rid) or {}
+    return {
+        "category": category, "id": rid,
+        "name": display_name(category, rid) or rid,
+        "useable_by": r.get("useable_by"),
+        "place": r.get("place"), "item_type": r.get("item_type"),
+        "tier": r.get("tier"), "rarity": r.get("rarity"),
+        "stats": dict(r.get("stats") or {}),
+        "effects": _effect_names(r),
+    }
+
+
+def _bond_summary(record: dict) -> list:
+    """A follower's bestial_bond as per-tier human strings, or [] if it has
+    none. Each tier lists everything it grants when bonded: an ABILITY entry is
+    a spell/skill (shown by name), a BONUS entry is a passive stat + its value
+    (orn_bonus +50, ward_start +2 turns), and a BOND/BUFF entry is a status proc
+    + its chance. This is a follower's DEFINING data, and research showed only
+    its `skills` before - see build_supergraph."""
+    status = _translations().get("status", {})
+    out = []
+    for i, tier in enumerate(record.get("bestial_bond") or [], 1):
+        parts = []
+        for e in (tier if isinstance(tier, list) else []):
+            if not isinstance(e, dict) or not e.get("name"):
+                continue
+            t, name = e.get("type"), str(e["name"])
+            if t == "ABILITY":
+                parts.append("grants " + (display_name("spells", name) or name.replace("-", " ")))
+            elif t == "BONUS":
+                v = e.get("value")
+                parts.append(f"{name.replace('_', ' ')}{(' ' + str(v)) if v else ''}".strip())
+            else:  # BOND / BUFF - a status proc
+                human = status.get(name, name.replace("_", " "))
+                chance = e.get("chance")
+                parts.append(human + (f" ({chance})" if chance else ""))
+        if parts:
+            out.append(f"tier {i}: " + ", ".join(parts))
+    return out
+
+
+_BOND_BONUS_NAMES: Optional[set] = None
+
+
+def _bond_bonus_names() -> set:
+    """Every distinct bestial_bond BONUS name across followers (orn_bonus,
+    ward_start, crit_chance, ...) - the vocabulary a kind:"bond_bonus" field
+    resolves against, discovered from the data like the stat/attr vocabularies."""
+    global _BOND_BONUS_NAMES
+    if _BOND_BONUS_NAMES is None:
+        names = set()
+        for r in _codex()["main"].get("followers", {}).values():
+            for tier in (r.get("bestial_bond") or []):
+                for e in (tier if isinstance(tier, list) else []):
+                    if isinstance(e, dict) and e.get("type") == "BONUS" and e.get("name"):
+                        names.add(str(e["name"]).lower())
+        _BOND_BONUS_NAMES = names
+    return _BOND_BONUS_NAMES
+
+
+def _resolve_bond_bonus_field(field: str) -> str:
+    """The real BONUS name a query field means ("orn bonus" -> "orn_bonus"), or
+    "" for an empty field. Exact-normalized first, then difflib against the real
+    vocabulary - same exact-then-fuzzy shape as _resolve_stat_field/_attr."""
+    if not field:
+        return ""
+    norm = field.strip().lower().replace(" ", "_").replace("-", "_")
+    vocab = _bond_bonus_names()
+    if norm in vocab:
+        return norm
+    close = difflib.get_close_matches(norm, list(vocab), n=1, cutoff=0.75)
+    return close[0] if close else norm
+
+
+def _entity_facts(rec: dict) -> dict:
+    facts = {}
+    for k in ("tier", "rarity", "hp", "place", "item_type", "useable_by", "events"):
+        v = rec.get(k)
+        if v not in (None, "", [], {}):
+            facts[k] = v
+    if rec.get("stats"):
+        facts["stats"] = dict(rec["stats"])
+    eff = _effect_names(rec)
+    if eff:
+        facts["effects"] = eff
+    return facts
+
+
+def build_supergraph(names, per_relation_cap: int = 80) -> dict:
+    """One-level subgraph for one or more entity names, built entirely from
+    codex.json + translations (no network). Returns
+      {"entities": [entity, ...], "unresolved": [name, ...]}
+    where entity = {"category","id","name","facts":dict,
+                    "alternatives":[(cat,id,name)],"relations":[relation,...]},
+          relation = {"field","title","total","partial","members":[leaf,...]},
+          leaf     = see _leaf.
+    per_relation_cap bounds each relation; an over-cap relation is truncated
+    with partial=True and the true total kept. The default of 80 covers EVERY
+    real relation whole (the largest in the data is a raid with 76 drops), so it
+    effectively never truncates - it is a runaway guard, not a normal bound; the
+    256k-context model should see the whole set to reason over it. Which edges
+    are walked is fixed per category by _DEFAULT_EXPAND. Pure/in-memory; call via
+    asyncio.to_thread."""
+    if isinstance(names, str):
+        names = [names]
+    entities, unresolved = [], []
+    codex = _codex()["main"]
+    for name in names:
+        res = resolve_entity(name)
+        if "id" not in res:
+            unresolved.append(name)
+            continue
+        cat, rid = res["category"], res["id"]
+        rec = codex[cat][rid]
+        fields = _DEFAULT_EXPAND.get(cat, ())
+        relations = []
+        for field in fields:
+            raw = rec.get(field) or []
+            pairs = [(x[0], x[1]) for x in raw
+                     if isinstance(x, (list, tuple)) and len(x) == 2]
+            if not pairs:
+                continue
+            members = [_leaf(c, i) for c, i in pairs[:per_relation_cap]]
+            relations.append({
+                "field": field,
+                "title": field.replace("_", " ").title(),
+                "total": len(pairs),
+                "partial": len(pairs) > per_relation_cap,
+                "members": members,
+            })
+        # a follower's bestial_bond is its defining data and is NOT a [cat,id]
+        # edge, so it is summarised here rather than as a relation.
+        bond = _bond_summary(rec)
+        # ~200 follower names collide with a same-named monster/boss, which
+        # outranks the follower in resolution - so "what does follower X give"
+        # lands on the monster and the bond (the whole point) is missed. When
+        # the picked entity has no bond but a same-named FOLLOWER does, show its
+        # bond too; the "also matches" note tells the model whose it is.
+        if not bond:
+            for c, i, _n in res.get("alternatives") or []:
+                if c == "followers":
+                    bond = _bond_summary(codex["followers"].get(i) or {})
+                    if bond:
+                        break
+        entities.append({
+            "category": cat, "id": rid, "name": res["name"],
+            "facts": _entity_facts(rec),
+            "alternatives": res.get("alternatives") or [],
+            "relations": relations,
+            "bond": bond,
+        })
+    return {"entities": entities, "unresolved": unresolved}
+
+
+def unresolvable_condition_fields(conditions: list) -> list:
+    """Which of `conditions`' field names resolve to nothing, as
+    [(kind, field, [suggestions])].
+
+    An unresolvable field used to be indistinguishable from a real absence:
+    _eval_condition simply never matched it, so query_records returned 0 rows
+    and the caller read that as "nothing in the game has this". Live 2026-09-25
+    the loop filtered on `dropped_by` (deliberately excluded as a cross-link
+    field, so not in the attr vocabulary), got 0, and reported "this boss drops
+    nothing usable by mages" - the right answer, reached from no evidence at
+    all; the same 0 would have been produced had the answer been yes. A caller
+    that tells the model its FIELD was unusable gets a corrected retry, which
+    is the whole point of the loop; a silent 0 gets a confident guess.
+
+    Only `attr` and `stat` conditions have a resolvable field vocabulary.
+    `text`/`effect`/`ability` fields are fixed small sets handled in
+    _eval_condition itself, so they are not checked here."""
+    bad = []
+    for cond in conditions or []:
+        if not isinstance(cond, dict):
+            continue
+        kind = str(cond.get("kind", "")).strip().lower()
+        field = str(cond.get("field", "") or "").strip()
+        if not field:
+            continue
+        if kind == "attr" and _resolve_attr_field(field) is None:
+            vocab = _all_attr_fields()
+        elif kind == "stat" and _resolve_stat_field(field) is None:
+            vocab = _all_stat_fields()
+        elif kind == "bond_bonus" and _resolve_bond_bonus_field(field) not in _bond_bonus_names():
+            vocab = _bond_bonus_names()
+        else:
+            continue
+        norm = field.lower().replace(" ", "_").replace("-", "_")
+        bad.append((kind, field, difflib.get_close_matches(norm, list(vocab), n=4, cutoff=0.4)))
+    return bad
+
+
+def _parse_number(raw) -> Optional[float]:
+    """'130', '+5', '2%', '-10', '2,500_orns', 5 -> 130.0, 5.0, 2.0, -10.0,
+    2500.0, 5.0. None on failure."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).replace(",", "").strip().rstrip("%").lstrip("+")
+    try:
+        return float(s)
+    except ValueError:
+        m = _NUM_RE.search(s)
+        return float(m.group(0)) if m else None
+
+
+def _eval_condition(record: dict, cond: dict) -> bool:
+    """One leaf condition. `record` must carry its own "id"/"category"
+    (every raw codex.json record already does). Shapes:
+      {"kind": "stat", "field": "<stats key e.g. magic/attack/crit>",
+       "cmp": ">"|"<"|">="|"<="|"=", "value": <number>}
+      {"kind": "text", "field": "description"|"name"|"", "value": "<substring>"}
+      {"kind": "effect", "field": "immunities"|"causes"|"gives"|"cures"|"", "value": "<human text>"}
+      {"kind": "attr", "field": "<any flat record field - tier/rarity/useable_by/
+       place/type/item_type/family/element/events/tags/exotic/new/hidden/price/...>",
+       "cmp": "="|">"|"<"|">="|"<=", "value": <text, number, or true/false>}
+      {"kind": "bond_bonus", "field": "<a follower bestial_bond BONUS name e.g.
+       orn_bonus/ward_start/crit_chance>", "cmp": ">"|"<"|..., "value": <number,
+       optional - omit for a presence check>}
+    An unrecognised kind/field never matches (fails closed, not open)."""
+    kind = cond.get("kind")
+    field = cond.get("field") or ""
+
+    if kind == "stat":
+        stats = record.get("stats") or {}
+        real_field = field if field in stats else _resolve_stat_field(field, stats.keys())
+        val = _parse_number(stats.get(real_field))
+        target = _parse_number(cond.get("value"))
+        op = _CMP_OPS.get(cond.get("cmp", ">"))
+        return val is not None and target is not None and op is not None and op(val, target)
+
+    if kind == "text":
+        needle = str(cond.get("value", "")).strip().lower()
+        if not needle:
+            return False
+        haystacks = []
+        if field in ("", "description"):
+            haystacks.append(description(record["id"]))
+        if field in ("", "name"):
+            haystacks.append(display_name(record["category"], record["id"]))
+        return any(needle in h.lower() for h in haystacks if h)
+
+    if kind == "ability":
+        # "this item grants a spell/skill when equipped" has THREE
+        # different real encodings, all seen live - genuinely a different
+        # thing from an "effect" (a buff/debuff code). Live reports: (1)
+        # "gives an additional spell" was tried as kind:"effect" value:
+        # "spell", which can never match since "spell" isn't a status/buff
+        # name; (2) even after adding this kind checking only the top-
+        # level "ability" cross-link, "Hyades Wreath" (which DOES grant
+        # Rainsong) was still missed, because it encodes the grant as
+        # stats["+spell"] = "Rainsong" (a plain string VALUE, not a
+        # [category, id] link) - a "stat" condition can't reach this
+        # either, since _parse_number("Rainsong") is never a number.
+        value = str(cond.get("value", "")).strip().lower()
+        candidates = []
+        ability = record.get("ability")
+        if isinstance(ability, list) and len(ability) == 2:
+            spell_cat, spell_id = ability
+            candidates.append(display_name(spell_cat, spell_id))
+            candidates.append(spell_id.replace("-", " "))
+        stats = record.get("stats") or {}
+        for key in ("+spell", "+skill"):
+            granted = stats.get(key)
+            if isinstance(granted, str):
+                candidates.append(granted)
+        # Followers encode "grants a spell when bonded" completely
+        # differently from items: record["bestial_bond"] is a list of bond
+        # tiers, each a list of {"name","type",...} entries - type "ABILITY"
+        # is a spell/skill slug (e.g. "earth-sigil-2"), as opposed to
+        # "BOND" (a status-code proc) or "BONUS" (a passive % stat, see the
+        # "effect" branch below and its ponytail note). Live report: "which
+        # follower gives earth sigil" found nothing until this was added -
+        # verified directly against codex.json that ancient-jinn/anubis
+        # both carry an ABILITY entry named "earth-sigil-2".
+        for tier in (record.get("bestial_bond") or []):
+            for entry in tier:
+                if entry.get("type") == "ABILITY":
+                    slug = entry.get("name", "")
+                    candidates.append(display_name("spells", slug))
+                    candidates.append(slug.replace("-", " "))
+        if not candidates:
+            return False
+        if not value:
+            return True  # bare "has any bonus ability/spell" check
+        return any(value in c.lower() for c in candidates)
+
+    if kind == "effect":
+        codes = resolve_codes(str(cond.get("value", "")))
+        if not codes:
+            return False
+        target_fields = [field] if field in _EFFECT_LIST_FIELDS else list(_EFFECT_LIST_FIELDS)
+        matched = any(e.get("name") in codes for f in target_fields for e in (record.get(f) or []))
+        if not matched and field in ("", "gives"):
+            # A follower's bond can also proc a status effect ("BOND"-type
+            # bestial_bond entries, e.g. "t__def_uu") - these are already
+            # real codes in the same status vocabulary resolve_codes just
+            # used, just reached through a different record field than
+            # items' own "gives" list. type "BONUS" entries (orn_bonus,
+            # crit_chance, ...) are NOT covered here - they're named % bonuses,
+            # not status codes, so resolve_codes can never match them; they have
+            # their own kind:"bond_bonus" branch below.
+            matched = any(
+                entry.get("type") == "BOND" and entry.get("name") in codes
+                for tier in (record.get("bestial_bond") or []) for entry in tier
+            )
+        return matched
+
+    if kind == "bond_bonus":
+        # A follower's bestial_bond BONUS entries - the passive stats it grants
+        # when bonded (orn_bonus, ward_start, crit_chance, ...). Distinct from
+        # the "ability" branch (its bond SPELL grants) and the "effect" branch
+        # (its BOND status procs); this is the third bond encoding, which had no
+        # kind before (the ponytail note in the effect branch). field names the
+        # bonus; an optional value/cmp thresholds its amount, else it is a
+        # presence check ("which follower gives orn bonus").
+        wanted = _resolve_bond_bonus_field(field)
+        target = _parse_number(cond.get("value"))
+        op = _CMP_OPS.get(cond.get("cmp", ">"))
+        for tier in (record.get("bestial_bond") or []):
+            for e in (tier if isinstance(tier, list) else []):
+                if not isinstance(e, dict) or e.get("type") != "BONUS":
+                    continue
+                nm = str(e.get("name", "")).lower()
+                if wanted and nm != wanted and wanted not in nm:
+                    continue
+                if target is None:            # presence of the named (or any) bonus
+                    return True
+                val = _parse_number(e.get("value"))
+                if val is not None and op is not None and op(val, target):
+                    return True
+        return False
+
+    if kind == "attr":
+        real_field = field if field in record else _resolve_attr_field(field)
+        raw = record.get(real_field) if real_field else None
+        if raw is None:
+            # a handful of stats-dict entries (e.g. items' "element") aren't
+            # numeric and don't belong in the "stat" kind - fall back to
+            # the stats dict for anything not found as a top-level field.
+            raw = (record.get("stats") or {}).get(field)
+        cmp_op = cond.get("cmp", "=")
+        if cmp_op in (">", "<", ">=", "<="):
+            val, target = _parse_number(raw), _parse_number(cond.get("value"))
+            op = _CMP_OPS.get(cmp_op)
+            return val is not None and target is not None and op is not None and op(val, target)
+        # "!=" ("not"/"except"/"excluding") negates whatever the equality-
+        # style match below would have returned - computed once at the end
+        # so every non-numeric branch (bool/list/scalar/useable_by) gets it
+        # for free instead of each needing its own negation logic.
+        negate = cmp_op in ("!=", "<>")
+        target_text = str(cond.get("value", "")).strip().lower()
+        if real_field == "useable_by":
+            # real values are "magic_users"/"melee_classes"/"thief_classes"/
+            # "warrior_classes"/"valhallan_summoner_classes"/"all_classes" -
+            # the natural class NAME a player types ("mage", "thief") often
+            # isn't a literal substring of that (e.g. "mage" isn't in
+            # "magic_users" - "magi" is, "mage" isn't), so map common class
+            # nicknames onto a substring that actually IS. And a query for
+            # one specific class must ALSO match "all_classes" - that class
+            # genuinely can use those too (live case: Hyades Wreath, an
+            # "all_classes" item, is a valid answer to "something for a
+            # mage" and was wrongly excluded before this).
+            target_text = _USEABLE_BY_ALIASES.get(target_text, target_text)
+            # Every real ITEM has this field populated (verified directly -
+            # 0/2764 missing or empty). An earlier version defaulted a missing
+            # value to "all_classes" as a defensive no-op for items, but a
+            # query runs over EVERY category, and raids/monsters/bosses/
+            # buildings/dungeons legitimately have no useable_by at all - so
+            # that default made every one of them match every class filter.
+            # Live 2026-09-25: `name ~ "Judge Trifecta" AND useable_by =
+            # magic_users` returned the RAID "Judge Trifecta Maximus", i.e. a
+            # confident "yes, mages can use it" about a raid. An absent field
+            # is now no-match: it costs nothing for items (none are missing
+            # it) and is the only correct reading everywhere else.
+            raw_text = str(raw).strip().lower() if raw else ""
+            # bool(target_text) guard matches the other branches: an empty
+            # value must fail closed, not match every record via "" in raw_text.
+            matched = bool(target_text) and (target_text in raw_text or raw_text == "all_classes")
+        elif isinstance(raw, bool) or (raw is None and target_text in ("true", "yes", "1", "false", "no", "0")):
+            # boolean-flag fields (exotic/new/hidden/...) are presence-only
+            # in the source data - the key exists and is True on a match,
+            # and is simply ABSENT (never explicitly False) otherwise - so
+            # "false"/"no" must treat a missing field as a match too. The
+            # `raw is None` guard is load-bearing: without it, ANY attr "="
+            # query whose value is 0/1 (e.g. {tier "=" 1}) fell in here and
+            # `raw is True`/`raw is False` (identity, not ==) is always False
+            # for a concrete int like 1, so real tier=0/tier=1 records never
+            # matched (and "!=" matched them all). A concrete value goes to
+            # the scalar branch below; only an absent field is a flag "false".
+            if target_text in ("true", "yes", "1"):
+                matched = raw is True
+            elif target_text in ("false", "no", "0"):
+                matched = raw is False or raw is None
+            else:
+                matched = False
+        elif isinstance(raw, list):
+            # aussiescodex sometimes encodes a single string as a list of
+            # its individual characters (seen on items' stats.element,
+            # e.g. "arcane" -> ['a','r','c','a','n','e']) - rejoin before
+            # comparing rather than doing per-character matching.
+            if raw and all(isinstance(x, str) and len(x) == 1 for x in raw):
+                raw_text = "".join(raw).strip().lower()
+                matched = bool(target_text) and (raw_text == target_text or target_text in raw_text)
+            else:
+                norm_items = [str(x).strip().lower().replace(" ", "_") for x in raw]
+                matched = bool(target_text) and any(target_text.replace(" ", "_") in item for item in norm_items)
+        else:
+            # `str(raw or "")` would turn a legitimate falsy value (0, 0.0)
+            # into "" and never match {field "=" 0}; guard on None instead.
+            raw_text = ("" if raw is None else str(raw)).strip().lower()
+            matched = bool(target_text) and (raw_text == target_text or target_text in raw_text)
+        return (not matched) if negate else matched
+
+    return False
+
+
+def _matching_records(conditions: list, combinator: str = "and",
+                      category: Optional[str] = None):
+    """Yield every record matching `conditions` (see _eval_condition) - the
+    one scan shared by query_records (which ranks and CAPS them) and
+    count_records (which only counts). Empty conditions means every record;
+    the "that is a useless dump" guard belongs in the listing caller, not
+    here, because counting everything is a legitimate ask."""
+    # Normalize model-supplied literals - a stray "OR"/"ASC" casing must not
+    # silently flip to the opposite default (and/desc) with no error.
+    combine = any if str(combinator).strip().lower() == "or" else all
+    codex = _codex()["main"]
+    categories = [category] if category and category in codex else list(codex.keys())
+    for cat in categories:
+        for record in codex.get(cat, {}).values():
+            if conditions and not combine(_eval_condition(record, c) for c in conditions):
+                continue
+            yield record
+
+
+def count_records(conditions: Optional[list] = None, combinator: str = "and",
+                  category: Optional[str] = None, group_by: str = "") -> dict:
+    """Aggregate instead of list: the TRUE number of matching records, plus
+    an optional per-value breakdown. Returns
+    {"total": int, "field": <resolved group field or "">, "groups": {value: count}}.
+
+    This exists because a count CANNOT be read off query_records: that
+    returns at most `limit` rows, so len() of its result is the CAP, not the
+    total - live bug, "how many items can mages use" answered 50 (the cap)
+    instead of 1598. And a bare "how many items are in the codex" has no
+    conditions at all, which query_records rejects outright.
+
+    `group_by` names "category" or any flat attr field (tier/rarity/
+    item_type/place/useable_by/..., resolved the same fuzzy way as an attr
+    condition); groups come back sorted by count desc, and a record missing
+    the field is counted under "(none)" rather than dropped, so the group
+    counts always re-add to `total`."""
+    conditions = [c for c in (conditions or []) if isinstance(c, dict)]
+    try:
+        from orna import orna_codex_db
+        return orna_codex_db.count(conditions, combinator, category, group_by)
+    except ValueError:
+        raise                      # "cannot group by X" is a real answer
+    except Exception:
+        logger.warning("orna_aussies: codex DB count failed, falling back to the in-memory scan",
+                       exc_info=True)
+
+    field = ""
+    if group_by:
+        norm = group_by.strip().lower().replace(" ", "_").replace("-", "_")
+        # "category" is deliberately NOT in the attr vocabulary (it is the
+        # `category` PARAMETER's job when filtering) but it is the single most
+        # useful grouping there is - "what is in the codex" is a per-category
+        # count - so resolve it by hand before the attr lookup.
+        field = "category" if norm == "category" else (_resolve_attr_field(group_by) or "")
+        if not field:
+            raise ValueError(f"cannot group by {group_by!r}: no such field")
+
+    total = 0
+    groups: dict = {}
+    for record in _matching_records(conditions, combinator, category):
+        total += 1
+        if field:
+            raw = record.get(field)
+            if raw is None:
+                raw = (record.get("stats") or {}).get(field)
+            key = "(none)" if raw is None or raw == "" else str(raw)
+            groups[key] = groups.get(key, 0) + 1
+
+    return {"total": total, "field": field,
+            "groups": dict(sorted(groups.items(), key=lambda kv: -kv[1]))}
+
+
+def query_records(conditions: list, combinator: str = "and", category: Optional[str] = None,
+                   limit: int = 50, sort_by: Optional[str] = None, sort_dir: str = "desc",
+                   offset: int = 0) -> list:
+    """Generic multi-attribute search: evaluate `conditions` (see
+    _eval_condition) against every record, combined with AND/OR. Returns
+    EffectMatch-shaped results (field/code/chance left blank - only
+    category/id/name/tier/sort_value apply to a multi-attribute query
+    result).
+
+    `sort_by`, when given, ranks matches by that stat (resolved the same
+    fuzzy way as a "stat" condition's field) instead of codex.json's own
+    order - lets "the item with the biggest mag" work as sort_by="magic"
+    with no filter conditions at all (conditions may be empty in that
+    case). Records missing that stat entirely are excluded, since there's
+    nothing to rank them by. `offset` skips the top N ranked results
+    (e.g. the 2nd-highest)."""
+    if not conditions and not sort_by:
+        return []
+
+    # Runs on SQLite now (orna_codex_db), not by scanning the parsed JSON.
+    # The in-memory path below is KEPT as the oracle the SQL port is checked
+    # against - orna_codex_db._demo runs both over all 5,080 records across
+    # the whole condition vocabulary and requires identical results. That
+    # differential found four real bugs in the port (a mirrored hp stat, a
+    # missing stats fallback, a wrongly-ordered label branch, and the
+    # character-array `element` shape), so it stays wired as a permanent
+    # check rather than being a one-off migration step.
+    #
+    # Imported inside the function: orna_codex_db imports THIS module for its
+    # vocabulary resolvers, so a module-level import either way is circular.
+    try:
+        from orna import orna_codex_db
+        return [EffectMatch(category=m["category"], id=m["id"], name=m["name"],
+                            field="", code="", tier=m["tier"], sort_value=m["sort_value"])
+                for m in orna_codex_db.query(conditions, combinator, category, limit,
+                                             sort_by, sort_dir, offset)]
+    except Exception:
+        # The DB is derived and rebuildable, but a query must not hard-fail on
+        # a missing/corrupt file - fall back to the scan, log it, and let
+        # /update_codex rebuild. Slower, same answers.
+        logger.warning("orna_aussies: codex DB query failed, falling back to the in-memory scan",
+                       exc_info=True)
+
+    matched: list = []
+    for record in _matching_records(conditions, combinator, category):
+        sort_value = None
+        if sort_by:
+            stats = record.get("stats") or {}
+            real_field = sort_by if sort_by in stats else _resolve_stat_field(sort_by, stats.keys())
+            sort_value = _parse_number(stats.get(real_field)) if real_field else None
+            if sort_value is None:
+                continue
+        matched.append((sort_value, EffectMatch(
+            category=record["category"], id=record["id"],
+            name=display_name(record["category"], record["id"]),
+            field="", code="", tier=record.get("tier"),
+            sort_value=f"{sort_value:g}" if sort_value is not None else None,
+        )))
+
+    if sort_by:
+        matched.sort(key=lambda pair: pair[0], reverse=(str(sort_dir).strip().lower() != "asc"))
+    results = [m for _, m in matched]
+    return results[offset:offset + limit]
+
+
+def _demo() -> None:
+    """Pins _parse_buff_query's tier-shorthand parsing against known-good
+    phrasings - this function has two documented past regressions (arrow/
+    plus-run magnitude not counted at all, and the t./team alternation
+    ordering bug), exactly the "worked before, quietly stopped" shape a
+    future edit nearby could reintroduce with no other signal. Needs
+    network/cache access (translations.en.json) like the rest of this
+    module. Run directly: python3 -m orna.orna_aussies"""
+    cases = {
+        "T Mag 3": "t__mag_uuu",
+        "team attack down 2": "t__att_dd",  # "team" is still accepted input - see _TEMP_RE
+        "Mag Up": "mag_u",
+        "t.mag ++": "t__mag_uu",
+        "Def ↓↓": "def_dd",
+        "T. Att Down": "t__att_d",
+        # Both of these ask for tier 3, but non-temp Def Up / Mag Up only
+        # go to tier 2 in the real game data (asymmetric temp-vs-non-temp
+        # tiers, see _build_stem_directions) - _parse_buff_query falls back
+        # to the highest tier that actually exists rather than inventing
+        # one, so these correctly resolve one tier lower than requested.
+        "Def III": "def_uu",
+        "Mag ↑↑↑": "mag_uu",
+    }
+    for term, expected in cases.items():
+        got = _parse_buff_query(term)
+        assert got == expected, f"_parse_buff_query({term!r}) = {got!r}, expected {expected!r}"
+    # A bogus field must be REPORTED, not silently return 0 rows - a 0 that
+    # means "nothing was searched" got read as "nothing exists" live.
+    bad = unresolvable_condition_fields([{"kind": "attr", "field": "dropped_by", "value": "x"}])
+    assert len(bad) == 1 and bad[0][0] == "attr" and bad[0][1] == "dropped_by", bad
+    assert unresolvable_condition_fields([
+        {"kind": "attr", "field": "useable_by", "value": "mage"},
+        {"kind": "attr", "field": "place", "value": "head"},
+        {"kind": "stat", "field": "magic", "cmp": ">", "value": 250},
+        {"kind": "text", "field": "name", "value": "judge"},      # fixed vocab, not checked
+        {"kind": "effect", "field": "gives", "value": "Def Down"},
+    ]) == [], "real fields must not be flagged"
+    # fuzzy drift still resolves, so it must NOT be flagged as unresolvable
+    assert unresolvable_condition_fields([{"kind": "stat", "field": "follower_stat", "value": 1}]) == []
+
+    # a record with NO useable_by (raids/monsters) must not match a class filter
+    assert not _eval_condition({"category": "raids", "id": "x", "name": "X"},
+                               {"kind": "attr", "field": "useable_by", "cmp": "=", "value": "mage"})
+    # ...while an explicit all_classes item still does
+    assert _eval_condition({"category": "items", "id": "y", "name": "Y", "useable_by": "all_classes"},
+                           {"kind": "attr", "field": "useable_by", "cmp": "=", "value": "mage"})
+
+    # --- research supergraph: name resolution ---
+    r = resolve_entity("Fallen King Centaurus")
+    assert r.get("category") == "raids" and r.get("id") == "fallen-king-centaurus", r
+    # typo/transliteration recovered via fuzzy_codex_name
+    assert resolve_entity("Fallen King Centaurs").get("id") == "fallen-king-centaurus", \
+        resolve_entity("Fallen King Centaurs")
+    # a name spanning categories picks by priority and surfaces the rest
+    amb = resolve_entity("aaru cobra")
+    assert amb.get("category") == "monsters", amb          # monsters outranks followers
+    assert any(c == "followers" for c, _i, _n in amb.get("alternatives", [])), amb
+    # nothing resolvable -> unresolved, no crash
+    assert resolve_entity("zzzptqx no such entity").get("unresolved"), resolve_entity("zzzptqx no such entity")
+
+    # --- research supergraph: builder ---
+    g = build_supergraph("Fallen King Centaurus")
+    ent = g["entities"][0]
+    assert ent["category"] == "raids" and not g["unresolved"], g
+    assert ent["facts"].get("hp") and ent["facts"].get("tier") == 10, ent["facts"]
+    rels = {r["field"]: r for r in ent["relations"]}
+    drops = rels["drops"]
+    assert drops["total"] >= 6 and not drops["partial"], drops
+    assert all(m["useable_by"] for m in drops["members"]), drops["members"]
+    assert all(m["stats"] for m in drops["members"]), "each drop must carry stats"
+    bow = next(m for m in drops["members"] if m["name"] == "Cretan Compound Bow")
+    assert "attack" in bow["stats"], bow
+    assert any("Crit" in e for e in bow["effects"]), bow["effects"]      # gives:T. Crit ↑
+    helm = next(m for m in drops["members"] if m["name"] == "Horned Corinthian Helmet")
+    assert any("Blind" in e for e in helm["effects"]), helm["effects"]   # immunities:Blind
+    assert rels["skills"]["total"] >= 6, rels["skills"]
+    # oversized relation -> capped + PARTIAL with the true total
+    capped = build_supergraph("Fallen King Centaurus", per_relation_cap=2)
+    cdrops = {r["field"]: r for r in capped["entities"][0]["relations"]}["drops"]
+    assert cdrops["partial"] and cdrops["total"] >= 6 and len(cdrops["members"]) == 2, cdrops
+    # multi-entity bundles both
+    two = build_supergraph(["Fallen King Centaurus", "Cretan Compound Bow"])
+    assert len(two["entities"]) == 2, two
+    # not in the dump -> unresolved, no crash
+    miss = build_supergraph("zzzptqx no such entity")
+    assert miss["unresolved"] == ["zzzptqx no such entity"] and not miss["entities"], miss
+    # malformed edge / missing target must not crash: a dangling id degrades to
+    # an empty leaf (display_name titleizes the unknown id, stats/effects empty)
+    dangling = _leaf("items", "does-not-exist")
+    assert dangling["stats"] == {} and dangling["effects"] == [] and dangling["name"], dangling
+    # effect code with no status entry falls back to the raw code
+    assert _effect_names({"gives": [{"name": "totally_made_up_code"}]}) == ["gives:totally_made_up_code"]
+    assert _effect_names({"immunities": [{"name": "blind"}]}) == ["immunities:Blind"]
+
+    # bestial_bond: the research summary + the query bond_bonus kind. Pick a
+    # follower (from live data, not hardcoded) that has a BONUS entry AND whose
+    # name resolves back to a follower, so the research assert is meaningful.
+    _fol = None
+    for _rid, _r in _codex()["main"]["followers"].items():
+        _bn = [e["name"] for tier in (_r.get("bestial_bond") or []) for e in tier
+               if isinstance(e, dict) and e.get("type") == "BONUS" and e.get("name")]
+        _nm = display_name("followers", _rid)
+        if _bn and resolve_entity(_nm).get("category") == "followers":
+            _fol = ({**_r, "id": _rid, "category": "followers"}, _bn[0], _nm)
+            break
+    assert _fol, "no follower with a BONUS bond entry resolves cleanly"
+    _rec, _bonus, _nm = _fol
+    assert _bond_summary(_rec) and any(s.startswith("tier ") for s in _bond_summary(_rec)), _bond_summary(_rec)
+    assert _eval_condition(_rec, {"kind": "bond_bonus", "field": _bonus})            # presence
+    assert not _eval_condition(_rec, {"kind": "bond_bonus", "field": "zzz_no_such_bonus"})
+    assert unresolvable_condition_fields([{"kind": "bond_bonus", "field": "zzz_no_such_bonus"}])
+    assert unresolvable_condition_fields([{"kind": "bond_bonus", "field": _bonus}]) == []
+    _sg = build_supergraph(_nm)
+    assert _sg["entities"] and _sg["entities"][0].get("bond"), "research must bundle a follower's bestial_bond"
+
+    # /update_codex safety: an empty/partial dump is REJECTED (never cached), a
+    # real one passes, and refresh drops EVERY derived cache (a missing one -
+    # _CLASS_ABILITY_INDEX - left class abilities stale after an update).
+    assert not _sane_codex({"main": {}}) and not _sane_codex({"main": {"items": {}}}) and not _sane_codex({})
+    assert _sane_codex(_codex()), "the live codex must pass its own sanity check"
+    assert not _sane_translations({"main": {"x": 1}, "stats": {}, "status": {}})  # empty stats
+    assert _sane_translations(_translations())
+    class_abilities("Gilgamesh")            # populates _CLASS_ABILITY_INDEX
+    assert _CLASS_ABILITY_INDEX is not None
+    _reset_memory()
+    assert _CLASS_ABILITY_INDEX is None and _NAME_INDEX is None and _codex_cache is None, \
+        "refresh must drop every derived cache or /update_codex serves stale data"
+
+    print(f"orna_aussies: all {len(cases)} tier-shorthand self-checks passed")
+
+
+if __name__ == "__main__":
+    _demo()

@@ -124,7 +124,7 @@ in `_stat_raw`, so no query path needs to know.
 A trimmed differential is **pinned in `orna_codex_db._demo`** - one case per
 condition kind plus those four regressions, each declaring whether it expects
 hits, since a case matching nothing in both paths agrees vacuously and would
-keep "passing" after the data shifted. Run `python3 orna_codex_db.py`.
+keep "passing" after the data shifted. Run `python3 -m orna.orna_codex_db`.
 
 ### One deliberate deviation
 

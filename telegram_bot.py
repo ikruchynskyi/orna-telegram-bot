@@ -18,20 +18,20 @@ from telegram import (
 )
 from telegram.ext import (ApplicationBuilder, ApplicationHandlerStop, CommandHandler, ContextTypes,
                           filters, MessageHandler, TypeHandler)
-from telegram_assess import build_assess_conversation
-from telegram_resources import build_reminder_callback_handler, build_resource_conversation
-from telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
-from telegram_amity import build_amity_choice_handler, build_amity_handler, build_iam_handler
-from telegram_remind import (build_remind_handler, build_tz_callback_handler,
+from bot.telegram_assess import build_assess_conversation
+from bot.telegram_resources import build_reminder_callback_handler, build_resource_conversation
+from bot.telegram_go import GO_ALLOWED_USER_IDS, build_go_callback_handler, build_go_continue_handler, build_go_handler
+from bot.telegram_amity import build_amity_choice_handler, build_amity_handler, build_iam_handler
+from bot.telegram_remind import (build_remind_handler, build_tz_callback_handler,
                              build_tz_edit_callback_handler, build_tz_input_handler,
                              reschedule_pending)
-from telegram_orna import (build_clarify_handler, build_chosen_inline_result_handler,
+from bot.telegram_orna import (build_clarify_handler, build_chosen_inline_result_handler,
                           build_inline_query_handler, build_orna_callback_handler, build_orna_handler,
                           build_update_codex_handler)
-from telegram_orna import _next_text, _today_text
-import usage_stats
-import telegram_announce
-import ollama_client
+from bot.telegram_orna import _next_text, _today_text
+from bot import usage_stats
+from bot import telegram_announce
+from llm import ollama_client
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

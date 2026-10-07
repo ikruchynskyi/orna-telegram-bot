@@ -69,7 +69,7 @@ fi
 # cache yet. Not fatal - connect() rebuilds on first use if this is skipped
 # (e.g. no network at install time).
 say "Building the codex database"
-if ! ( set -a; [[ -f .env ]] && . ./.env; set +a; "$VENV/bin/python" orna_codex_db.py ); then
+if ! ( set -a; [[ -f .env ]] && . ./.env; set +a; "$VENV/bin/python" -m orna.orna_codex_db ); then
   warn "Codex DB build failed (no network?) - it will be built on first use"
 fi
 
@@ -107,7 +107,7 @@ if not os.path.exists(ytdlp):
     else:
         print("  yt-dlp not found - /go's video pipeline will not work")
 try:
-    import orna_codex_db as db
+    from orna import orna_codex_db as db
     n = db.run_sql("SELECT count(*) FROM records")["rows"][0][0]
     print(f"  codex database: {n} records")
     if n < 1000:

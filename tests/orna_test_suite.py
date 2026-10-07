@@ -90,17 +90,17 @@ if not os.environ.get("SHEETS_API_KEY"):
 os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
-import orna_assess                      # noqa: E402
-import orna_echo                        # noqa: E402
-import orna_pinecone                    # noqa: E402
-import orna_discord_search              # noqa: E402
+from orna import orna_assess                      # noqa: E402
+from knowledge import orna_echo                        # noqa: E402
+from knowledge import orna_pinecone                    # noqa: E402
+from knowledge import orna_discord_search              # noqa: E402
 from scrapers import orna_scrape_questline  # noqa: E402
-import orna_aussies                     # noqa: E402
-import orna_guides                      # noqa: E402
-import orna_knowledge                   # noqa: E402
-import orna_mechanics                   # noqa: E402
-import orna_towers                      # noqa: E402
-import telegram_orna as T               # noqa: E402
+from orna import orna_aussies                     # noqa: E402
+from knowledge import orna_guides                      # noqa: E402
+from knowledge import orna_knowledge                   # noqa: E402
+from knowledge import orna_mechanics                   # noqa: E402
+from orna import orna_towers                      # noqa: E402
+from bot import telegram_orna as T               # noqa: E402
 
 CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 BASELINE_PATH = os.environ.get("BASELINE") or os.path.join(REPO_ROOT, "tests", "orna_test_baseline.json")
@@ -148,7 +148,7 @@ def _check_bogus_field_is_reported() -> None:
 def _check_ocr_name_candidates() -> None:
     """OCR garbage above the real title must not be the only name searched,
     and a codex hit that doesn't resemble the searched line is rejected."""
-    import telegram_assess as ta
+    from bot import telegram_assess as ta
     c = ta._extract_name_candidates("Inventory\nWe Eee ee\nBalor Sword\nATTACK 120")
     assert "Balor Sword" in c, c
     assert ta._name_matches("Ornate Balor Sword", "Balor Sword")
@@ -400,7 +400,7 @@ def _check_ban_guard() -> None:
     import tempfile
 
     import telegram_bot
-    import usage_stats
+    from bot import usage_stats
     from telegram.ext import ApplicationHandlerStop
 
     victim = "999000111"
@@ -458,9 +458,9 @@ TIER0 = [
     ("pinecone-chunking", lambda: orna_pinecone._demo()),
     ("discord-harvest", lambda: orna_discord_search._demo()),
     ("questline-parse", lambda: orna_scrape_questline._demo()),
-    ("ollama-cloud-limits", lambda: __import__("ollama_client")._demo()),
-    ("keyword-index", lambda: __import__("orna_textindex")._demo()),
-    ("reddit-search", lambda: __import__("orna_reddit_search")._demo()),
+    ("ollama-cloud-limits", lambda: __import__("importlib").import_module("llm.ollama_client")._demo()),
+    ("keyword-index", lambda: __import__("importlib").import_module("knowledge.orna_textindex")._demo()),
+    ("reddit-search", lambda: __import__("importlib").import_module("knowledge.orna_reddit_search")._demo()),
     ("retrieval-benchmark", _check_retrieval_benchmark),
     ("model-usage-unit", _check_model_usage_unit),
     ("ban-guard", _check_ban_guard),

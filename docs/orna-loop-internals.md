@@ -168,7 +168,7 @@ structurally can't recover from.
   section's genuine header, which carries emoji labels (`👺 Anguish`, long
   in `len()` terms) and a stray sheet note (`Price Formulae, for those
   interested:`) in its LAST cell. Checked against all 16 sections before
-  and after: only the intended one changed. `python3 orna_knowledge.py`
+  and after: only the intended one changed. `python3 -m knowledge.orna_knowledge`
   now pins this.
 - **The corpus spells it `Vulcan's Brew`, the players write "Volcan's
   Brew"** — `search`'s fuzzy-correction pass does bridge that, but a
@@ -192,7 +192,7 @@ structurally can't recover from.
   and it fixes every caller rather than one tool. Verified: the exact
   space-separated query now returns all four subjects with the column
   header attached; single-subject queries still take the exact-substring
-  path unchanged. Pinned in `python3 orna_knowledge.py`.
+  path unchanged. Pinned in `python3 -m knowledge.orna_knowledge`.
 - **Bonus stacking is multiplicative and the product is a MULTIPLIER, not
   a percentage — both halves were got wrong live, in the same session.**
   `build_optimize` has always been the canonical implementation

@@ -4,7 +4,7 @@ One `## Tier N - Quest M: ...` section per quest, in the `=== Title (url) ===`
 format orna_echo's section reader parses (same as orna_ornabook.txt), so it is
 searchable by grep and by Pinecone ("questline" namespace) with no new reader.
 
-Run: python3 -m scrapers.orna_scrape_questline && python3 orna_pinecone.py questline
+Run: python3 -m scrapers.orna_scrape_questline && python3 -m knowledge.orna_pinecone questline
 """
 import paths
 import re
@@ -44,7 +44,7 @@ def _demo() -> None:
     doc = "﻿Intro line\nTier 1 Quests\n\nQuest 1: Samson - Defeat Rat (2)\nNew: easy.\n"
     body = build(doc)
     assert "## Tier 1 - Quest 1: Samson - Defeat Rat (2)\nNew: easy." in body, body
-    import orna_echo
+    from knowledge import orna_echo
     secs = orna_echo._parse(body)
     assert [s.heading for s in secs] == ["", "Tier 1 - Quest 1: Samson - Defeat Rat (2)"], secs
 

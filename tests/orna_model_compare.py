@@ -48,9 +48,9 @@ if not os.environ.get("SHEETS_API_KEY"):
 os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
-import ollama_client            # noqa: E402  - to clear the cloud circuit breaker
+from llm import ollama_client            # noqa: E402  - to clear the cloud circuit breaker
 from tests import orna_test_suite as S      # noqa: E402  - cases, graders and FakeMessage
-import telegram_orna as T        # noqa: E402
+from bot import telegram_orna as T        # noqa: E402
 
 RESULTS_PATH = os.path.join(REPO_ROOT, "data", "cache", "orna_model_compare.json")
 # What the loop posts to the user when a step's model call dies outright. Such a

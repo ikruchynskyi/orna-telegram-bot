@@ -97,7 +97,7 @@ Reproduce the failure for real. Two flavors, cheapest first:
    `class_guide` excerpt picker:
 
    ```python
-   import orna_guides as g
+   from knowledge import orna_guides as g
    ex = g.guide_excerpt(g.read_guide("heretic"), "omniflask raid", 6000)
    for kw in ["Omniflask Weakness", "Omniflask Raiding", "--- Raids ---"]:
        print(kw, "->", kw in ex)
@@ -173,7 +173,7 @@ reveal the next.
 
 Do not claim success until you have evidence:
 
-1. Run the deterministic self-check: `python3 orna_guides.py` (or the
+1. Run the deterministic self-check: `python3 -m knowledge.orna_guides` (or the
    relevant module) - must print its "all checks passed" line.
 2. Confirm the module still imports/compiles: `python3 -m py_compile
    telegram_orna.py`.

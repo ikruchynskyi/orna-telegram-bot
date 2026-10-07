@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Dict
 
-from orna_codex import fetch_codex_json
+from orna.orna_codex import fetch_codex_json
 
 OUTPUT_PATH = paths.DATA / "orna_material_names_uk.json"
 # Every item (2,773 in 2026-10): potions, keys, tokens, gear - what tool cards

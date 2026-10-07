@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-import ollama_client
+from llm import ollama_client
 import telegram_bot
-import usage_stats
+from bot import usage_stats
 
 
 class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
