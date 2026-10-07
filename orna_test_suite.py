@@ -93,6 +93,8 @@ os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 import orna_assess                      # noqa: E402
 import orna_echo                        # noqa: E402
 import orna_pinecone                    # noqa: E402
+import orna_discord_search              # noqa: E402
+import orna_scrape_questline            # noqa: E402
 import orna_aussies                     # noqa: E402
 import orna_guides                      # noqa: E402
 import orna_knowledge                   # noqa: E402
@@ -335,6 +337,50 @@ def _check_research_supergraph() -> None:
     assert "research" in T._ACTIONS and "research" in [t["function"]["name"] for t in T._STEP_TOOLS]
 
 
+# Retrieval benchmark (needs Pinecone, no LLM): does knowledge_search hand the
+# model the passage that ANSWERS the question? Half the questions are
+# paraphrased the way players ask, not in the corpus's own words. Each case is
+# (question, any-of: strings only the answering passage contains). Measured
+# 2026-10-06 when Pinecone replaced grep: 11/12 (grep 8/12). The known miss is
+# "pet keeps dying" (scores too flat to clear the floor) - hence the pass mark.
+_RETRIEVAL_CASES = [
+    ("ward capacity formula", ["Ward Capacity: The Base Formula"]),
+    ("dual wield bonus formula", ["(1 + 0.65 * B)^2"]),
+    ("are summons followers", ["Are summons considered as followers"]),
+    ("factions element damage", ["=== Elements and factions"]),
+    ("dungeon cooldowns", ["Dungeon Guide: Modes, Keys, Cooldowns"]),
+    ("if I hold two weapons with exp boost do I get double", ["(1 + 0.65 * B)^2"]),
+    ("my pet keeps dying how do I keep it alive", ["Followers and Bestial Bond"]),
+    ("what decides how much damage I deal", ["Combat: the universal damage formula"]),
+    ("how long until I can run a dungeon again", ["Dungeon Guide: Modes, Keys, Cooldowns"]),
+    ("is a summon the same thing as a pet", ["Are summons considered as followers"]),
+    ("does gear quality matter more than its level", ["=== Item quality", "Does gear quality really matter"]),
+    ("how much stronger does a weapon get when I upgrade it", ["=== Upgrading and forging"]),
+    ("how do I finish the Samson goblin lord quest", ["Goblin Fortress"]),
+]
+_RETRIEVAL_PASS = len(_RETRIEVAL_CASES) - 2
+_RETRIEVAL_MEDIAN_MAX = 20000
+
+
+def _check_retrieval_benchmark() -> None:
+    if not T.orna_pinecone.enabled():
+        print("  (skipped: PINECONE_API_KEY not set)")
+        return
+    hits, sizes, missed = 0, [], []
+    for question, facts in _RETRIEVAL_CASES:
+        out = asyncio.run(T._gather_knowledge(question))
+        sizes.append(len(out))
+        if any(f in out for f in facts):
+            hits += 1
+        else:
+            missed.append(question)
+    median = sorted(sizes)[len(sizes) // 2]
+    print(f"  retrieval: {hits}/{len(_RETRIEVAL_CASES)} answering passages found, median observation "
+          f"{median} chars; missed: {missed}")
+    assert hits >= _RETRIEVAL_PASS, f"retrieval regressed: {hits}/{len(_RETRIEVAL_CASES)}, missed {missed}"
+    assert median <= _RETRIEVAL_MEDIAN_MAX, f"observations grew: median {median} chars"
+
+
 def _check_ban_guard() -> None:
     """Ban/unban round-trip, persistence, and the pre-dispatch guard.
 
@@ -402,6 +448,10 @@ TIER0 = [
     ("research-supergraph", _check_research_supergraph),
     ("echo-corpus", lambda: orna_echo._demo()),
     ("pinecone-chunking", lambda: orna_pinecone._demo()),
+    ("discord-harvest", lambda: orna_discord_search._demo()),
+    ("questline-parse", lambda: orna_scrape_questline._demo()),
+    ("ollama-cloud-limits", lambda: __import__("ollama_client")._demo()),
+    ("retrieval-benchmark", _check_retrieval_benchmark),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
 ]
@@ -563,6 +613,19 @@ def build_cases() -> list:
         # revision of the guide does not read as a regression.
         Case("ward-formula", 2, "how is ward capacity calculated in orna?",
              Expect(all_of=[ward_formula], tools_all=["knowledge_search"])),
+
+        # The questline guide (orna_scrape_questline.py) is the only source that
+        # says HOW to finish a story quest; the guide's two routes for this one
+        # are a Goblin Fortress dungeon or a Tier 1 boss gauntlet.
+        Case("questline", 2, "how do I complete Samson's quest to defeat a Goblin Lord?",
+             Expect(final_any_of=[["fortress", "gauntlet"]], tools_any=["knowledge_search", "research"])),
+
+        # An image-only Discord post (a chart with no message text) answering
+        # through its vision transcription - the whole point of orna_discord_
+        # search's image pass. Expected word read from that transcription.
+        *([Case("image-knowledge", 2, "how does the Prometheus sigil work?",
+                Expect(final_any_of=[["burn"]], tools_any=["knowledge_search", "research"]))]
+          if "Acts like Burning" in json.dumps(orna_discord_search._load_json("images.json", {})) else []),
 
         # --------------------------- tier 3: research and judgement --------
         # _STRATEGY_RULE: a boss's elemental immunities are in NO structured

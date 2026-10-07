@@ -49,6 +49,12 @@ Data sources (each = reader module + cache or committed file + scraper):
   `orna_guides` + `orna_guide_*.txt` back `class_guide`.
 - `orna_pinecone.py` - semantic search over those text corpora (one namespace each; `PINECONE_API_KEY`).
   Grep scorers are the fallback when unset/failing. Re-index after re-scraping: `python3 orna_pinecone.py [ns ...]`.
+  Also feeds the PLAN call a short primer (`_plan_primer`).
+- `orna_questline.txt` (`orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
+- `orna_discord_search.py` - Discord through a Selenium Chrome logged in as the user (`.discord_chrome/`;
+  user-account automation, ToS risk accepted by the user). `harvest`: FAQ/guide channels + pinned posts,
+  images transcribed by a vision model → `.discord_cache/` → `discord` namespace. Live `discord_search`
+  action: last resort, refused in code until `knowledge_search` AND `web_search` ran.
 - `orna_material_names_uk.*` - static EN↔UK material names.
 
 ## `/orna` loop - what you need to know to change it
@@ -109,6 +115,8 @@ Data sources (each = reader module + cache or committed file + scraper):
 ## LLM conventions
 
 - All calls go through `ollama_client.chat_json` (`think: True` always - `False` breaks gpt-oss).
+- Ollama Cloud caps concurrent requests per account: `OLLAMA_CLOUD_CONCURRENCY` (process-wide), 429 is
+  retried then `OllamaBusy` (local for that call, never parks the cloud). Batch jobs share the cap.
 - Check a cloud model's capabilities via `POST https://ollama.com/api/show`, don't guess.
 - Local model is non-deterministic: one green run proves nothing; verify over N runs.
 

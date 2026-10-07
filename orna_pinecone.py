@@ -45,7 +45,7 @@ BATCH = 96              # upsert_records' per-request record limit
 BATCH_CHARS = 50_000
 TIMEOUT = 15.0
 
-NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit")
+NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline")
 
 _host: Optional[str] = None
 
@@ -111,10 +111,10 @@ def _units(namespace: str) -> list:
         import orna_mechanics
         return [(f"=== {t} ===", b.split("\n"), orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
                 for t, b in orna_mechanics._load()]
-    if namespace in ("echo", "ornabook"):
+    if namespace in ("echo", "ornabook", "questline"):
         import orna_echo
         path = orna_echo.CORPUS_PATH if namespace == "echo" else \
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_ornabook.txt")
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), f"orna_{namespace}.txt")
         return [(f"[{s.label}]", s.body.split("\n"), s.label[:60], s.url) for s in orna_echo._load(path)]
     if namespace == "qa":
         import orna_qa
@@ -123,6 +123,9 @@ def _units(namespace: str) -> list:
     if namespace == "reddit":
         import orna_reddit
         return [(e.head, e.body.split("\n"), e.head[:60], e.url) for e in orna_reddit._load()]
+    if namespace == "discord":
+        import orna_discord_search
+        return orna_discord_search.units()
     raise ValueError(f"unknown namespace {namespace!r}")
 
 
@@ -210,7 +213,7 @@ def _demo() -> None:
     assert all(c.startswith("[T]\nh") for c in chunks)          # header repeats on every chunk
     for ns in NAMESPACES:                                        # every corpus parses to records
         recs = records(ns)
-        assert recs, ns
+        assert recs or ns == "discord", ns       # discord is a gitignored harvest, absent on a fresh checkout
         assert len({r["_id"] for r in recs}) == len(recs), f"{ns}: duplicate ids"
     print("orna_pinecone: _demo ok")
 

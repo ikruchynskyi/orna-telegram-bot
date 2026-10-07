@@ -4,6 +4,7 @@ python-dotenv==1.2.2
 requests==2.32.5
 beautifulsoup4==4.14.3
 pytesseract==0.3.13
+selenium==4.50.0
 Pillow==12.1.1
 
 # Deliberately UNPINNED, unlike everything above: yt-dlp breaks when YouTube

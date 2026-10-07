@@ -83,6 +83,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
 import orna_echo
+import orna_discord_search
 import orna_pinecone
 import orna_qa
 import orna_classes
@@ -143,7 +144,7 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
-            "knowledge_search", "monuments", "releases", "web_search", "ask", "finish")
+            "knowledge_search", "monuments", "releases", "web_search", "discord_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -2293,7 +2294,7 @@ _KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question
 
 # Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
 # more of them; the rest are whole sections/threads/comments.
-_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6}
+_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4}
 # Keep only hits within this of the query's BEST score across all corpora.
 # Measured 2026-10-06: without it every query filled the 40k cap, and the cap
 # drops blocks from the END - so "are summons followers" lost its best hit (a
@@ -2487,6 +2488,22 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "table cell, kept so every number stays under its own column. It is community-written: the "
             "codex and releases() outrank it for any number they also state):\n"
             + _truncate_lines(book, _KN_BLOCK_MAX, _KN_TRIM))
+    # Konq's Unfelled questline guide, one section per story quest (orna_scrape_questline.py).
+    try:
+        quests = _vec_text("questline") if vec is not None else \
+            await asyncio.to_thread(orna_echo.search_text, query, 4, _QUESTLINE_PATH)
+    except Exception as e:
+        logger.warning("orna: questline lookup failed for %r (%s)", query[:60], e)
+        quests = ""
+    if quests:
+        if vec is None and sources is not None:
+            for sec in await asyncio.to_thread(orna_echo.search, query, 4, _QUESTLINE_PATH):
+                _add_source(sources, sec.label[:60], sec.url)
+        blocks.append(
+            "STORY QUESTLINE GUIDE (Konq's walkthrough of the Unfelled story questline, written April 2022: each "
+            "quest's giver, objective and where/how to complete it, for new and returning players. Quest objectives "
+            "are stable, but monster locations and gear advice may predate later patches):\n"
+            + _truncate_lines(quests, _KN_BLOCK_MAX, _KN_TRIM))
     # Player Q&A, indexed by the QUESTION rather than by an answer's wording -
     # the one axis none of the other corpora have, and the only source carrying
     # a CORRECTED PREMISE ("those are summons, not followers").
@@ -2512,6 +2529,15 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "releases() before quoting a figure that matters):\n"
             + _truncate_lines(reddit, _KN_BLOCK_MAX, _KN_TRIM)
         )
+    # Curated Discord posts (orna_discord_search): FAQ/guide channels and pinned
+    # messages, images transcribed. Pinecone-only - there is no grep reader.
+    discord = _vec_text("discord") if vec is not None else ""
+    if discord:
+        blocks.append(
+            "DISCORD GUIDES / PINNED POSTS (players' FAQ and guide channels and pinned class/strategy posts on the "
+            "official Orna server and Orna Legends; community-written. Lines after \"[image ...]\" are a machine "
+            "transcription of a chart or screenshot - quote its numbers carefully, and the codex and releases() "
+            "outrank it):\n" + _truncate_lines(discord, _KN_BLOCK_MAX, _KN_TRIM))
     if not blocks:
         return ""
     # TOTAL cap, not just a per-block one. Each block was capped individually
@@ -2540,6 +2566,7 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
 # The Ornabook corpus, read by orna_echo's section reader (see
 # orna_scrape_ornabook.py for why the format is shared, not duplicated).
 _ORNABOOK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_ornabook.txt")
+_QUESTLINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_questline.txt")
 
 def _monument_line(group: list) -> str:
     """One floor of one monument: its matched cells. A category cell is shown
@@ -2727,6 +2754,45 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
         return "knowledge_search needs a query in action_input"
     out = await _gather_knowledge(query, sources)
     return out or f"no knowledge-base matches for {query!r} - try web_search instead"
+
+
+# discord_search is a LAST resort, gated in code (a prompt rule is ~70-90%):
+# each call drives a real Chrome on the user's Discord account (ban risk, see
+# orna_discord_search), takes 10-20s, and returns raw player chat. Measured
+# 2026-10-06: keyword search mostly returns people ASKING the question - worth
+# it only once the curated corpora and the web both came up short.
+_DISCORD_PREREQS = ("knowledge_search", "web_search")
+
+
+async def _run_discord_search_tool(query: str, sources: Optional[list] = None, session=None) -> str:
+    if not query:
+        return "discord_search needs a query in action_input"
+    if not orna_discord_search.enabled():
+        return "discord_search is not available here (no logged-in Discord profile) - finish with what you have."
+    tried = {json.loads(sig)[0] for sig in (session.seen_calls if session else {})}
+    missing = [t for t in _DISCORD_PREREQS if t not in tried]
+    if missing:
+        return (f"discord_search REFUSED: it is the last resort, for when the curated sources and the web did not "
+                f"give an answer you are confident in. Call {' and '.join(missing)} for this first.")
+    try:
+        hits = await asyncio.wait_for(asyncio.to_thread(orna_discord_search.search, query), 120)
+    except Exception as e:
+        logger.warning("orna: discord_search failed for %r", query[:60], exc_info=True)
+        return f"discord_search did NOT run ({e}). Finish with what you have and say the answer is uncertain."
+    if not hits:
+        return (f"0 Discord messages matched {query!r}, even after cutting it down to "
+                f"{orna_discord_search._variants(query)[-1]!r} - full-text search, so the subject may be named "
+                "differently in chat (an abbreviation or a nickname); otherwise finish, saying no source covers it.")
+    if sources is not None:
+        for h in hits[:3]:
+            _add_source(sources, f"Discord {h['guild']} ({h['date']})", h["url"])
+    return ("DISCORD CHAT (keyword search of player chat on the official Orna server and Orna Legends, most relevant "
+            "first. Each hit (marked ►) comes with the 10 messages before and after it in that channel - the "
+            "matched message is often the QUESTION and the answer is in the replies around it. "
+            "UNVERIFIED: anyone can post, many hits are people ASKING rather than answering, and old messages "
+            "may predate a patch. Use a message only if it actually answers the question, prefer what several "
+            "messages agree on, and say it comes from player chat):\n"
+            + "\n\n".join(orna_discord_search.format_conversation(h) for h in hits))
 
 
 # Gear stats ADD together; the class/AL/PVP layer multiplies on top. Keeping
@@ -3402,6 +3468,9 @@ _TOOLS_TEXT = (
     "PLUS a community-verified (2026) reference on how each core SYSTEM works (factions, Ascension, item "
     "quality/forging, adornment slots, Wild Towers, flasks, kingdoms, followers) - use it for \"how does X "
     "work\" conceptual questions, not just item lookups, "
+    "PLUS the STORY QUESTLINE walkthrough (every Unfelled quest by tier: giver, objective, where to find the "
+    "monster/item - use it for \"how do I finish quest X\" / \"where is <quest monster>\"), and curated "
+    "DISCORD guide/FAQ posts and pinned class posts, including transcribed charts and tier lists, "
     "PLUS what Orna's own developers (u/OrnaOdie, u/Widogeist) have explained on reddit, which is where hidden "
     "mechanics, exact formulas and \"why it actually works like that\" answers live. A DEVELOPER COMMENTS block "
     "in the result outranks the sheets above it, but can be years old - check releases() before quoting a number "
@@ -3437,6 +3506,12 @@ _TOOLS_TEXT = (
     "briefly mention a source if one was genuinely useful, and if nothing useful turns up, say so honestly rather "
     "than guessing. One follow-up web_search with a refined query is fine if the first didn't help; don't loop on "
     "it beyond that.\n"
+    "- discord_search(action_input=<1-3 general English keywords>): FULL-TEXT (not semantic) search of PLAYER CHAT on the official "
+    "Orna Discord and Orna Legends - the LAST resort, only after knowledge_search AND web_search both failed to give "
+    "an answer you are confident in (it refuses otherwise). Every word must appear in a message, so give the "
+    "subject's name and little else (\"prometheus sigil\", \"omniflask\" - never a sentence or a question); it "
+    "drops filler words and retries more generally by itself. Unverified chat: use only messages that actually "
+    "answer, and say the answer comes from player chat.\n"
     "- knowledge_search, web_search, AND class_guide - CRITICAL: only state a specific detail (a follower/spell/"
     "item name, an exact number, a named mechanic, a build/gear recommendation) if it's ACTUALLY present in what "
     "came back - never invent a plausible-sounding specific to make the answer feel more complete, and never fill "
@@ -4524,6 +4599,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_releases_tool(message, action_input, sources)
         if action == "web_search":
             return await _run_web_search_tool(message, action_input, sources)
+        if action == "discord_search":
+            return await _run_discord_search_tool(action_input, sources, session)
         if action == "calculate":
             return await _run_calculate_tool(message, action_input)
         if action == "assess":
@@ -4604,6 +4681,7 @@ _ACTION_LABELS = {
     "knowledge_search": "📚 Шукаю в базі знань…",
     "releases": "🆕 Перевіряю патч-ноти…",
     "web_search": "🌐 Шукаю в інтернеті…",
+    "discord_search": "💬 Шукаю в Discord…",
     "research": "🔗 Збираю дані з кодексу…",
     "estimate_stats": "📊 Рахую характеристики…",
 }
@@ -4777,6 +4855,25 @@ def _looks_complex_request(text: str) -> bool:
     return bool(_COMPLEX_KEYWORDS_RE.search(text))
 
 
+# The PLAN call's game-knowledge primer: a planner that does not know how a
+# mechanic works plans the wrong lookups (e.g. searching the codex for a stat
+# only a guide formula has). Small on purpose - background for choosing tools,
+# not the evidence the answer is built from.
+_PLAN_PRIMER_HITS = 5
+_PLAN_PRIMER_CHARS = 3000
+
+
+async def _plan_primer(user_text: str) -> str:
+    """The best Pinecone hits for the request across every corpus, best first,
+    capped. "" when Pinecone is off, failed, or nothing clears the score floor."""
+    vec = await _vector_knowledge(user_text)
+    if not vec:
+        return ""
+    hits = sorted((h for hs in vec.values() for h in hs), key=lambda h: -h["score"])[:_PLAN_PRIMER_HITS]
+    return _truncate_lines("\n\n".join(h["text"] for h in hits), _PLAN_PRIMER_CHARS,
+                           "\n[… primer trimmed …]")
+
+
 async def _call_plan_model(user_text: str) -> list[str]:
     """The PLAN phase: ONE separate model call, before any tool runs, with
     nothing to do but plan - list the constraints the request states and the
@@ -4785,11 +4882,15 @@ async def _call_plan_model(user_text: str) -> list[str]:
     MAX_REVIEW_ROUNDS comment for why that lever is weak), but it must never
     block or slow down the request it can't help: any failure here just
     returns [] and the loop proceeds exactly as it did before this existed."""
+    primer = await _plan_primer(user_text)
     prompt = (
         f"A user asked (about the mobile game Orna): {user_text!r}\n\n"
         "Before any tool call is made, write a short PLAN for answering this with the tools below - do NOT "
         "answer the question itself here, only plan.\n\n"
-        f"{_TOOLS_TEXT}\n"
+        + ("GAME BACKGROUND (community reference passages that matched the request - use them to understand "
+           "the mechanics involved and so choose the RIGHT tools and lookups; they are not the answer, every "
+           "fact in the final answer still has to come from a tool call):\n" + primer + "\n\n" if primer else "")
+        + f"{_TOOLS_TEXT}\n"
         'Reply with strict JSON only: {"constraints": ["<every explicit constraint stated - items, quality, '
         'level, class, spec, Ascension Level, PVE/PVP, slots, quantities, language, ...>"], '
         '"plan": ["<step 1: which tool, and why>", "<step 2: ...>", ...]}'
@@ -6232,6 +6333,54 @@ def _demo() -> None:
     kg = asyncio.run(_gather_knowledge("factions"))
     assert "GAME MECHANICS" in kg, kg[:200]                 # mechanics corpus still wired
     assert asyncio.run(_gather_knowledge("xyzzy plugh frobnicate")) == ""   # honest empty
+
+    # --- discord_search is gated in code: refused until knowledge_search AND web_search ran ---
+    class _GateSess:
+        seen_calls = {json.dumps(["knowledge_search", "x", {}]): "obs"}
+    _real_enabled = orna_discord_search.enabled
+    orna_discord_search.enabled = lambda: True
+    try:
+        gated = asyncio.run(_run_discord_search_tool("prometheus sigil", [], _GateSess()))
+    finally:
+        orna_discord_search.enabled = _real_enabled
+    assert gated.startswith("discord_search REFUSED") and "web_search" in gated, gated
+    # ...and runs once both have: every hit arrives as a conversation, cited.
+    _GateSess.seen_calls = {json.dumps(["knowledge_search", "x", {}]): "o", json.dumps(["web_search", "x", {}]): "o"}
+    _real_search = orna_discord_search.search
+    _hit = {"id": "2", "guild": "Orna Legends", "date": "2026-01-01", "text": "what does it do?",
+            "url": "https://discord.com/channels/1/2/3"}
+    _hit["context"] = [_hit, {"id": "3", "text": "it doubles the buff"}]
+    orna_discord_search.enabled = lambda: True
+    try:
+        orna_discord_search.search = lambda q: [_hit]
+        cited: list = []
+        opened = asyncio.run(_run_discord_search_tool("prometheus sigil", cited, _GateSess()))
+        assert "► what does it do?" in opened and "it doubles the buff" in opened, opened
+        assert cited and cited[0][1] == _hit["url"], cited
+        orna_discord_search.search = lambda q: []
+        empty = asyncio.run(_run_discord_search_tool("How does the Prometheus sigil work?", [], _GateSess()))
+        assert empty.startswith("0 Discord messages") and "'prometheus'" in empty, empty   # says what it widened to
+    finally:
+        orna_discord_search.search = _real_search
+        orna_discord_search.enabled = _real_enabled
+
+    # --- PLAN primer: empty without Pinecone, capped with it ---
+    _real_pc = orna_pinecone.enabled
+    orna_pinecone.enabled = lambda: False
+    try:
+        assert asyncio.run(_plan_primer("how does ward work")) == ""
+    finally:
+        orna_pinecone.enabled = _real_pc
+    if orna_pinecone.enabled():
+        primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))
+        assert primer and len(primer) <= _PLAN_PRIMER_CHARS + 40, len(primer)
+
+    # --- the questline guide and the Discord harvest are wired into knowledge_search ---
+    ql = asyncio.run(_gather_knowledge("Samson quest defeat a Goblin Lord"))
+    assert "STORY QUESTLINE GUIDE" in ql and "Goblin Fortress" in ql, ql[:300]
+    if orna_pinecone.enabled() and orna_discord_search.units():
+        dc = asyncio.run(_gather_knowledge("Hallowed Crucible gear passives"))
+        assert "DISCORD GUIDES / PINNED POSTS" in dc, dc[:300]
 
     # --- research tool: wiring + one-call observation ---
     # Self-contained stubs (the _Spy/_Sess names above are shadowed by later

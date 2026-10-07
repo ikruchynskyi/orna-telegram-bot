@@ -27,9 +27,11 @@ telegram_bot.py's error handler for the other half of this fix.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -57,6 +59,18 @@ DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
 # requests in the same window - go straight to local at full speed; the next
 # call after the cooldown probes cloud again, and any success clears it.
 CLOUD_COOLDOWN_SECONDS = 300
+# Ollama Cloud caps CONCURRENT requests per account (a 429 "too many concurrent
+# requests"), and every caller shares it - the bot, and any batch job such as
+# orna_discord_search's image transcription. Live 2026-10-06: a 4-worker
+# transcription job made every other call 429. So: a process-wide cap on
+# in-flight cloud calls, a short retry on 429, and a 429 that outlasts the
+# retries is OllamaBusy - never a reason to park the cloud for everyone.
+# A threading semaphore, not asyncio's: batch jobs call from several threads,
+# each with its own event loop, and an asyncio.Semaphore binds to one loop.
+CLOUD_CONCURRENCY = int(os.environ.get("OLLAMA_CLOUD_CONCURRENCY", "3"))
+_cloud_slots = threading.BoundedSemaphore(CLOUD_CONCURRENCY)
+_SLOT_WAIT_SECONDS = 30
+_BUSY_RETRY_DELAYS = (2, 5, 10)
 _cloud_down_until = 0.0
 _cloud_model_override: Optional[str] = None
 
@@ -112,6 +126,13 @@ def _is_no_vision_error(body: str) -> bool:
     and reading the body rather than trusting the existing check."""
     low = body.lower()
     return "multimodal" in low or ("image" in low and "support" in low)
+
+
+class OllamaBusy(OllamaError):
+    """Ollama Cloud kept answering 429 (too many concurrent requests on the
+    account) through every retry, or no local slot freed up in time. The
+    service is UP - it is just full - so this falls back to local for the one
+    call and, unlike OllamaUnavailable, never parks the cloud leg."""
 
 
 class OllamaUnavailable(OllamaError):
@@ -249,10 +270,25 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
     # byte-identical to before - same reason `tools` is only added when truthy.
     if _SAMPLING_OPTIONS:
         payload["options"] = dict(_SAMPLING_OPTIONS)
-    usage_stats.record_llm_call(model, "cloud" if host == OLLAMA_CLOUD_HOST else "local")
+    cloud = host == OLLAMA_CLOUD_HOST
+    usage_stats.record_llm_call(model, "cloud" if cloud else "local")
+    if cloud:
+        deadline = time.monotonic() + _SLOT_WAIT_SECONDS
+        while not _cloud_slots.acquire(blocking=False):
+            if time.monotonic() > deadline:
+                raise OllamaBusy(f"no free Ollama Cloud slot in {_SLOT_WAIT_SECONDS}s "
+                                 f"(OLLAMA_CLOUD_CONCURRENCY={CLOUD_CONCURRENCY})")
+            await asyncio.sleep(0.2)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(f"{host}/api/chat", json=payload, headers=headers or {})
+            for delay in (*_BUSY_RETRY_DELAYS, None):
+                resp = await client.post(f"{host}/api/chat", json=payload, headers=headers or {})
+                if resp.status_code != 429:
+                    break
+                if delay is None:
+                    raise OllamaBusy(f"{model}: still 429 after {len(_BUSY_RETRY_DELAYS)} retries: {resp.text[:200]}")
+                logger.info("ollama_client: %s busy (429), retrying in %ds", model, delay)
+                await asyncio.sleep(delay)
             if resp.status_code == 400 and _is_no_vision_error(resp.text):
                 raise UnsupportedMultimodal(resp.text[:300])
             resp.raise_for_status()
@@ -265,6 +301,9 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
             content = msg.get("content") or ""
     except httpx.HTTPError as e:
         raise OllamaUnavailable(f"Ollama request failed: {e}") from e
+    finally:
+        if cloud:
+            _cloud_slots.release()
     if not content.strip():
         recovered = _from_tool_calls(msg)
         if recovered is not None:
@@ -352,6 +391,8 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
             _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
             logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
                            e, CLOUD_COOLDOWN_SECONDS)
+        elif isinstance(e, OllamaBusy):
+            logger.warning("ollama_client: Ollama Cloud busy (%s), local for this call only", e)
         else:
             logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
 
@@ -370,6 +411,44 @@ async def _local_leg(local_host: str, local_model: str, messages: list[dict],
         if drop_images(messages):
             return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
         raise
+
+
+def _demo_cloud_limits() -> None:
+    """The concurrency cap and the 429 retry, through the real chat_json
+    against an in-process fake server (httpx.MockTransport)."""
+    global _cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS
+    import asyncio as _aio
+    real_client, saved = httpx.AsyncClient, (_cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS)
+    replies: list = []
+
+    def handler(_req):
+        return httpx.Response(replies.pop(0), json={"message": {"content": '{"ok": 1}'}})
+
+    httpx.AsyncClient = lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS = (0, 0), 0
+    call = lambda: _aio.run(chat_json(OLLAMA_CLOUD_HOST, "m", [{"role": "user", "content": "x"}]))
+    try:
+        replies[:] = [429, 429, 200]                    # busy twice, then answers
+        assert call() == {"ok": 1} and not replies
+        replies[:] = [429, 429, 429]                    # busy through every retry
+        try:
+            call()
+            raise AssertionError("expected OllamaBusy")
+        except OllamaBusy:
+            pass
+        assert not isinstance(OllamaBusy("x"), OllamaUnavailable)   # busy never parks the cloud
+        assert _cloud_slots.acquire(blocking=False)     # the slot was released after the failure
+        _cloud_slots.release()
+        _cloud_slots = threading.BoundedSemaphore(1)
+        _cloud_slots.acquire()                          # every slot taken
+        try:
+            call()
+            raise AssertionError("expected OllamaBusy when no slot frees up")
+        except OllamaBusy:
+            pass
+    finally:
+        httpx.AsyncClient = real_client
+        _cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS = saved
 
 
 def _demo() -> None:
@@ -424,6 +503,7 @@ def _demo() -> None:
     assert _from_tool_calls({"tool_calls": []}) is None
     assert _from_tool_calls({"tool_calls": [{"function": {"name": "x", "arguments": "not-a-dict"}}]}) is None
 
+    _demo_cloud_limits()
     print("ollama_client: all checks passed")
 
 

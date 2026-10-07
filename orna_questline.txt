@@ -1,0 +1,191 @@
+# Unfelled questline guide by Konq (April 2022) - built by orna_scrape_questline.py
+
+=== Unfelled questline guide by Konq (April 2022) (https://docs.google.com/document/d/1z6Efh6Heuo6lF1O5_FnvXpJbT8KVyBnghUTiqCie5UM/edit) ===
+ORnA / Hero of AethriC
+Questline Guide
+(for both new and returning players)
+By your favorite unfelled Balor Mage, Konq
+## Introduction
+Welcome to the guide on the Unfelled questline! Released in late March 2022, this overrode the old questline (the Aftermath questline). If you played before this, you have to start the Unfelled questline at the very beginning. Finding lower tier monsters and bosses can be a pain, so here’s a neat little guide to help! Most quests will be split into two sections - new and experienced. If you’re a new player, look at the new section. If you’re returning, and something like Tier 9 or Tier 10, look at the experienced section. Use the outline of this document to jump between quests quickly.
+If you’d just like a quick list of all quests (SPOILERS!), look at this spreadsheet. Please do note that some of the quests have missing info. Also note, all of these will be spoilers for the questline. Read these line-by-line if you’d like to avoid being spoiled, or, I dunno, don’t read this.
+For those interested in recommending additions or changes to this document, please DM konq. on discord. Do keep in mind the priority of this document is to provide the quickest or easiest method of completing these quests, and providing the entire list of ways to complete the quests would make this document longer than I’d like it to be.
+## Tier 1 - Quest 1: Samson - Defeat Rat (2)
+New: This quest is fairly simple in early-game. In your constant battle with world monsters, make sure 2 of them are Rats.
+Experienced: As your mob pool is significantly larger, finding rats is a bit more difficult. To filter out some unwanted mobs, I suggest running Beast Dens, and a couple of them will net you your 2 rats. Don’t worry, the next couple quests are easier for us.
+## Tier 1 - Quest 2: Samson - Make Your Origin Town
+New: This one is self-explanatory. Samson should direct you to where you need to go to establish your Origin Town. This area gives you a stat bonus, and allows you to build specific buildings. This will also unlock the building menu.
+Experienced: You should already have your Origin Town established, so this quest is an autocomplete.
+## Tier 1 - Quest 3: Samson - Defeat Goblin Mage (3) and Goblin (3)
+New: Another relatively simple one. Slay 3 Goblin Mages and 3 Goblins. You might have killed enough monsters to reach Level 25 and go up to Tier 2, which will let you see Tier 2 monsters (2 stars), so you might have to kill more monsters that aren’t them before you get them.
+Experienced: Once again, we’re limited by the size of our mob pool. This time, you’ll wanna run Goblin Fortresses. Note their sprite change now makes them look more like a fortress. Again, you should only need a couple runs to secure the quest.
+## Tier 1 - Quest 4: Samson - Defeat a Goblin Lord
+New: Your first boss quest! Bosses are larger than monsters, and you might have spotted some around. The best way to find these is to go traveling around the world. You should be able to find one fairly quickly!
+Experienced: If you left your Goblin Fortress run the moment you finished your quest, you might have some floors left to encounter a Goblin Lord. Otherwise, another run should do the trick for you. Optionally, run a Tier 1 boss gauntlet. That’ll get you the boss, guaranteed.
+## Tier 1 - Quest 5: Samson - Become Stronger
+New: Congrats! You’ve finished all the tier 1 quests. To unlock the next tier’s quests, level up to Level 25.
+Experienced: Congrats! Hit the complete button, you’re just getting started.
+## Tier 2 - Quest 6: Asmund - Defeat Draconian (3) and Draconian Mage (3)
+New: Another fairly simple quest. Welcome to tier 2! You should’ve seen some new monsters by now. Go around and kill some of them for me, would you? Oh, if you find a Draconian Lord, it’s probably best to leave it be. You’ll need it for a later quest.
+Experienced: This quest has Draconians, which means it’s best to tackle a Dragon Roost. If you’re into the alt scene, doing a horde normal gauntlet with a Tier 3 will get a decent amount of Draconians as well.
+## Tier 2 - Quest 7: Asmund - Defeat Arena opponents (5)
+New: This one is fairly self explanatory. Go to the main menu, and hit the Arena button in the top row. There, in Sparring, defeat 5 players. You’ll need Arena Tokens to get in, but you should be able to get them in shops or from nearby bosses.
+Experienced: Just kill 5 arena opponents, the same as New players but with less fancy jargon.
+## Tier 2 - Quest 8: Asmund - Get a follower and build a Bestiary
+New: It’s time to get a follower! Bestiaries can be made in the same menu you made your origin town in. They cost gold, wood, and hide. If you’re missing the resources, try dismantling some of your gear. Lots of weapons are made of wood, lots of gear is made of hide. Once you have the Bestiary made, get yourself a follower! Any follower will do, and they cost just a handful of gold. Now you’ll have a friend! You can name it in a bestiary as well.
+Experienced: I’d hope you have a follower by now, this should just be an autocomplete.
+## Tier 2 - Quest 9: Asmund - Complete Codex entries (3)
+New: Time to learn about the Codex! The Codex is a log of all the enemies you’ve fought, and is accessed in the main menu, as the bottom left button. Your job is to complete 3 entries, and to do this, you’ll need to witness all the characteristics of the monster in battle in order to record it. This includes drops, moves, whether it’s weak to something, resistant to something, and so on. You can see what you’re missing by noting the little ??? on a given entry. A completed entry has a yellow name. Chances are you’ve gotten one or two by accident. Go and fill out 3 of them in total.
+Experienced: If you need words to detail what this quest does, see the New section.
+## Tier 2 - Quest 10: Asmund - Enter a dungeon
+New: It’s time to try a dungeon out! You can use that Skeleton Key you got from Asmund to enter in one you see on the map! Best to increase your view distance by using a torch to see if you can find one, otherwise you’ll have to travel to find one!
+Experienced: Nothing you’re not unfamiliar with, I hope. Oh hey, free key!
+## Tier 2 - Quest 11: Asmund - Defeat a Draconian Lord
+New: Another boss hunt! Same as before, look around your area for one. If you found one before, go back and kill it!
+Experienced: Similar to the Draconian quest, a Dragon Roost can work, but a Tier 2 or Tier 3 boss dungeon should almost definitely net you the Draconian Lord.
+## Tier 2 - Quest 12: Asmund - Become Stronger
+New: You’ve completed all the tier 2 quests! Time to level up to level 50. Also, you’ll need to unlock a Tier 2 class. In the Change Class tab, scroll to the right until you find a tier 2 class. Chances are, you’ll want to settle with the upgraded version of your class (Archmage, Rogue, Paladin, don’t pick Knight).
+Experienced: Hit continue, 2 down, 8 to go.
+## Tier 3 - Quest 13: Myrkheim - Upgrade equipment (3) and Build a Blacksmith
+New: This quest requires that you build a blacksmith. To do this, click the Build button in the world screen (that’s to the left of the main menu button, hammer and axe), and navigate to the Buildings tab where you’ll find a Blacksmith. You’ll need some resources (50 wood, 10 stone, and 250,000 gold). You can get the wood from dismantling items (press and hold an item in your inventory, and hit dismantle - this destroys the item and gives you some materials) or finding wood and tree items on the ground, the stone from nearby shops or stones on the ground, and the gold you can get from winning battles in the arena. Once you have your blacksmith, upgrade 3 items inside of it - I suggest upgrading 3 Level 1 items at the same time, which will reduce the time you need to spend waiting. NOTE: You get a skeleton key from completing this quest as well as the one prior. It’s a good idea to keep one of those for a future quest! You’ll see. (It’s literally right after this next one.)
+Experienced: Insert sarcastic description here telling you to upgrade 3 items.
+NOTE! Using whetstones and fine whetstones will not increase the count for items smelted. If you have the original sidequest from the beginning still, any upgrades will count for both quests.
+## Tier 3 - Quest 14: Seeker Mara - Kill Fallen (Archmage, Witch, and Knight)
+New: This quest is seen as very difficult, due to the rarity of these monsters. You should be able to find the Archmage, Witch, and Knight with enough world farming. You may need to travel around to find them, or do a gauntlet using a gauntlet key and hope you find one.
+Experienced: Run tier 3 normal gauntlets until you’re out of nearby dungeons, and then run some more. This is the best way to get these monsters. Unless you want to world farm for them like a fool. If you’re only missing the Archmage, they show up in Mystic Caves.
+## Tier 3 - Quest 15: Seeker Mara - Complete a Dungeon
+New: Dungeons are essentially a marathon of monsters, one after another, with no healing in between. You can find them as buildings in the world, but you always have one personal one you can do at any time. In the main menu, right next to the Arena button on the top row, there’s a Dungeon button. Run through one of these - though you’ll need a Skeleton Key. You should’ve gotten two from the previous quests.
+Experienced: Tired of running dungeons for the fallen monsters? Run one more for good measure.
+## Tier 3 - Quest 16: Seeker Mara - Become stronger
+New: Congratulations! That’s all there is for Tier 3 quests. Similar to the last quest of tier 2, you’ll need level 75, and a Tier 3 class. You’ll also have to get a specialization! To do this, go to the change class tab and use the “Specialization” tab at the top, below the main options like Runeshop and Options. Then, pick one you want! The first one is free, but swapping specializations costs orns.
+Experienced: Press that continue button and get a move on, there’s Fomorians to kill.
+Sidequest: Galar - Upgrade 5 Items
+New: This quest is a sidequest, so you can still progress with the rest of the questline without completing it. If you’ve built the blacksmith from the Tier 3 quest, then you can just upgrade 5 more items in it. Similar to that quest, if you want this to be completed quickly, upgrade 5 Level 1 items.
+Experienced: You unlock this sidequest by being Tier 4 or higher, and you can just upgrade 5 items in your own blacksmith. Pick 5 Level 1 items with easy to get materials so you don’t waste much, and you can crank this quest out in 1 hour. There is a main quest in Tier 3 that requires upgrading 3 items, so I’d recommend saving this for then, and killing two Turuls with one stone.
+NOTE! Using whetstones and fine whetstones will not increase the count for items smelted.
+Sidequest: Pythia - Complete a Memory
+This quest was added in the 3.2 update in late May 2022, after the rest of the story quests, and is available after completing the quest from Galar above. You’ll be given a Diluted Mnemonic, and asked to complete a memory. This quest will complete once you’ve done a single part of the memory hunt process, so there’s no need to do the entire thing if you’re only trying to complete the quest. A blue and gray building will pop up (the shape will be different, so we can’t say specifics) and by tapping on it, you’ll be given a minigame to play. This is one of 5 buildings you have to tap on in order to complete the memory hunt, but the quest will finish after the first. Note that the range of these is significantly lower and is not affected by view distance. Also note that these show up on the EVENT tab instead of the building tab.
+## Tier 4 - Quest 17: Samson - Build a Keep
+New: Time to build yourself something for yourself to stash some stuff away! Followers, gold, items, you name it. You’ll find this in the build tab, the same place you found the Blacksmith. When you place it down, check out all the features it has! As you upgrade it, it will get more features.
+Experienced: If you don’t have a Keep by now, I’d highly suggest building one. Doing the one-follower-only challenge is rough.
+## Tier 4 - Quest 18: Catha - Defeat Fomorians - Warrior (10), Rogue (10), Mage (10)
+New: You’ll find these all over the world, just like before! This might take a little bit more grinding, though. Take out any you see, since this quest can be in your quests tab for quite a while.
+Experienced: The first of many quests that benefits highly from running Underworld Portal themed dungeons. These will be your best option for getting Fomorians efficiently. Alternatively, Tier 4 and/or Tier 5 horde normal dungeons can provide a small boost, but they’re quite ineffective.
+## Tier 4 - Quest 19: Catha - Defeat a Fomorian Lord
+New: This boss is slightly different from the other bosses so far - you most likely haven’t seen this boss before this quest. You now can see Fomorian Lords in the world. Unfortunately, due to the way bosses in the world are generated, if you live in an area with already generated territory (if people own your territory already), Fomorian Lords will be hard to find. These can be found at the end of Tier 4 or 5 gauntlets, but rarely. Those will be your best bet, otherwise I’d suggest traveling in the world, killing every boss you see, and hopefully one will show up. You might also be interested in building a Wayvessel, so you can travel to an area with a Fomorian Lord that someone else has shared. Ask around in the community you’re in and someone might volunteer.
+Experienced: I suggest reading the New section of this, because a large majority of the information pertains to your situation too. However, you also have the last floor of Underworld Portals to generate Fomorian Lords. I believe the most efficient method of finding one is to simply run Tier 4 normal dungeons (Tier 5 if it’s more comfortable).
+NOTE: Quest bosses like these can only be found on the last floor of dungeons. As such, it’s not necessary to use extra keys to run a boss dungeon.
+## Tier 4 - Quest 20: Catha - Become stronger
+New: Congrats! Another tier down! Hit level 100 and purchase a tier 4 class.
+Experienced: Congrats! That’s one tough boss to track down. Keep it up!
+## Tier 5 - Quest 21: Ceres - Acquire Fogstone (5), Undead Bone (3)
+New: Welcome to the new tier! Here, you’ll have a few quests that fetch various items. Fogstone is dropped by Lesser Sluaghs and Sluaghs (Tier 5 boss), and can be gotten by dismantling a Fog Blade (also dropped from Sluaghs). Undead Bone can be gotten from killing Undead Golems (Tier 4 boss) and Draugrs (Tier 3 boss, found in dungeons).
+Experienced: Chances are you have the materials, should be an easy complete!
+## Tier 5 - Quest 22: Ceres - Acquire Broken Statue (5), Green Crystal (2), Nightshade (3), Silver (1)
+New: Time for the next fetch quest! Broken Statues can be gotten from the two Gargoyle bosses of tier 4, Gargouille (dungeon only) and Carmen’s Gargoyle. Green Crystals are accessories dropped by Gazers, but they’re also purchasable in shops. Nightshade at Tier 5 can be gotten from shops, but if you manage to find a Carmen in the world (Tier 6 boss), she drops Nightshade as well. Silver is a very common material, and you should already have some by now. If not, dismantle some Fomorian gear.
+Experienced: The hardest thing on this list is probably the Green Crystals. You can refresh shops to get them, check your Junk pile if you have them, or even try fighting some things that have the Mimic drop pool, which has Green Crystals.* Everything else should be materials you have lying around.
+*Maybe. Probably. Don’t count on it, but if I’m right, you heard it here first.
+## Tier 5 - Quest 23: Catha - Defeat Balor Guardian (5), Reaper (3), Balor Worm (1)
+New: The biggest stretch of this quest is between defeating the mass quantity of Balor Guardians and finding the rare Reapers. It’s advised that you’re Tier 5 or Tier 6 for this quest, and not any higher - as Affinity Candles will come in handy. Both Balor Guardians and Reapers show up at night (past 8:00 PM on your device) so you’ll want to grind monsters in the world then. As for the Balor Worm, they are exclusive to gauntlets.
+Experienced: For the higher tiered player, we have Underworld Portals we can rely on. This will make it incredibly easy to get the Reapers and the Balor Worm, but the Guardians will still be a decent grind. Consider getting some mates and running through a few of these.
+## Tier 5 - Quest 24: Ceres - Acquire Bone (25), Wolf’s Blood (25)
+New: While grinding the world for those Balor Guardians and Reapers, you may have killed a few Odoks. These are a prime source of bones, and Fomorian gear can also give bones when dismantled. As for Wolf’s Blood, your only source is going to be Lord of Wolves, a tier 3 boss. To find many of these, it’s best to travel around the world or do boss gauntlets, but those can be costly at a low tier. If you happen to be playing during the Rise of Kerberos event, you can encounter Followers of Kerberos in Beast Dens (a themed dungeon), and those drop plenty of Wolf’s Blood.
+Experienced: This quest should be on the easier end - not many things need Wolf’s Blood, and Bones are plentiful, so you should already have these materials. If not, see New.
+## Tier 5 - Quest 25: Ceres - Acquire Darkstone (50)
+New: This should actually be a quick one. The Balor Guardians you defeated for a previous quest drop Darkstone, and their Balor Swords can be dismantled into it as well. On top of this, most “dark” things drop them - Ghosts, Demons, Dark Slimes, and Yokai, to name a few.
+Experienced: Hopefully you have 50 Darkstone by now, running those Underworld Portals should be a great source of it.
+## Tier 5 - Quest 26: Ceres - Defeat the Fallen Hero, Lover Lost
+New: Welcome to the next story boss! After completing the previous quest, you were given the Lover’s Lost accessory. To encounter the boss, you must have this equipped when traveling the world or traversing the dungeon. Just like with Fomorian Lords, he can be found at the last floor of a Tier 5, 6, or 7 gauntlet, but Tier 5 gauntlets are preferred. This is another boss that can be gotten via a friend with a Wayvessel, but doing gauntlets or traveling in the world should suffice.
+Experienced: Just like with the new player, you’ll want to equip the Lover’s Lost accessory you got from the previous quest. Wear it while going through Tier 5 normal dungeons for the quickest way to encounter it. Alternatively, a friend can help you out with a Wayvessel.
+## Tier 5 - Quest 27: Mara - Become stronger
+New: Congrats! Unlock yourself a Tier 5 class and hit level 125.
+Experienced: Congrats on finding yourself another difficult boss. There are more struggles ahead, but the next tier should be relatively easy.
+## Tier 6 - Quest 28: Gol - Build a Town Hall and Residence (5)
+New: The quests in this tier focus most on expanding your origin town. If you’re not near it often, it might take you much longer to get this quest done. A Town Hall is used to gather quests from your townsfolk, who live in Residences. Build 5 of them and use this opportunity to learn how Town Halls work. The Town Hall costs 10 million gold, so do sell some accessories or gear you aren’t using if you are short on gold. Each residence gets more expensive the more you build, and the max amount to have an effect is 20. You’ll need some wood and stone for these, and if you’re low, consult your shops. They sell both often.
+Experienced: You should already have this, hit continue.
+## Tier 6 - Quest 29: Gol - Build a Jeweler and a Herbalist
+New: Time to build interesting shops! A jeweler can sell adornments, which are small gems that can be put on weapons and armor to give them a small boost. A herbalist allows you to craft your own potions! It costs 5 million gold, but you’ll be able to make potions like Elixirs by putting together resources. More often than not, you’ll need empty bottles, which you should have gotten on your journey.
+Experienced: You should already have this, hit continue.
+## Tier 6 - Quest 30: Gol - Build a Citadel and Residence (5)
+New: A Citadel is a place where your townsfolk can give you gifts! The higher their morale is (see the Town Hall), the more often they’ll give you gifts. You’ll also want to build more residences - do note that this quest does not need you to build 5 new residences, and merely checks if you still have 5 residences.
+Experienced: You should already have this, hit continue.
+## Tier 6 - Quest 31: Gol - Have Town Morale at 20%
+New: Time to raise your town’s morale! In order to do this, you’ll need to complete the various quests found in the town hall. Each quest should increase  the town’s morale by a couple percentage points, and once you’re at 20%, you’ve completed the quest. Do know that the morale goes down over time, so to keep your townsfolk happy, you’ll need to keep doing quests occasionally. In order to get more quests from your Town Hall, it’s a good idea to level it up! It only costs 4,500,000 gold to level it up to max, and only needs to be done once, so it’s a worthwhile investment.
+Experienced: You should already have this, hit continue.
+## Tier 6 - Quest 32: Mara - Become stronger
+New: This concludes the Origin Town section of quests! Feel free to get yourself a Tier 6 class and level up to 150.
+Experienced: You should already have this, hit continue. Wow, wasn’t that hard?
+## Tier 7 - Quest 33: Samson - Defeat Arisen: Minotaur, Cerberus, Lord of Wolves, Lost Pharaoh
+New: Arisen monsters are stronger forms of monsters you’ve fought before. More often than not, these are bosses that are now encounterable as enemies. Arisen enemies have a bright pink glow around them. Do note that these are different from Berserk monsters - a Berserk monster is a stronger form of a normal monster, Arisen monsters can be considered entirely different monsters. Arisen Cerberus can only be found at night, and the Arisen Lord of Wolves can only be found in wooded areas. For this reason, it’s recommended to run dungeons, which ignore all time and location-based requirements. Specifically, a Beast Den themed dungeon has Arisen Minotaur, Arisen Cerberus and Arisen Lord of Wolves, you’d just need to find a Lost Pharaoh.
+Experienced: If you’re really insane, you can do a Valley of the Gods. However, if you find an Arisen Lost Pharaoh, you can just run a Beast Den or two, and you should get this quest quickly.
+## Tier 7 - Quest 34: Samson - Unlock a Tier 7 class
+New:  You’re at the point in the game where your orn income is starting to pick up! Before going on, get yourself a Tier 7 class. The best methods of orn farming at this point in the game come from killing bosses on the road, or from constant dungeon runs. A Tier 7 boss dungeon will almost give you as many keys as it takes to enter. There are also pieces of gear that boost drops of gold, orns, and XP. Consider the Deathbringer, dropped from Ankou, to boost orns.
+Experienced: You should already have this, hit continue.
+Sidequest: Samson - Defeat Arisen: Minotaur (25), Cerberus (25), Lord of Wolves (25), Lost Pharaoh (25), Orc Lord (25), Camazotz (25)
+New: This sidequest is very tedious. It’s advised you don’t focus on this much, as it’s not necessary to complete the story. However, to find most of these, you’ll see benefits in running a Beast Den. Orc Lords can be found in Goblin Fortresses, and Lost Pharaohs, well, they’re just kinda out there.
+Experienced: Run a Valley of the Gods for this, if you’re so inclined to do this quest. Should come naturally if you regularly do Valley runs. Obviously, this assumes you’re Tier 10.
+## Tier 7 - Quest 35: Emile - Complete Codex for Enlightened - Guardian, Mage, Acolyte
+New: The Enlightened need to be studied! They can be found in dungeons, but also can be seen during the Moonlight weather (denoted by a moon in the top middle of the world screen, where you’d see a raindrop or a snowflake). These are very simple to codex - simply get all the moves they can use, and for the Mage and Guardian, get their drop.
+Experienced: If you need these codex entries, see the New tab.
+## Tier 7 - Quest 36: Emile - Acquire a Crystalis
+New: A Crystalis is actually a very useful weapon! For melee users, it’s a great source of debuff protection - it prevents many stat debuffs, which allow you to use things like buff skills from the Druid class with minimal drawbacks. They’re obtained by defeating an Enlightened Prince, who can also be found in dungeons. Chances are you might’ve found one by now.
+Experienced: Just like the new, run a Tier 7 boss gauntlet to quickly encounter an Enlightened Prince, and get its Crystalis. Remember to turn auto dismantle off.
+## Tier 7 - Quest 37: Emile - Acquire Rosa’s Brooch and Verrick’s Ring
+New: After finding the Crystalis, you canonically piss off the king and queen of the Enlightened. Your job is to defeat them, and get their accessories. Just like the other quest bosses, you can find these in the world, or at the last floor of Tier 7, 8, or 9 gauntlets. Make sure you keep a hold of them! A friend’s Wayvessel might also do you justice here.
+Experienced: Run some more dungeons! Fed up with dungeons? Oh, we’re barely getting started. Run some Tier 7 normal dungeons and get both encounters. Remember to have auto drop off, as you need a normal quality of both accessories.
+## Tier 7 - Quest 38: Emile - Become stronger
+New: Congrats for finding those two bosses! Use the scroll you got from the past quest to learn some skills that will help you defeat Arisen enemies. Then, when you’re ready, get to level 175.
+Experienced: Use that scroll you got from that quest, and head on to the next batch of quests. We’re getting there, I promise.
+## Tier 8 - Quest 39: Mara - Acquire Lightstone (12)
+New: Welcome to Tier 8! Here, the common enemies are the battling clans of the Ljosalfar and Dokkalfar. While the Ljosalfar have dominated the overworld, Dokkalfar can exclusively be found in dungeons and in moonlight (weather, not the time of day). Defeating any of these will give armor and weapons that dismantle into Lightstone. Simply killing a few will get you enough Lightstone to complete the quest.
+Experienced: Another easy continue! I hope you have this, otherwise, go and fight some Ljosalfar.
+## Tier 8 - Quest 40: Damra - Acquire Orichalcum (3), Witchstone (3), Lightstone (20), Pure Lightstone (1)
+New: Damra of the Dokkalfar wants you to gather some more materials! Orichalcum can be gotten from the two Orichalcum enemies, being the Golem and the Knight. As of 3.1, these are light green in color. As for Witchstone, it’s dropped by Carman and her dungeon equivalent, Carman of the Underworld. These are bosses you encountered in Tier 6, so you might have enough of the material. Lightstone, as we learned in the last quest, is dropped from Ljosalfar and Dokkalfar monsters. Pure Lightstone, however, drops from the lords of Ljosalfar and Dokkalfar - Tier 8 bosses you might be able to find in the world or dungeons, respectively. You should only need to kill one.
+Experienced: These are all materials you should have! If you’re missing one or more, see where to find them in the last quest. Witchstone is also dropped from Arisen Carman, if you can find them easier than the boss.
+## Tier 8 - Quest 41: Damra - Defeat Great Reaper (3)
+New: Just like finding the Reapers in Tier 5, this one might be particularly difficult to find - Great Reapers show up at night, but rarely, so world farming might only be a decent method - by Tier 8, you should be able to do dungeons regularly, and Tier 8 normal dungeons will do you best for this quest, as they have a much higher chance of appearing for you there.
+Experienced: Just like finding the Reapers in Tier 5, you’ll wanna consult your bestest friend in the world, Underworld Portals. Running one or two (horde mode) should be enough to finish the quest.
+## Tier 8 - Quest 42: Damra - Have Town Morale at 60%, Complete 10 NPC Quests
+New: Lastly, Damra wants you to do the best that you can. Do some more Town Hall quests and get your Morale up to 60%. As for “10 NPC quests”, this refers to the NPCs that show up in the world and have no connection to the main storyline. Complete 10 of their quests (multiple from the same NPC are counted separately)
+Experienced: Hopefully your Morale is at 60%, and you’ve at least done some NPC quests. If you’re lacking on either, consult the New area.
+## Tier 8 - Quest 43: Mara - Become stronger
+New: Congrats! Use the Steward Candle you got from that quest, it will make a Steward pet that should either appear in your bestiary or on your person. After that, it’s time to get ready for Tier 9! Level up to 200 and get a Tier 8 class.
+Experienced: Congrats! It’s time for the big guns. Use that Steward Candle and open up your Wayvessel.
+In these quests, both sections will be about the same tier. As such, there’s now only one section, as most tips apply to both as is.
+## Tier 9 - Quest 44: Mara - Defeat Balor -  Marauder (50), Warlock (50), Assassin (15)
+Welcome to your first extremely long quest of Tier 9! Once you hit Tier 9, you’ve gained the ability to see Underworld Portal themed dungeons - which house plenty of Balor monsters. This will be your best bet for getting these easily. Another option is farming in the world during the day. Use an Affinity Candle, Seeker Candle, and an Occult Candle to increase the spawn of Balor mobs. At night, Assassins won’t show up, so it’s important to farm during the day. Though, at this point, you should get yourself accustomed to party play with the community - some people have Underworld Portals at their Wayvessels, and they share them for other people to run in parties. In other cases, fighting Balor Assassins and Skolls as a party in the world (attack the same monster) can also give some extra Assassins. The easiest place to find these parties is on the Discord, and if you aren't there, then I dunno how you got a hold of this.
+## Tier 9 - Quest 45: Myrkheim - Masterforge Gear
+Masterforging your gear can be done at a nearby Alchemist, or even at your own Fortress if you’ve managed to upgrade your Keep far enough. Keep in mind the heftiest part of the cost is in materials, which increases the better quality it is. If you’re looking for a cheap masterforge, use Broken, Poor, or standard quality gear. The cost of all are the same - 300 of each material.
+## Tier 9 - Quest 46: Mara - Defeat Balor King (25)
+Welcome to your second extremely long quest of Tier 9! For this quest, Balor Kings are bosses, so running party Tier 9 boss gauntlets is your best bet, as they show up frequently. It’s also not a bad idea to consult Underworld Portals again, but dungeons in general are typically going to be the quickest way of getting these.
+## Tier 9 - Quest 47: Anthony - The Giant Long Fetch Quest Of Insanity
+Welcome to your third extremely long quest of Tier 9! There’s loads to get. So much in fact, that I’ll be breaking this apart into a bulleted list. If you’d like to see the entire list, here’s a picture. It might help to have this open while reading the following list.
+* The elemental stones can be gotten in large quantities from running Underworld Portals (yeah, those again), but chances are you have enough already - the Balor Gateways in these dungeons drop all of them frequently.
+* Darkstone, just like before, can be frequently found from just about anything. Chances are you have all of this as well, but if you don’t, look at the list of things that drop them here. Anything “FOR” can be dismantled into Darkstone, and anything “DROPPED” by is pretty self-explanatory.
+* Viper Chestmail is dropped from Guivre, a rare Tier 9 dragon. Consider running a Dragon Roost to find them.
+* Basilisk Talons drop from Dark Basilisks, a Tier 8 monster. They’re also found in Dragon Roosts relatively easily.
+* Dokkalfar and Ljosalfar Swords are dropped from their respective clans’ Warriors and Knights. The best way to find these is to run Tier 8 normal dungeons. Horde will improve this as well.
+* Kobold Cloaks are dropped from Kobold Mages, which can be found pretty frequently in Goblin Fortresses.
+* Frilled Naga Halberds and Staves are dropped from both Frilled Naga mobs. These can be found quite often in the world, so it shouldn’t take a lot of world farming to get all five of each.
+The best way to group these up would most likely be:
+* In tier 9, world farming with an Affinity Candle / doing normal gauntlets will get you the Frilled Naga weapons, as well as the Dokkalfar and Ljosalfar Swords. (If you’re Tier 10, the alternative is Tier 8 or 9 normal gauntlets.)
+* Running Dragon Roosts will net you both the Basilisk Talons and the Viper Chestmail.
+* Running Goblin Fortresses for any missing Kobold Cloaks missed from running normal gauntlets.
+* Running Underworld Portals for the elemental stones, if needed.
+## Tier 9 - Quest 48: Mara - Defeat the Balor Knight, Sirus
+Finally, something less grindy! Another story boss. This one can be found at the end of Underworld Portals. Remember, they can only be found at the last floor, so running hard or normal doesn’t affect the outcome, but running horde gives you a better chance of finding him. You can choose to go normal if you feel you can’t take on horde mode properly. He can also be found out and about in the world, though it’s inefficient and unlikely. Consider using a Wayvessel to port to someone who has it.
+## Tier 9 - Quest 49: Mara - Defeat Fallen Gods (Demeter, Vulcan, Thor, Ithra)
+As each god fell, each uttered the name of Mammon. Time to put them out of their misery! Running Tier 9 boss gauntlets should be the fastest way of getting these, and should only take a couple runs. Remember that each is immune to their faction element. The reward is the Band of Gods, an amazing accessory that increases your EXP, Orn, and Gold rates by 50%.
+Once the quest is finished, any completed gauntlet has a chance to drop another Band of Gods, though it’s very uncommon. Running Hard dungeons guarantees that it will have a quality (improving its boost rates), at the cost of extra keys.
+## Tier 9 - Quest 50: Samson - Defeat Mammon
+Time to finish off who started the falling! Find Mammon and give him a good ol’ beatdown. Those who have played before might consult the overworld to find Mammon, which is reasonable. However, Mammon can now appear at the end of Tier 9 gauntlets, much like every other quest boss. The same is true for him - only at the last floor, so being boss or normal doesn’t affect it.
+## Tier 9 - Quest 51: Samson - Become stronger
+Congrats! You completed arguably the hardest tier of story quests. Only a couple left until the end of the storyline. At this point, it’s time to level up to 225, and purchase a Tier 9 class.
+Consider raiding for a good portion of your experience, or farming bosses in the world. At this point, getting EXP becomes harder than maintaining your income of orns. World Boss farming never particularly becomes a bad option, so any chance to do it should be seen as good. Remember to equip some Cursed Monster Tomes for extra EXP!
+## Tier 10 - Quest 52 - Myrkheim - Demonforge Gear
+Welcome to Tier 10! Demonforging gear is even more expensive than masterforging, but the idea is the same - locate a nearby Demonforge or use your own Castle’s Demonforge if you’ve managed to upgrade your Fortress. Just like masterforging, if you’re looking for a cheaper option, consider demonforging a low-quality masterforged item. Maybe it’s the item you masterforged in the earlier quest? If you’re still using a lower quality item, the cost will be 666 of each material.
+## Tier 10 - Quest 53 - Defeat the Arisen Queen, Medea
+It’s time to finish the journey of the Unfelled. Medea, the Arisen Queen can only be found at the end of Mystic Cave dungeons. Do keep in mind, her health bar is the largest of any mob or boss, coming in at around 300,000 (higher than the lowest HP raid boss!) It’s a good idea to use a Questing License before killing Medea, as the quest reward of 5 million orns will be increased by 50% (leading to a bonus of 2.5 million orns for just using an item)! Once defeated, you get the Unfelled Concord - an accessory that decreases the cooldown of dungeons by about 50% when worn in the world build. To see the full extent of how Concords affect cooldown time, I made a visual here.
+Congratulations! You’ve successfully completed the Unfelled Storyline. Any of the rewards from the story quests can be rewards for completing a dungeon, So if you want duplicates of something, run lots more dungeons! You never really stop dungeon-ing.
+## Thank You!
+This guide was made by Konq, and finished on April 15th, 2022. Huge thanks to many people in the Orna community for being so helpful and welcoming of others. Through the generosity of the people around us, Orna’s community is very helpful, and that should be recognized.
+Huge props to the team over at Northern Forge for creating a wonderfully made storyline. The lore of Orna isn’t all-too-invasive, and it’s beautiful how open-form the game is.
