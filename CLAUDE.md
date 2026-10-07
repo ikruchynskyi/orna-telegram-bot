@@ -127,6 +127,15 @@ Data sources (each = reader module + cache or committed file + scraper):
 - All calls go through `ollama_client.chat_json` (`think: True` always - `False` breaks gpt-oss).
 - Ollama Cloud caps concurrent requests per account: `OLLAMA_CLOUD_CONCURRENCY` (process-wide), 429 is
   retried then `OllamaBusy` (local for that call, never parks the cloud). Batch jobs share the cap.
+- **Prompt text is written ~80% of the way to ASD-STE100** (Simplified Technical English): one
+  instruction per sentence, imperative, ≤20 words for an instruction and ≤25 for a description, one
+  term per concept, numbered steps for a procedure. The other 20%: schemas, name lists, verbatim
+  user-facing text and exact examples stay as precise as they need to be. Applies to the system
+  prompt, tool descriptions, rules, PLAN/REVIEW prompts and tool observations meant for the model.
+  - A principle that applies to every tool goes in `_GENERAL_RULES`, ONCE - never restated per tool.
+  - No incident stories or rationale in prompt text ("live failure: ..."): the model reads it on every
+    step. Put the why in a code comment or `docs/orna-loop-internals.md`.
+  - Measure a prompt change end to end against the previous prompt (`TIER=1,2,3 N=2`) before keeping it.
 - Check a cloud model's capabilities via `POST https://ollama.com/api/show`, don't guess.
 - Local model is non-deterministic: one green run proves nothing; verify over N runs.
 

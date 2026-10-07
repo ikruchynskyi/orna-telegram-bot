@@ -1055,3 +1055,37 @@ results; the failure is named in the observation.
   into the `qa` namespace, keyed by post id, so a re-index keeps them.
 - **Verified live.** 26s for both sides, 2 new threads kept (qa 849 ->
   851), found again by `knowledge_search`.
+
+**System prompt rewritten in ASD-STE100 style (2026-10-06).** The prompt
+was 52.8k chars (~13k tokens) and was sent on every step. Most of the size
+came from two things:
+- The same principles were restated inside many tool descriptions:
+  evidence-only 3x, "a tool posted, finish briefly" 7x, "never guess, ask"
+  4x, "the codex card posts itself" 3x.
+- Most rules carried their own justification and incident story.
+
+Now each shared principle is in `_GENERAL_RULES` once. Single-task rules
+are numbered procedures (BOSS STRATEGY, CLASS BUILD, BONUS TOTALS). All
+prompt text is ~80% STE: one instruction per sentence, imperative, one
+term per concept (CLAUDE.md, LLM conventions). Result: 36k chars, median
+sentence 11 words. Sentences over 25 words went from 131 to 36, mostly
+schema lines and name lists.
+
+Two contradictions surfaced and were fixed:
+- "Reply in the user's language" vs the English-only loop with
+  translation gates. The gates are what runs, so the reply-language rule
+  went.
+- "Base stats need specialization + AL, class optional" vs estimate_stats,
+  which needs the tier-10 class. The rule now follows the tool.
+
+The rewrite also lost one fact: that a codex page is the UNSCALED base, so
+a godforged/legendary item needs assess. godforged-orn fell to 1/2 until
+that went into assess's own description.
+
+Separately, the word "orna" in a knowledge_search query diluted its
+embedding: "ward capacity orna" ranked the formula 8th of 28, and the
+budget cut it in 2 of 4 runs. `_retrieve` now drops corpus-wide words
+(`_CORPUS_WIDE_WORDS`).
+
+End to end (TIER=1,2,3): old prompt 28/30. New prompt with both fixes:
+tier 1 8/8, tiers 2-3 33/33.
