@@ -45,7 +45,7 @@ BATCH = 96              # upsert_records' per-request record limit
 BATCH_CHARS = 50_000
 TIMEOUT = 15.0
 
-NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline")
+NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline", "discord_live")
 
 _host: Optional[str] = None
 
@@ -126,14 +126,20 @@ def _units(namespace: str) -> list:
     if namespace == "discord":
         import orna_discord_search
         return orna_discord_search.units()
+    if namespace == "discord_live":
+        import orna_discord_search
+        return orna_discord_search.live_units()
     raise ValueError(f"unknown namespace {namespace!r}")
 
 
 def records(namespace: str) -> list:
+    """A unit may carry a 5th element, a stable key: its chunks are then
+    "<ns>-<key>-<j>" rather than positional, so one can be added later without
+    re-indexing the rest (discord_live grows one search at a time)."""
     out = []
-    for i, (head, lines, title, url) in enumerate(_units(namespace)):
+    for i, (head, lines, title, url, *key) in enumerate(_units(namespace)):
         for j, text in enumerate(_split(head, lines)):
-            out.append({"_id": f"{namespace}-{i}-{j}", "text": text, "title": title, "url": url})
+            out.append({"_id": f"{namespace}-{key[0] if key else i}-{j}", "text": text, "title": title, "url": url})
     return out
 
 
@@ -163,6 +169,24 @@ def index_corpus(namespace: str) -> int:
     r = httpx.delete(f"https://{host}/namespaces/{namespace}", headers=_headers(), timeout=TIMEOUT)
     if r.status_code not in (200, 202, 404):
         r.raise_for_status()
+    upsert(namespace, recs)
+    # Writes are eventually consistent: wait for the count to settle, then
+    # refuse to report success on a namespace that is short of records.
+    count = 0
+    for _ in range(30):
+        stats = httpx.post(f"https://{host}/describe_index_stats", headers=_headers(), json={}, timeout=TIMEOUT)
+        stats.raise_for_status()
+        count = stats.json().get("namespaces", {}).get(namespace, {}).get("vectorCount", 0)
+        if count == len(recs):
+            return count
+        time.sleep(5)
+    raise RuntimeError(f"{namespace}: Pinecone holds {count} records, expected {len(recs)}")
+
+
+def upsert(namespace: str, recs: list) -> None:
+    """Add or replace records (same _id = replaced), in batches within the
+    plan's per-request and per-minute embedding limits. Deletes nothing."""
+    host = _index_host()
     batches, cur = [], []
     for rec in recs:
         if cur and (len(cur) == BATCH or sum(len(c["text"]) for c in cur) + len(rec["text"]) > BATCH_CHARS):
@@ -194,17 +218,6 @@ def index_corpus(namespace: str) -> int:
         if r is None:
             raise RuntimeError(f"{namespace}: batch {start} never reached Pinecone")
         r.raise_for_status()
-    # Writes are eventually consistent: wait for the count to settle, then
-    # refuse to report success on a namespace that is short of records.
-    count = 0
-    for _ in range(30):
-        stats = httpx.post(f"https://{host}/describe_index_stats", headers=_headers(), json={}, timeout=TIMEOUT)
-        stats.raise_for_status()
-        count = stats.json().get("namespaces", {}).get(namespace, {}).get("vectorCount", 0)
-        if count == len(recs):
-            return count
-        time.sleep(5)
-    raise RuntimeError(f"{namespace}: Pinecone holds {count} records, expected {len(recs)}")
 
 
 def _demo() -> None:
@@ -213,7 +226,7 @@ def _demo() -> None:
     assert all(c.startswith("[T]\nh") for c in chunks)          # header repeats on every chunk
     for ns in NAMESPACES:                                        # every corpus parses to records
         recs = records(ns)
-        assert recs or ns == "discord", ns       # discord is a gitignored harvest, absent on a fresh checkout
+        assert recs or ns.startswith("discord"), ns   # gitignored Discord data, absent on a fresh checkout
         assert len({r["_id"] for r in recs}) == len(recs), f"{ns}: duplicate ids"
     print("orna_pinecone: _demo ok")
 

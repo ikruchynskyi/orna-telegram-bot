@@ -48,13 +48,16 @@ Data sources (each = reader module + cache or committed file + scraper):
   `orna_mechanics.txt` (ours), `orna_reddit` (dev comments), `orna_qa` (player Q&A).
   `orna_guides` + `orna_guide_*.txt` back `class_guide`.
 - `orna_pinecone.py` - semantic search over those text corpora (one namespace each; `PINECONE_API_KEY`).
-  Grep scorers are the fallback when unset/failing. Re-index after re-scraping: `python3 orna_pinecone.py [ns ...]`.
-  Also feeds the PLAN call a short primer (`_plan_primer`).
+  `_units(ns)` chunks every corpus with its own module's parser. Re-index after re-scraping:
+  `python3 orna_pinecone.py [ns ...]`. Also feeds the PLAN call a short primer (`_plan_primer`).
+- `orna_textindex.py` → `.textindex.sqlite3` - SQLite FTS5 over the same chunks; the fallback when
+  Pinecone is off/failing. Rebuilds itself when a source file is newer.
 - `orna_questline.txt` (`orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
 - `orna_discord_search.py` - Discord through a Selenium Chrome logged in as the user (`.discord_chrome/`;
   user-account automation, ToS risk accepted by the user). `harvest`: FAQ/guide channels + pinned posts,
   images transcribed by a vision model → `.discord_cache/` → `discord` namespace. Live `discord_search`
-  action: last resort, refused in code until `knowledge_search` AND `web_search` ran.
+  action: last resort, refused in code until `knowledge_search` AND `web_search` ran; what it finds is
+  kept (`.discord_cache/live.json` → `discord_live` namespace) so the next ask hits `knowledge_search`.
 - `orna_material_names_uk.*` - static EN↔UK material names.
 
 ## `/orna` loop - what you need to know to change it
@@ -81,8 +84,11 @@ Data sources (each = reader module + cache or committed file + scraper):
    observation. Missing user input → prefix `NEEDS_INPUT:`. Prompt rules are advice, ~70-90% reliable.
 3. **Blame the tool before the model**: check the tool's output for the exact args first.
 4. **Never block the event loop**: disk/HTTP/CPU work goes through `asyncio.to_thread`.
-5. **New knowledge source ≠ new tool**: add it as a block in `_gather_knowledge`
-   (`knowledge_search`), not a new action. The prompt is already large.
+5. **New knowledge source ≠ new tool**: add it as a Pinecone namespace - a branch in
+   `orna_pinecone._units` + `NAMESPACES`, a top-k in `_VECTOR_TOP_K`, a tag and trust note in
+   `_SOURCE_NOTES` - then `python3 orna_pinecone.py <ns>`. `knowledge_search` returns ONE ranked list
+   across namespaces (never fixed per-source blocks: a total cap then drops the best hit). Not a new
+   action - the prompt is already large. Run the retrieval benchmark (tier 0) before and after.
 6. Add a label in `_ACTION_LABELS` (status line) and cite with `_add_source`.
 7. Don't put a number in prose/corpora that the code computes - derive it from the code.
    Code-verified sources outrank prose (`towers`, `releases` > guides).
@@ -122,7 +128,9 @@ Data sources (each = reader module + cache or committed file + scraper):
 
 ## Verifying
 
-- `python3 orna_test_suite.py` - tier 0, no LLM, must be 100%. Runs every module's `_demo()`.
+- `python3 orna_test_suite.py` - tier 0, no LLM, must be 100%. Runs every module's `_demo()`, plus the
+  retrieval benchmark (`_RETRIEVAL_CASES`, needs Pinecone: 12/13 on 2026-10-06) - the number to watch
+  when changing chunking, `MIN_SCORE`, top-k or `_SOURCE_NOTES`.
   Full gate: `TIER=0,1,2,3 N=3 python3 orna_test_suite.py`.
 - Pure logic you add gets an `assert`-based `_demo()` in its module.
 - End-to-end: `Q="..." N=5 python3 .claude/skills/verifying-orna-changes/scripts/orna_loop_harness.py`

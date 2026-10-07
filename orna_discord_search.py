@@ -490,6 +490,40 @@ def search(query: str, per_guild: int = 2) -> list:
     return out
 
 
+# --- what live searches found, kept (the "discord_live" namespace) ---
+# A discord_search costs 10-30s and a real browser session on the user's
+# account; its conversations are kept so the next similar question is answered
+# by knowledge_search instead. Raw chat, so its own namespace and trust label -
+# never mixed into the curated harvest, and safe from that one's re-index.
+LIVE_FILE = "live.json"
+
+
+def save_live(hits: list) -> list:
+    """Persist hits not seen before (keyed by the hit message's id) with their
+    surrounding conversation; returns the new keys. Author names are not in a
+    hit to begin with (see _hits)."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    live = _load_json(LIVE_FILE, {})
+    new = []
+    for h in hits:
+        if h["id"] in live:
+            continue
+        live[h["id"]] = {"guild": h["guild"], "date": h["date"], "url": h["url"],
+                         "lines": [("► " if m["id"] == h["id"] else "") + m["text"].replace("\n", " ")
+                                   for m in h.get("context") or [h]]}
+        new.append(h["id"])
+    if new:
+        _write_json(CACHE_DIR / LIVE_FILE, live)
+    return new
+
+
+def live_units() -> list:
+    """(head, lines, title, url, key) per kept conversation - keyed, so each one
+    can be upserted on its own (see orna_pinecone.records)."""
+    return [(f"[{c['guild']} chat, {c['date']}]", c["lines"], f"Discord {c['guild']} chat ({c['date']})",
+             c["url"], key) for key, c in _load_json(LIVE_FILE, {}).items()]
+
+
 def _demo() -> None:
     msg = {"type": 0, "id": "5", "timestamp": "2026-10-05T20:40:41+00:00", "content": "x" * 30,
            "author": {"username": "someone"},
@@ -514,6 +548,19 @@ def _demo() -> None:
     assert len(hits) == 1 and hits[0]["url"].endswith("/748188991852904621/9/2") and "someone" not in str(hits)
     h = {**hits[0], "context": [{"id": "1", "text": "q?"}, hits[0], {"id": "3", "text": "a!"}]}
     assert format_conversation(h).splitlines()[1:] == ["  q?", "► " + "z" * 50, "  a!"]
+
+    # save_live: new hits kept once, with the matched line marked; a repeat is not re-added
+    global CACHE_DIR
+    import tempfile
+    real_dir = CACHE_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        CACHE_DIR = Path(tmp)
+        try:
+            assert save_live([h]) == ["2"] and save_live([h]) == []
+            (unit,) = live_units()
+            assert unit[1] == ["q?", "► " + "z" * 50, "a!"] and unit[4] == "2", unit
+        finally:
+            CACHE_DIR = real_dir
     print("orna_discord_search: _demo ok")
 
 

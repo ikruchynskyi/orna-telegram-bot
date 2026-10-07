@@ -2278,7 +2278,7 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
 
 # Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
 # more of them; the rest are whole sections/threads/comments.
-_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4}
+_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4, "discord_live": 4}
 # Keep only hits within this of the query's BEST score across all corpora.
 # Measured 2026-10-06: without it every query filled the 40k cap, and the cap
 # drops blocks from the END - so "are summons followers" lost its best hit (a
@@ -2338,6 +2338,9 @@ _SOURCE_NOTES = {
                "are years old; check releases() before quoting a number that matters"),
     "discord": ("discord", "curated Discord FAQ/guide/pinned posts (community-written); lines after \"[image ...]\" "
                 "are a machine transcription of a chart - quote its numbers carefully"),
+    "discord_live": ("discord-chat", "raw player chat kept from earlier discord_search calls, UNVERIFIED - the "
+                     "line marked ► matched a search, the rest is the conversation around it; use only what "
+                     "actually answers, and say it comes from player chat"),
 }
 
 
@@ -2603,6 +2606,17 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
 _DISCORD_PREREQS = ("knowledge_search", "web_search")
 
 
+def _keep_discord_hits(hits: list) -> None:
+    """A live search's conversations, kept on disk and upserted into the
+    "discord_live" namespace, so a later question finds them through
+    knowledge_search rather than another 10-30s browser search."""
+    new = set(orna_discord_search.save_live(hits))
+    if new and orna_pinecone.enabled():
+        recs = [r for r in orna_pinecone.records("discord_live") if r["_id"].split("-")[1] in new]
+        orna_pinecone.upsert("discord_live", recs)
+        logger.info("orna: kept %d discord_search conversation(s) (%d chunks)", len(new), len(recs))
+
+
 async def _run_discord_search_tool(query: str, sources: Optional[list] = None, session=None) -> str:
     if not query:
         return "discord_search needs a query in action_input"
@@ -2625,6 +2639,10 @@ async def _run_discord_search_tool(query: str, sources: Optional[list] = None, s
     if sources is not None:
         for h in hits[:3]:
             _add_source(sources, f"Discord {h['guild']} ({h['date']})", h["url"])
+    try:
+        await asyncio.to_thread(_keep_discord_hits, hits)
+    except Exception:   # keeping them is a bonus - never at the cost of this answer
+        logger.warning("orna: could not keep discord_search results", exc_info=True)
     return ("DISCORD CHAT (keyword search of player chat on the official Orna server and Orna Legends, most relevant "
             "first. Each hit (marked ►) comes with the 10 messages before and after it in that channel - the "
             "matched message is often the QUESTION and the answer is in the replies around it. "
@@ -6189,18 +6207,24 @@ def _demo() -> None:
             "url": "https://discord.com/channels/1/2/3"}
     _hit["context"] = [_hit, {"id": "3", "text": "it doubles the buff"}]
     orna_discord_search.enabled = lambda: True
+    _real_keep, kept = _keep_discord_hits, []
+    globals()["_keep_discord_hits"] = kept.extend          # never write test hits to the real store
     try:
         orna_discord_search.search = lambda q: [_hit]
         cited: list = []
         opened = asyncio.run(_run_discord_search_tool("prometheus sigil", cited, _GateSess()))
         assert "► what does it do?" in opened and "it doubles the buff" in opened, opened
         assert cited and cited[0][1] == _hit["url"], cited
+        assert kept == [_hit], kept                          # results are kept, not wasted
+        globals()["_keep_discord_hits"] = lambda h: 1 / 0    # a failing keep never costs the answer
+        assert "► what does it do?" in asyncio.run(_run_discord_search_tool("sigil", [], _GateSess()))
         orna_discord_search.search = lambda q: []
         empty = asyncio.run(_run_discord_search_tool("How does the Prometheus sigil work?", [], _GateSess()))
         assert empty.startswith("0 Discord messages") and "'prometheus'" in empty, empty   # says what it widened to
     finally:
         orna_discord_search.search = _real_search
         orna_discord_search.enabled = _real_enabled
+        globals()["_keep_discord_hits"] = _real_keep
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))

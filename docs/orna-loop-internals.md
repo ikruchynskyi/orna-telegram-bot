@@ -951,3 +951,84 @@ control flow:
   `_run_codex_search` (same "let the next honest attempt take over"
   pattern as `next`'s own dead end).
 
+
+---
+
+**knowledge_search retrieval: Pinecone, one ranked list, keyword fallback
+(2026-10-06).** Until this date every corpus had its own word scorer
+(`orna_knowledge`, `orna_mechanics`, `orna_echo` + Ornabook, `orna_qa`,
+`orna_reddit`), and `_gather_knowledge` glued their results into fixed
+blocks under a 40k total cap. Measured on 12 questions, half of them
+reworded the way players ask: the answering passage reached the model 8/12
+with grep and 11/12 with Pinecone (dense vectors, integrated
+`llama-text-embed-v2` embedding, one namespace per corpus). The grep
+misses were all paraphrases ("two weapons with exp boost, double?" never
+contains "dual wield").
+
+- **Score floors.** A vector search always returns its top-k, so
+  `PINECONE_MIN_SCORE` (0.25) drops noise: junk queries ("xyzzy plugh",
+  "best pizza recipe") topped out at 0.164, real hits ran 0.25-0.57. Plus a
+  RELATIVE floor, best score minus 0.15 (`_VECTOR_RELATIVE`): without it
+  every query filled the 40k cap.
+- **One list, not blocks.** With fixed blocks the cap dropped whole blocks
+  from the END. "Are summons followers" lost its best hit that way: a
+  dev's direct answer (reddit, 0.50, the last block) went while 14 sheet
+  rows at ~0.30 stayed. Now exact-name lookups (amities, class stats) come
+  first, then one list across all corpora, best first, each hit tagged
+  (`[dev]`, `[guide]`, `[discord]`, ...) with every tag's trust note shown
+  once (`_SOURCE_NOTES`). The budget is 16k, and omissions are counted.
+  Median result: 14.4k (was ~36k with grep).
+- **Fallback.** With Pinecone off or failing, `orna_textindex` (SQLite
+  FTS5/BM25 over the very same chunks) is the whole retrieval: 8/13 on the
+  benchmark, the same as the five scorers it replaces.
+- **Tried, not adopted: hybrid.** Merging BM25 into Pinecone's ranking by
+  reciprocal-rank fusion was meant to catch exact words dense vectors miss.
+  It changed nothing measured (8/8 exact-name questions and 12/13 either
+  way) and grew results ~1k chars. The case that motivated it, "my pet
+  keeps dying", ranks the Followers section 18th in BM25 too, and is the
+  benchmark's one known miss.
+- **Benchmark.** `_RETRIEVAL_CASES` in `orna_test_suite.py` (tier 0, needs
+  Pinecone, no LLM). Pass mark is cases - 2; the median size must stay
+  under 20k.
+- **Quota.** The starter plan allows 250k embedding tokens a MINUTE. A
+  96-record batch of dense table rows came close to that alone, so
+  `orna_pinecone.upsert` caps each request at 50k chars and waits out a
+  429. `index_corpus` checks the namespace's record count before reporting
+  success.
+
+**PLAN primer.** `_call_plan_model` gets the top 5 retrieval hits (~3k
+chars) as "game background", so the planner picks tools knowing the
+mechanic (e.g. that a formula lives in a guide, not in the codex). It is
+labelled as background only: every fact in the answer must still come from
+a tool call.
+
+**Discord.** See `orna_discord_search.py`'s docstring. Reading servers you
+are only a member of needs a user account; automating one is against
+Discord's terms (risk accepted by the user 2026-10-06). A Selenium Chrome
+is driven through Discord's own search box, and an XHR hook swaps in the
+URL we want, so the token never leaves the browser. A non-search response
+leaves the app's search panel stuck, hence the reload after each one.
+Measured: keyword search over chat mostly returns people ASKING the
+question, and one forum alone held 224k messages. So the harvest takes only
+curated posts: FAQ/guide channels (~180 messages) and pins (~100).
+- **Images.** The harvest's 53 images go through a vision model.
+  `kimi-k3` was exact on a 59-row number table and wrong on 0-1 of 72
+  cells of an X-grid. `gemma4:31b` missed the same grid cell every run, and
+  deepseek-v4.1-flash got 4-5 rows wrong. Named cells ("B Hydrus: Warrior,
+  Thief") instead of positional ones did not fix gemma's miss. Changing the
+  model re-transcribes everything (cache key).
+- **`discord_search`.** The live tool is refused in code until both
+  `knowledge_search` and `web_search` have run (a prompt rule is ~70-90%
+  reliable). Discord search is full-text AND, so queries are cut to their
+  distinctive words and widened on a miss. Each hit carries the 10 messages
+  either side, because the hit is often the question and the answer is in
+  the replies. Found conversations are kept (`discord_live` namespace) so
+  the next ask is answered by `knowledge_search`.
+
+**Ollama Cloud concurrency.** Ollama Cloud limits concurrent requests per
+account; a 4-worker transcription job made every other call 429. Before the
+fix, a 429 raised `OllamaUnavailable`, which PARKED the cloud for every user
+for 5 minutes. Now `chat_json` holds a process-wide slot
+(`OLLAMA_CLOUD_CONCURRENCY`), retries a 429 after 2/5/10s, and then raises
+`OllamaBusy`. That falls back to local for the one call and never parks the
+cloud.

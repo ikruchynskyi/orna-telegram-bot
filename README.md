@@ -48,10 +48,14 @@ it does not edit `.env` or change local-only calls. The model name is not checke
 against Ollama's catalog: an unavailable model follows the normal fallback path.
 After restart, `ORNA_CLOUD_MODEL`/`GO_MODEL` from `.env` apply again.
 
-Cloud failures, including insufficient credits, HTTP billing errors and rate
-limits, automatically fall back to `OLLAMA_HOST`/`OLLAMA_MODEL`. Availability
-failures skip cloud for five minutes before trying again. `/model` clears that
-cooldown so a newly selected model can be tried immediately.
+Cloud failures, including insufficient credits and HTTP billing errors,
+automatically fall back to `OLLAMA_HOST`/`OLLAMA_MODEL`. Availability failures
+skip cloud for five minutes before trying again. `/model` clears that cooldown
+so a newly selected model can be tried immediately. Ollama Cloud's
+concurrent-request limit is handled separately: the bot keeps at most
+`OLLAMA_CLOUD_CONCURRENCY` cloud calls in flight, retries a 429 briefly, and
+if the account is still busy runs only that one call locally - a busy account
+never takes cloud away from everyone else.
 
 ```
 telegram_bot.py            entry point — registers all handlers, runs polling
@@ -64,7 +68,11 @@ telegram_bot.py            entry point — registers all handlers, runs polling
 ├─ orna_assess.py          upgrade-projection math for item assessment
 ├─ orna_proofs.py          guild-proof exchange-rate math (ProofView.vue port)
 ├─ orna_calendar.py        Google Calendar "add event" link builder
-└─ orna_material_names_uk.py   static EN<->UK material name table (see below)
+├─ orna_material_names_uk.py   static EN<->UK material name table (see below)
+└─ telegram_orna.py        /orna: a tool-using agent over everything above, plus
+   ├─ orna_pinecone.py        knowledge_search: semantic search over the community corpora
+   ├─ orna_textindex.py       local keyword index, the fallback when Pinecone is unavailable
+   └─ orna_discord_search.py  Discord: curated harvest + last-resort live search
 ```
 
 `orna_material_names_uk.json` is scraped once from the codex's own materials
@@ -281,6 +289,43 @@ WantedBy=multi-user.target
 
 Then: `sudo systemctl enable --now orna-bot`
 
+### 9. (Optional) Semantic knowledge search and Discord knowledge
+
+`/orna`'s `knowledge_search` answers from community sources: player sheets,
+playerecho guides, Ornabook, the story questline guide, r/OrnaRPG Q&A,
+developer comments, and curated Discord posts.
+
+**Pinecone** (recommended - finds passages by meaning, so a reworded question
+still lands): put `PINECONE_API_KEY` in `.env`, then
+
+```bash
+python3 orna_pinecone.py            # creates the index on first run, uploads every corpus
+```
+
+This takes a few minutes on the starter plan, which allows 250k embedding tokens
+a minute. The script waits out that limit by itself and checks each namespace's
+record count afterwards. Without a key, `knowledge_search` uses a local keyword
+index built automatically from the same corpora.
+
+**Discord** (optional). Reading the official Orna server and Orna Legends needs
+a *user* account, so this drives a real Chrome logged in as you. **Automating a
+user account is against Discord's terms and can get that account banned** -
+use it only if you accept that. It is read-only, paced like a person, and your
+login token never leaves the browser.
+
+```bash
+python3 orna_discord_search.py login       # a Chrome window opens: log in by hand, once
+python3 orna_discord_search.py harvest     # ~2 min: FAQ/guide channels + pinned posts, images transcribed
+python3 orna_pinecone.py discord
+```
+
+Images (charts, tier lists) are transcribed to text by a vision model on Ollama
+Cloud, once per image. With the Discord login in place, `/orna` also gets a
+`discord_search` tool: a live full-text search of player chat, used only after
+`knowledge_search` and `web_search` both came up short. Whatever it finds is
+kept and indexed, so the next similar question is answered without searching
+Discord again.
+
 ## Usage
 
 **Slash commands:**
@@ -319,3 +364,16 @@ python orna_scrape_material_names.py
 
 This re-scrapes `https://playorna.com/codex/items/?c=material` in both
 English and Ukrainian and rewrites `orna_material_names_uk.json`.
+
+After re-scraping any knowledge corpus, re-index that namespace in Pinecone
+(the local keyword index rebuilds itself):
+
+```bash
+python3 orna_scrape_questline.py && python3 orna_pinecone.py questline
+python3 orna_discord_search.py harvest && python3 orna_pinecone.py discord
+python3 orna_pinecone.py --probe "<question>"   # raw scores per namespace, to tune PINECONE_MIN_SCORE
+```
+
+`/update_codex` re-indexes the community sheets (`knowledge`) itself. If the
+Discord login expires, `harvest` and `discord_search` say so; run
+`python3 orna_discord_search.py login` again.
