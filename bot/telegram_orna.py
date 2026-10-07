@@ -1079,6 +1079,9 @@ async def _run_sql_tool(message, sql: str, args: dict, session=None) -> str:
 _CALENDAR_LINK_HTML = f'<a href="{CALENDAR_URL_UK}">📅 Переглянути календар подій</a>'
 
 
+_EVENT_CARDS_MAX = 3      # more matches than this are read, not posted - see _run_events_tool
+
+
 async def _run_events_tool(message, keyword: str) -> str:
     try:
         # upcoming_only=True (fetch_events' default) already drops anything
@@ -1095,6 +1098,19 @@ async def _run_events_tool(message, keyword: str) -> str:
 
     needle = keyword.strip().lower()
     shown = [e for e in events if needle in e["name"].lower() or needle in e["description"].lower()] if needle else events
+
+    # The whole calendar (or a broad match) is NOT posted: live 2026-10-07,
+    # "what is in the event checklist for Hallowed" made the model call
+    # events("") just to learn the current event's NAME, and the tool posted all
+    # 13 events of the month as 13 messages into a ~180-person chat. Cards are for
+    # a specific event; a list is data the model reads (and lists in finish() if
+    # the user really asked for the calendar).
+    if not needle or len(shown) > _EVENT_CARDS_MAX:
+        lines = [f"{'LIVE NOW' if e['live'] else 'upcoming'}: {e['name']} ({e['starts']} to {e['ends']}): "
+                 f"{e['description']}" for e in shown]
+        return ("NOT POSTED - the events below are for you to read. If the user asked for the event calendar, "
+                f"list the relevant ones in finish() and link {CALENDAR_URL_UK}. {len(shown)} current/upcoming "
+                "event(s):\n" + "\n".join(lines)) if shown else "no current or upcoming events"
 
     if not shown:
         # Honest "no match" instead of silently substituting a different
@@ -3252,7 +3268,10 @@ _TOOLS_TEXT = (
     "removed, and the user always gets a link to the full calendar. So do not reason about dates: check only if "
     "an event description matches the request. Descriptions use different words for the same thing: \"earn 25% "
     "more orns\" and \"double orns, gold, and experience\" both mean more orns. If nothing matches, say so. Do "
-    "not invent a match. An empty action_input shows all events. Do NOT use it for raids in general: raid "
+    "not invent a match. With one keyword that matches 1-3 events, it POSTS their cards. With an empty "
+    "action_input or more matches, it posts nothing and returns the list to you: use that to find the name "
+    "of the event that is LIVE NOW. Then search for that name: an event's checklist, rewards or guide is a "
+    "knowledge_search question (\"Hallowed event checklist\"). Do NOT use it for raids in general: raid "
     "strategy, raid gear or a raid boss (\"items for heretic raids\", \"how do I beat raid X\") is a "
     "class_guide, knowledge_search, query or web_search question. Use events() for a raid only when the user "
     "asks about a SCHEDULED raid event (\"коли наступний рейд-івент\", \"is there a raid event now\").\n"
@@ -3347,7 +3366,8 @@ _TOOLS_TEXT = (
     "modifiers, bonus stats, passives, tier-10 base stats - AL adds 1% per level to every stat, PVP doubles HP); "
     "how each core SYSTEM works (factions, Ascension, quality and forging, adornments, Wild Towers, flasks, "
     "kingdoms, followers); exact FORMULAS from guides; the STORY QUESTLINE (each quest's giver, objective and "
-    "where to do it); player Q&A, Discord guide and FAQ posts, and transcribed charts; what Orna's developers "
+    "where to do it); player Q&A, Discord guide and FAQ posts, EVENT CHECKLISTS, and transcribed charts; what "
+    "Orna's developers "
     "explained ([dev]: authoritative, but it can be years old - check releases() before you give a number "
     "that matters).\n"
     "  Above all, it has PER-MONSTER and PER-BOSS ELEMENTAL RESISTANCES. The codex has no immunity field, so "
@@ -4263,11 +4283,6 @@ class OrnaSession:
     # thought said "I need to synthesize the tips", its action_input was "",
     # and the user got "Не вдалося сформувати відповідь".
     pushed_for_empty: bool = False
-    # A tool sent a message to the chat this request (any tool - see _run_tool).
-    # Separate from posted_note, which only the listing tools set and which
-    # also decides REVIEW and the closing line; this only says "the user saw
-    # something", which is what an empty finish needs to be correct.
-    anything_posted: bool = False
     # The Telegram message a listing tool posted last - where the /clarify hint
     # goes when the closing line is dropped (see _listing_only).
     last_post: object = None
@@ -4308,17 +4323,6 @@ async def _maybe_plan(sid: str, user_text: str) -> None:
 
 async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
                     session=None) -> str:
-    """Dispatch one tool call, recording whether it sent anything to the chat."""
-    rec = _PostRecorder(message) if message is not None else None
-    try:
-        return await _dispatch_tool(rec, action, action_input, args, sources, session)
-    finally:
-        if session is not None and rec is not None and rec.last is not None:
-            session.anything_posted = True
-
-
-async def _dispatch_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
-                         session=None) -> str:
     """Dispatch one tool call. Wrapped in a broad except so a bug in any
     single tool ends that step with an observation the model can react to,
     instead of killing the whole loop (defense in depth alongside
@@ -4345,7 +4349,7 @@ async def _dispatch_tool(message, action: str, action_input: str, args: dict, so
         if action == "sql":
             return await _run_sql_tool(message, action_input or str(args.get("sql") or ""), args, session)
         if action == "events":
-            return await _run_events_tool(message, action_input)
+            return await _run_listing(session, message, lambda m: _run_events_tool(m, action_input))
         if action == "open_entry":
             return await _run_open_entry_tool(message, action_input, sources, session)
         if action == "research":
@@ -4794,8 +4798,7 @@ async def _advance_inner(sid: str, message) -> None:
             # An EMPTY finish is right only after a tool POSTED the answer; with
             # nothing posted it would send the user a canned failure. Sent back
             # once - closed in code, since the prompt already says this.
-            if (not action_input.strip() and not session.posted_note and not session.anything_posted
-                    and not session.pushed_for_empty):
+            if not action_input.strip() and not session.posted_note and not session.pushed_for_empty:
                 session.pushed_for_empty = True
                 logger.info("orna: empty finish with nothing posted sid=%s - sending it back", sid)
                 session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
@@ -6161,6 +6164,30 @@ def _demo() -> None:
     assert _CORPUS_WIDE_WORDS.sub(" ", "Orna RPG ward capacity in the game").split() == ["ward", "capacity", "in", "the"]
     ward = asyncio.run(_retrieve("ward capacity orna"))
     assert any("(HP + MP) / 2" in h["text"] for h in ward[:3]), [h["text"][:60] for h in ward[:3]]
+
+    # --- events: the whole calendar is READ, never posted; one specific event is posted ---
+    class _EvSpy:
+        def __init__(self): self.sent = []
+        async def reply_text(self, text, **kw): self.sent.append(text); return object()
+    _cal = [{"name": n, "description": d, "starts": "a", "ends": "b", "live": live, "roster": {}}
+            for n, d, live in [("The Hallowed", "Pumpkinhead hunt", True), ("Lucky Event", "drops", False),
+                               ("A Feast of Feathers", "guilds", False), ("To The Skies", "towers", False),
+                               ("The Hallowed: Houses of Horrors", "treats", False)]]
+    _real_fetch = fetch_events
+    globals()["fetch_events"] = lambda: _cal
+    try:
+        spy = _EvSpy()
+        everything = asyncio.run(_run_events_tool(spy, ""))
+        assert not spy.sent and everything.startswith("NOT POSTED"), (spy.sent, everything[:80])
+        assert "LIVE NOW: The Hallowed (" in everything, everything      # the current event is findable
+        spy = _EvSpy()
+        asyncio.run(_run_events_tool(spy, "e"))                           # 5 matches > _EVENT_CARDS_MAX
+        assert not spy.sent, spy.sent
+        spy = _EvSpy()
+        asyncio.run(_run_events_tool(spy, "feathers"))                     # one specific event: its card
+        assert len(spy.sent) == 2 and "A Feast of Feathers" in spy.sent[0], spy.sent
+    finally:
+        globals()["fetch_events"] = _real_fetch
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))

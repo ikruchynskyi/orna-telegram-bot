@@ -71,6 +71,11 @@ FULL = {
     "927847673543938078": ("748188991852904621", "faq"),
     "811290781896802305": ("748188991852904621", "useful-tips-and-charts"),
     "1041428820454031521": ("748188991852904621", "aethric-resources-and-faq"),
+    # Per-event checklists (what to farm, every reward) by one community author:
+    # the Orna Legends channel holds them up to Dec 2025, then the author moved to
+    # a thread on the official server and keeps THAT one current.
+    "915890058865815572": ("748188991852904621", "event-checklist"),
+    "1449200212773044398": ("448527960056791051", "event-checklists-thread"),
 }
 # PINNED only: busy class/strategy channels, where pins are the curated answers.
 PINNED = {
@@ -378,6 +383,18 @@ def transcribe(records: Optional[list] = None) -> None:
           f"({len(todo)} to transcribe this run)")
 
 
+_EMOJI_RE = re.compile(r"<a?:(\w+):\d+>")          # custom emoji: <:boo:1296717939528958003>
+_MARKUP_RE = re.compile(r"\*\*|__|~~|^#+\s*", re.M)   # bold, underline, strike, heading marks
+
+
+def clean(text: str) -> str:
+    """Discord markup out, words kept. Measured 2026-10-07: the 2025 Hallowed
+    checklist opens "# <:boo:1296717939528958003> **__The Hallowed! - Event
+    Checklist__** <:boo:...>", and that noise kept it under the score floor
+    while short posts that merely mention Hallowed ranked first."""
+    return _MARKUP_RE.sub("", _EMOJI_RE.sub(r":\1:", text)).strip()
+
+
 def units() -> list:
     """(head, lines, title, url) per message - the shape orna_pinecone._units
     returns for every corpus. Each message is its own unit: these channels hold
@@ -386,7 +403,11 @@ def units() -> list:
     out = []
     for r in _load_json("messages.json", []):
         title = f"{GUILDS[r['guild']]} #{r['channel_name']}" + (" (pinned)" if r["pinned"] else "")
-        lines = r["text"].splitlines() if r["text"] else []
+        lines = [l for l in clean(r["text"]).splitlines() if l.strip()] if r["text"] else []
+        # A post's own heading ("The Hallowed! - Event Checklist") goes into
+        # EVERY chunk's header: a long post is split, and its later chunks - the
+        # actual item lists - otherwise never say which event they belong to.
+        heading = lines.pop(0) if lines and len(lines[0]) <= 100 and len(lines) > 1 else ""
         for a in r["images"]:
             t = images.get(a["id"])
             if t:
@@ -394,7 +415,7 @@ def units() -> list:
                 lines.extend(t["text"].splitlines())
         if sum(len(l) for l in lines) < MIN_CONTENT:
             continue
-        out.append((f"[{title}, {r['ts'][:10]}]", lines, title,
+        out.append((f"[{title}, {r['ts'][:10]}]" + (f" {heading}" if heading else ""), lines, title,
                     f"https://discord.com/channels/{r['guild']}/{r['channel']}/{r['id']}"))
     return out
 
@@ -541,6 +562,8 @@ def _demo() -> None:
     assert _record({**msg, "content": "", "embeds": [{"title": "Tier list", "description": "y" * 30}],
                     "attachments": []}, "966231961091854387", False)["text"].startswith("Tier list")
     assert set(FULL).isdisjoint(PINNED)
+    assert clean("# <:boo:1296717939528958003> **__The Hallowed! - Event Checklist__** <a:x:12>") == \
+        ":boo: The Hallowed! - Event Checklist :x:"
     data = {"messages": [[{"hit": True, "type": 0, "content": "short", "timestamp": "2026-10-05T01:00:00",
                            "id": "1", "channel_id": "9"}],
                          [{"hit": True, "type": 0, "content": "z" * 50, "timestamp": "2026-10-05T01:00:00",
