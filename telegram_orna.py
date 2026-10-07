@@ -2616,6 +2616,16 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
 # web both came up short. One action for both communities, not one each: same
 # gate, same last-resort role, and one fewer tool for the model to choose from.
 _COMMUNITY_PREREQS = ("knowledge_search", "web_search")
+# ...unless the USER asked for it by name. Live 2026-10-06: "use community
+# search to find tips ..." was refused in 3 of 3 runs, and the model never got
+# to it. Only the user's own turns count - a tool result or system note (the
+# refusal itself names community_search) must never unlock it.
+_COMMUNITY_ASKED = re.compile(r"community[ _]search|discord|reddit|д[иі]скорд|ре[дд]+[иі]т", re.I)
+
+
+def _user_asked_for_community(session) -> bool:
+    turns = [m.get("content") or "" for m in (session.messages if session else []) if m.get("role") == "user"]
+    return any(_TAG_RE.match(t) and _COMMUNITY_ASKED.search(t) for t in turns)
 
 
 def _keep_discord_hits(hits: list) -> None:
@@ -2659,7 +2669,7 @@ async def _run_community_search_tool(query: str, sources: Optional[list] = None,
         return "community_search needs a query in action_input"
     tried = {json.loads(sig)[0] for sig in (session.seen_calls if session else {})}
     missing = [t for t in _COMMUNITY_PREREQS if t not in tried]
-    if missing:
+    if missing and not _user_asked_for_community(session):
         return (f"community_search REFUSED: it is the last resort, for when the curated sources and the web did not "
                 f"give an answer you are confident in. Call {' and '.join(missing)} for this first.")
     sides = [("reddit", orna_reddit_search.search, _keep_reddit_threads)]
@@ -4094,6 +4104,12 @@ def _working_state(messages: list) -> str:
             "to a base stat); (4) call a tool ONLY for data none of them contain - otherwise finish.")
 
 
+_EMPTY_FINISH_NOTE = (
+    "Your finish() has an EMPTY action_input, but no tool posted an answer to the user. The user sees only "
+    "your finish() text. Write the answer in action_input now, from the tool results above. If they do not "
+    "answer the question, say so.")
+
+
 def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = "|".join(f'"{a}"' for a in _ACTIONS)
@@ -4242,6 +4258,16 @@ class OrnaSession:
     # live 2026-10-05 that made the model paste the raw observation as its answer.
     posted_note: str = ""
     pushed_for_leak: bool = False
+    # finish() came back with an EMPTY answer while nothing was posted - sent
+    # back once (see _EMPTY_FINISH_NOTE). Live 2026-10-06: the local model's
+    # thought said "I need to synthesize the tips", its action_input was "",
+    # and the user got "Не вдалося сформувати відповідь".
+    pushed_for_empty: bool = False
+    # A tool sent a message to the chat this request (any tool - see _run_tool).
+    # Separate from posted_note, which only the listing tools set and which
+    # also decides REVIEW and the closing line; this only says "the user saw
+    # something", which is what an empty finish needs to be correct.
+    anything_posted: bool = False
     # The Telegram message a listing tool posted last - where the /clarify hint
     # goes when the closing line is dropped (see _listing_only).
     last_post: object = None
@@ -4282,6 +4308,17 @@ async def _maybe_plan(sid: str, user_text: str) -> None:
 
 async def _run_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
                     session=None) -> str:
+    """Dispatch one tool call, recording whether it sent anything to the chat."""
+    rec = _PostRecorder(message) if message is not None else None
+    try:
+        return await _dispatch_tool(rec, action, action_input, args, sources, session)
+    finally:
+        if session is not None and rec is not None and rec.last is not None:
+            session.anything_posted = True
+
+
+async def _dispatch_tool(message, action: str, action_input: str, args: dict, sources: Optional[list] = None,
+                         session=None) -> str:
     """Dispatch one tool call. Wrapped in a broad except so a bug in any
     single tool ends that step with an observation the model can react to,
     instead of killing the whole loop (defense in depth alongside
@@ -4754,6 +4791,16 @@ async def _advance_inner(sid: str, message) -> None:
             # use_plan_review (complex requests only) and bounded to one
             # round; past that, or on any call failure, this is a no-op and
             # the draft proceeds exactly as it would have without REVIEW.
+            # An EMPTY finish is right only after a tool POSTED the answer; with
+            # nothing posted it would send the user a canned failure. Sent back
+            # once - closed in code, since the prompt already says this.
+            if (not action_input.strip() and not session.posted_note and not session.anything_posted
+                    and not session.pushed_for_empty):
+                session.pushed_for_empty = True
+                logger.info("orna: empty finish with nothing posted sid=%s - sending it back", sid)
+                session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
+                session.messages.append({"role": "user", "content": f"{_SYSTEM_NOTE} {_EMPTY_FINISH_NOTE}"})
+                continue
             draft_answer = action_input or "Не вдалося сформувати відповідь."
 
             # A count answered with zero tool calls goes back once - see
@@ -6062,8 +6109,17 @@ def _demo() -> None:
     # --- community_search is gated in code: refused until knowledge_search AND web_search ran ---
     class _GateSess:
         seen_calls = {json.dumps(["knowledge_search", "x", {}]): "obs"}
+    _GateSess.messages = [{"role": "user", "content": f"{_USER_QUESTION}\nhow does the prometheus sigil work?"},
+                          {"role": "user", "content": "[TOOL RESULT #1 · community_search] community_search REFUSED"}]
     gated = asyncio.run(_run_community_search_tool("prometheus sigil", [], _GateSess()))
     assert gated.startswith("community_search REFUSED") and "web_search" in gated, gated
+    # ...but the user asking for it by name opens the gate; a tool result naming it does not
+    assert not _user_asked_for_community(_GateSess())
+    class _AskedSess(_GateSess):
+        messages = [{"role": "user", "content": f"{_USER_QUESTION}\nuse community search to find heretic tips"}]
+    assert _user_asked_for_community(_AskedSess())
+    assert _user_asked_for_community(type("S", (), {"messages": [
+        {"role": "user", "content": f"{_USER_FOLLOW_UP}\nпошукай у реддіті"}]})())
     # ...and once both ran: both communities searched, cited, and KEPT (stubbed -
     # never write test results to the real stores or Pinecone).
     _GateSess.seen_calls = {json.dumps(["knowledge_search", "x", {}]): "o", json.dumps(["web_search", "x", {}]): "o"}

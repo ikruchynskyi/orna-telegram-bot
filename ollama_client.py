@@ -135,6 +135,15 @@ class OllamaBusy(OllamaError):
     call and, unlike OllamaUnavailable, never parks the cloud leg."""
 
 
+class OllamaSlow(OllamaError):
+    """No reply within the read timeout. The service answered the connection -
+    it is SLOW, not down - so, like OllamaBusy, this falls back to local for
+    the one call and never parks the cloud. Live 2026-10-04..06: all 6 cloud
+    parkings were read timeouts (logged with an empty message, since str() of a
+    ReadTimeout is ""), and each sent EVERY user to the local model for 5
+    minutes because one step was slow."""
+
+
 class OllamaUnavailable(OllamaError):
     """The request never produced a reply: timeout, connection failure, or an
     HTTP error status. Distinct from its parent, which also covers a reply
@@ -299,8 +308,10 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
             )
             msg = response.get("message") or {}
             content = msg.get("content") or ""
+    except httpx.ReadTimeout as e:
+        raise OllamaSlow(f"{model}: no reply within {getattr(timeout, 'read', timeout)}s") from e
     except httpx.HTTPError as e:
-        raise OllamaUnavailable(f"Ollama request failed: {e}") from e
+        raise OllamaUnavailable(f"Ollama request failed: {type(e).__name__}: {e}") from e
     finally:
         if cloud:
             _cloud_slots.release()
@@ -391,8 +402,8 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
             _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
             logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
                            e, CLOUD_COOLDOWN_SECONDS)
-        elif isinstance(e, OllamaBusy):
-            logger.warning("ollama_client: Ollama Cloud busy (%s), local for this call only", e)
+        elif isinstance(e, (OllamaBusy, OllamaSlow)):
+            logger.warning("ollama_client: Ollama Cloud busy or slow (%s), local for this call only", e)
         else:
             logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
 
@@ -421,8 +432,11 @@ def _demo_cloud_limits() -> None:
     real_client, saved = httpx.AsyncClient, (_cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS)
     replies: list = []
 
-    def handler(_req):
-        return httpx.Response(replies.pop(0), json={"message": {"content": '{"ok": 1}'}})
+    def handler(req):
+        r = replies.pop(0)
+        if r == "timeout":
+            raise httpx.ReadTimeout("", request=req)
+        return httpx.Response(r, json={"message": {"content": '{"ok": 1}'}})
 
     httpx.AsyncClient = lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
     _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS = (0, 0), 0
@@ -437,8 +451,15 @@ def _demo_cloud_limits() -> None:
         except OllamaBusy:
             pass
         assert not isinstance(OllamaBusy("x"), OllamaUnavailable)   # busy never parks the cloud
+        assert not isinstance(OllamaSlow("x"), OllamaUnavailable)   # nor does slow
         assert _cloud_slots.acquire(blocking=False)     # the slot was released after the failure
         _cloud_slots.release()
+        # a slow cloud reply falls back to local for that call - and parks nothing
+        global _cloud_down_until
+        _cloud_down_until = 0.0
+        replies[:] = ["timeout", 200]
+        out = _aio.run(chat_json_with_fallback("m", "http://local", "lm", [{"role": "user", "content": "x"}]))
+        assert out == {"ok": 1} and not replies and _cloud_down_until == 0.0, (out, _cloud_down_until)
         _cloud_slots = threading.BoundedSemaphore(1)
         _cloud_slots.acquire()                          # every slot taken
         try:

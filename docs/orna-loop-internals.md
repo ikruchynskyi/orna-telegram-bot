@@ -1089,3 +1089,24 @@ budget cut it in 2 of 4 runs. `_retrieve` now drops corpus-wide words
 
 End to end (TIER=1,2,3): old prompt 28/30. New prompt with both fixes:
 tier 1 8/8, tiers 2-3 33/33.
+
+**Empty finish, explicit community search, slow cloud (2026-10-06).** One
+live request, "use community search to find tips for heretic build on the
+Blades of Finesse arena", hit three faults at once:
+- **Slow cloud parked as an outage.** The cloud step took more than 45s.
+  A `ReadTimeout` was raised as `OllamaUnavailable` with an empty message
+  (str() of a ReadTimeout is ""), and the cloud was parked for EVERY user
+  for 5 minutes. All 6 parkings in the log for Oct 4-6 were this. A read
+  timeout is now `OllamaSlow`: local for that one call, nothing parked.
+  Error messages now carry the exception type.
+- **Empty finish accepted.** The local model then finished with an EMPTY
+  `action_input` (its thought said "I need to synthesize the tips"), and the
+  user got "Не вдалося сформувати відповідь". An empty finish is correct
+  only after a tool posted something. Otherwise it is sent back once
+  (`pushed_for_empty`). `_run_tool` now records whether ANY tool sent a
+  message (`anything_posted`); only the listing tools set `posted_note`.
+- **Explicit request refused.** community_search refused the request in
+  3 of 3 runs, although the user asked for it by name. Its gate now opens
+  when the user's OWN turns name community search, Discord or Reddit
+  (`_user_asked_for_community`). Tool results and system notes never count:
+  the refusal text itself names the tool.
