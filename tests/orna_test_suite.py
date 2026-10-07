@@ -463,6 +463,7 @@ TIER0 = [
     ("reddit-search", lambda: __import__("importlib").import_module("knowledge.orna_reddit_search")._demo()),
     ("retrieval-benchmark", _check_retrieval_benchmark),
     ("model-usage-unit", _check_model_usage_unit),
+    ("log-rotation", lambda: __import__("importlib").import_module("bot.log_rotation")._demo()),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
 ]

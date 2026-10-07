@@ -141,6 +141,21 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
 # so an unpaired * / _ can't swallow across lines into the next list item.
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)([^\n]+?)(?<!\*)\*(?!\*)|(?<![\w])_(?!_)([^\n]+?)(?<!_)_(?![\w])")
 _BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+", re.M)
+# After html.escape, so ">" is "&gt;". A run of "> " lines becomes ONE quote;
+# a long one is Telegram's collapsible quote, so detail does not flood a chat.
+_QUOTE_RE = re.compile(r"(?:^&gt;[ \t]?.*(?:\n|$))+", re.M)
+_QUOTE_COLLAPSE_LINES = 5
+_QUOTE_COLLAPSE_CHARS = 500
+_STRIKE_RE = re.compile(r"~~(.+?)~~")
+_SPOILER_RE = re.compile(r"\|\|(.+?)\|\|")
+
+
+def _blockquote(m: re.Match) -> str:
+    block = m.group(0)
+    body = re.sub(r"^&gt;[ \t]?", "", block.rstrip("\n"), flags=re.M)
+    long = body.count("\n") >= _QUOTE_COLLAPSE_LINES or len(body) > _QUOTE_COLLAPSE_CHARS
+    return (f"<blockquote expandable>{body}</blockquote>" if long else f"<blockquote>{body}</blockquote>") \
+        + ("\n" if block.endswith("\n") else "")
 # A Markdown table's separator row - "|---|:--:|--:|" etc, dashes/colons
 # only per cell.
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
@@ -223,6 +238,9 @@ def _markdown_to_html(text: str) -> str:
     # only genuine inline *emphasis* for the italic pass.
     text = _BULLET_RE.sub("• ", text)
     text = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
+    text = _STRIKE_RE.sub(r"<s>\1</s>", text)
+    text = _SPOILER_RE.sub(r"<tg-spoiler>\1</tg-spoiler>", text)
+    text = _QUOTE_RE.sub(_blockquote, text)
 
     for i, snippet in enumerate(stash):
         text = text.replace(f"\x00{i}\x00", snippet)
@@ -1277,6 +1295,12 @@ def _demo() -> None:
     assert _markdown_to_html("## **Important**") == "<b>Important</b>"
     assert _markdown_to_html("`code`") == "<code>code</code>"
     assert _markdown_to_html("```\nx = 1\n```") == "<pre>x = 1</pre>"
+    # quotes: a run of "> " lines is one quote; a long one collapses; "a > b" in text is not a quote
+    assert _markdown_to_html("> **Note**\n> second line\nafter") == \
+        "<blockquote><b>Note</b>\nsecond line</blockquote>\nafter"
+    assert _markdown_to_html("\n".join(f"> row {i}" for i in range(8))).startswith("<blockquote expandable>row 0")
+    assert _markdown_to_html("HP > 500") == "HP &gt; 500"
+    assert _markdown_to_html("~~old~~ new ||secret||") == "<s>old</s> new <tg-spoiler>secret</tg-spoiler>"
     assert _markdown_to_html("[Orna](https://playorna.com)") == '<a href="https://playorna.com">Orna</a>'
     assert _markdown_to_html("<3 & you") == "&lt;3 &amp; you"  # literal HTML-special chars survive as text, not tags
 

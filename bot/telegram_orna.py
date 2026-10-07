@@ -3480,6 +3480,11 @@ _TOOLS_TEXT = (
     "today, next and towers say so), send an EMPTY action_input. If a tool POSTED part of the answer, send one "
     "short closing sentence. An answer from knowledge_search, web_search, community_search or class_guide is "
     "not posted: then finish() is the full answer. Do not finish before you have enough information.\n"
+    "  FORMAT the answer in Markdown. It is shown in Telegram: **bold** for names and key numbers; \"- \" "
+    "lists; a | table | for rows of values with the same columns (it is shown as an aligned table); \"> \" "
+    "lines for detail the user can skip (a long one is shown as a block that the user opens with a tap); "
+    "[text](url) links. No # headings: use a **bold** line. Use a format only when it makes the answer "
+    "easier to read - a short answer is plain sentences.\n"
 )
 
 _CONDITION_RULES = (
@@ -4074,8 +4079,9 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
             + " Reply with JSON only: {\"text\": \"<the translation>\"}. Rules: translate the MEANING, not word "
               "by word. NEVER translate or transliterate a proper noun - Orna item, class, specialization, "
               "monster, spell, guild, event and material names keep their original spelling exactly (they are "
-              "identifiers; a translated name matches nothing in the game data). Keep numbers, percentages and "
-              "any HTML tags exactly as they are. Do not answer the message, add anything, or omit anything."
+              "identifiers; a translated name matches nothing in the game data). Keep numbers, percentages, "
+              "any HTML tags, Markdown markers (** * ~~ | > - ` and table rows) and line breaks exactly as they "
+              "are. Do not answer the message, add anything, or omit anything."
             + (" " + UKRAINIAN_RULES if target == "Ukrainian" else "")
             + keep + extra
         )

@@ -1,7 +1,10 @@
 import html
 import asyncio
 import os
+import datetime
 import logging
+
+from bot import log_rotation
 import re
 from typing import Optional
 
@@ -695,6 +698,8 @@ def main():
                                     interval=telegram_announce.POLL_INTERVAL_SECONDS,
                                     first=30, name="discord_announce")
         logger.info("announce: polling Discord every %ss", telegram_announce.POLL_INTERVAL_SECONDS)
+    # Monthly: archive + truncate the launchd logs so they never fill the disk.
+    app.job_queue.run_monthly(log_rotation.job, when=datetime.time(4, 0), day=1, name="log_rotation")
     logger.info("🤖 Bot is running...")
     # Explicit allowed_updates so inline_query/chosen_inline_result are always
     # polled (the default set includes them, but a previously-set restrictive
