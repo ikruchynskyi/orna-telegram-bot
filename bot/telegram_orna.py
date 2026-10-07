@@ -67,7 +67,8 @@ from telegram.ext import (
     InlineQueryHandler, MessageHandler, filters,
 )
 
-from llm.ollama_client import OllamaError, UnsupportedMultimodal, chat_json, chat_json_with_fallback
+from llm.ollama_client import (OLLAMA_CLOUD_HOST, OllamaBusy, OllamaError, OllamaSlow, UnsupportedMultimodal,
+                               chat_json, chat_json_with_fallback)
 from orna.orna_aussies import build_url as build_aussies_url
 from orna.orna_aussies import decode as decode_effect_code
 from orna.orna_aussies import display_name
@@ -3992,6 +3993,18 @@ def _proper_nouns(text: str) -> list:
 # code); gemma4:31b gave natural, near-identical Ukrainian every time. The
 # reasoning loop keeps its own model - this is only translation.
 TRANSLATION_MODEL = "gemma4:31b"
+# How every text the bot WRITES in Ukrainian must read - one place, used by every
+# translation and rewrite (the /orna gates, announcements). ~80% STE, like all
+# prompt text here.
+UKRAINIAN_RULES = (
+    "Write natural, correct UKRAINIAN. Never Russian: Ukrainian has no letters ы, э, ъ or ё, and a Russian word "
+    "or spelling is a mistake (\"спорядження\", not \"экипировка\"; \"зараз\", not \"сейчас\"; \"що\", "
+    "not \"что\"). Do not copy Russian word order or calques. Keep game names in English as written.")
+# Ukrainian output stays on the cloud TRANSLATION_MODEL: the local fallback model
+# is where Russian-tinged Ukrainian comes from. Longer than a loop step - a
+# translation is the last thing before the user sees the answer.
+_TRANSLATION_TIMEOUT = httpx.Timeout(connect=10.0, read=90.0, write=20.0, pool=10.0)
+_RUSSIAN_RETRIES = 2
 # Scripts that have no business in a Ukrainian/English reply - live: "Demeter"
 # came back as "Де미터", Hangul mid-word.
 _FOREIGN_SCRIPT_RE = re.compile(r"[\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u4E00-\u9FFF\uAC00-\uD7AF]")
@@ -4024,7 +4037,7 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
         keep = (" These are IDENTIFIERS and must appear in your output EXACTLY as written here, unchanged and "
                 "not transliterated: " + "; ".join(names[:25]) + ".")
 
-    async def _once(extra: str) -> Optional[str]:
+    async def _once(extra: str, cloud_only: bool = False) -> Optional[str]:
         # Same language in and out is a REWRITE, not a translation: the loop
         # model sometimes writes the user's language itself, badly, and the
         # translation model then polishes it rather than being asked to
@@ -4040,51 +4053,93 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
               "monster, spell, guild, event and material names keep their original spelling exactly (they are "
               "identifiers; a translated name matches nothing in the game data). Keep numbers, percentages and "
               "any HTML tags exactly as they are. Do not answer the message, add anything, or omit anything."
-            + (" Write natural UKRAINIAN, never Russian: Ukrainian has no letters ы, э, ъ or ё, and Russian words "
-               "or spellings in the reply are a mistake." if target == "Ukrainian" else "")
+            + (" " + UKRAINIAN_RULES if target == "Ukrainian" else "")
             + keep + extra
         )
+        messages = [{"role": "system", "content": prompt}, {"role": "user", "content": text}]
         try:
-            got = await chat_json_with_fallback(
-                model or ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL,
-                [{"role": "system", "content": prompt}, {"role": "user", "content": text}],
-                api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
-            )
+            if cloud_only:
+                # Straight to the cloud translation model - never the local fallback.
+                for attempt in (1, 2):
+                    try:
+                        got = await chat_json(OLLAMA_CLOUD_HOST, TRANSLATION_MODEL, messages,
+                                              headers={"Authorization": f"Bearer {OLLAMA_API_KEY}"},
+                                              timeout=_TRANSLATION_TIMEOUT)
+                        break
+                    except (OllamaBusy, OllamaSlow):
+                        if attempt == 2:
+                            raise
+                        await asyncio.sleep(3)
+            else:
+                got = await chat_json_with_fallback(
+                    model or ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, messages,
+                    api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
+                )
         except Exception as e:
-            logger.warning("orna: translation to %s failed (%s)", target, e)
+            logger.warning("orna: translation to %s failed%s (%s)", target, " on the cloud" if cloud_only else "", e)
             return None
         out = got.get("text") if isinstance(got, dict) else None
         return out.strip() if isinstance(out, str) and out.strip() else None
 
-    out = await _once("")
+    ukrainian = target == "Ukrainian"
+    # Ukrainian goes to the cloud translation model first; the general path (with
+    # its local fallback) only if the cloud cannot answer at all.
+    out = await _once("", cloud_only=True) if ukrainian and OLLAMA_API_KEY else None
     if out is None:
+        out = await _once("")
+    if out is None:
+        # Nothing came back. The original goes out - but for Ukrainian it still
+        # passes the Russian check below, since a draft is where Russian lives.
         logger.warning("orna: translation to %s produced nothing - using the original", target)
-        return text
+        if not ukrainian:
+            return text
+        out = text
     # VERIFY the identifiers survived, and retry ONCE naming the ones that did
     # not. Checked rather than trusted: "Duelist" came back as "Дулїст" on the
     # first live Ukrainian answer even with the rule above in the prompt.
     lost = [n for n in names if n not in out]
-    if lost:
+    if lost and out is not text:
         logger.info("orna: translation dropped %s - retrying once", lost[:5])
         retry = await _once(" Your previous attempt WRONGLY changed these names; reproduce each one character for "
-                            "character: " + "; ".join(lost[:15]) + ".")
+                            "character: " + "; ".join(lost[:15]) + ".", cloud_only=ukrainian)
         if retry is not None:
             still = [n for n in lost if n not in retry]
             if len(still) < len(lost):
                 out = retry
             if still:
                 logger.warning("orna: translation still dropped %s", still[:5])
-    bad_re = _RUSSIAN_ONLY_RE if target == "Ukrainian" else None
-    if _FOREIGN_SCRIPT_RE.search(out) or (bad_re and bad_re.search(out)):
-        bad = sorted(set(_FOREIGN_SCRIPT_RE.findall(out) + (bad_re.findall(out) if bad_re else [])))
-        logger.info("orna: Ukrainian translation contains Russian %s - retrying once", bad)
-        retry = await _once(" Your previous attempt used text that is not " + target + " (" + ", ".join(bad[:8])
-                            + ") - Russian words, or another script entirely. Rewrite it in correct " + target
-                            + ", keeping every name exactly as written in the source.")
-        if retry is not None and not _FOREIGN_SCRIPT_RE.search(retry) and \
-                not (bad_re and bad_re.search(retry)):
-            out = retry
-    return out
+    return await _without_russian(out, target, _once) if ukrainian else _without_foreign_script(out)
+
+
+def _not_ukrainian(text: str) -> list:
+    """What makes `text` not Ukrainian: Russian-only letters or words, or another script."""
+    return sorted(set(_FOREIGN_SCRIPT_RE.findall(text) + [m.lower() for m in _RUSSIAN_ONLY_RE.findall(text)]))
+
+
+def _without_foreign_script(text: str) -> str:
+    if _FOREIGN_SCRIPT_RE.search(text):
+        logger.warning("orna: translation contains another script: %s", _FOREIGN_SCRIPT_RE.findall(text)[:8])
+    return text
+
+
+async def _without_russian(text: str, target: str, once) -> str:
+    """Ukrainian text with Russian in it goes back to the cloud translation model
+    (`once(..., cloud_only=True)`), up to _RUSSIAN_RETRIES times - whatever wrote
+    it (the local fallback, a failed translation, the loop's own draft). The
+    first clean version wins; if none is clean, the log says so loudly."""
+    bad = _not_ukrainian(text)
+    for attempt in range(1, _RUSSIAN_RETRIES + 1):
+        if not bad:
+            return text
+        logger.info("orna: Ukrainian text contains %s - rewrite %d by %s", bad[:8], attempt, TRANSLATION_MODEL)
+        retry = await once(" Your previous attempt used text that is not Ukrainian (" + ", ".join(bad[:8]) + "): "
+                           "Russian words or letters, or another script. Rewrite it in correct Ukrainian, keeping "
+                           "every name exactly as written in the source.", cloud_only=True)
+        if retry is not None:
+            text, bad = retry, _not_ukrainian(retry)
+    if bad:
+        logger.warning("orna: Ukrainian text SENT WITH %s after %d rewrites", bad[:8], _RUSSIAN_RETRIES)
+    return text
 
 
 def _uk_material_names(text: str) -> list:
@@ -6312,6 +6367,40 @@ def _demo() -> None:
         ek = asyncio.run(_entity_knowledge("Hallowed Crucible: Tier: ★ 10; Rarity: Legendary; Useable by: All classes"))
         assert "COMMUNITY KNOWLEDGE about Hallowed Crucible" in ek and "Two-Handed" in ek, ek[:300]
     assert asyncio.run(_entity_knowledge("no entry here")) == ""                 # not an entry: nothing added
+
+    # --- Ukrainian output: Russian is rewritten by the cloud translation model, never sent silently ---
+    from llm.ollama_client import OllamaUnavailable
+    _real = (chat_json, chat_json_with_fallback, OLLAMA_API_KEY)
+    calls = []
+    def _stub(cloud_answers, local_answer):
+        async def fake_cloud(host, model, msgs, **kw):
+            calls.append(("cloud", model))
+            a = cloud_answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return {"text": a}
+        async def fake_fallback(*a, **kw):
+            calls.append(("fallback", a[0]))
+            return {"text": local_answer}
+        globals().update(chat_json=fake_cloud, chat_json_with_fallback=fake_fallback, OLLAMA_API_KEY="k")
+    try:
+        # 1. gemma slips into Russian once -> rewritten by gemma, clean
+        calls.clear()
+        _stub(["Він дає такі ефекты.", "Він дає такі ефекти."], "unused")
+        assert asyncio.run(_translate("It gives these effects.", "Ukrainian", "English", pin=[])) == \
+            "Він дає такі ефекти."
+        assert calls == [("cloud", TRANSLATION_MODEL)] * 2, calls      # never the local fallback
+        # 2. cloud down -> local fallback writes Russian -> cloud gemma rewrites it
+        calls.clear()
+        _stub([OllamaUnavailable("down"), "Зараз доступно."], "Сейчас доступно.")
+        assert asyncio.run(_translate("Available now.", "Ukrainian", "English", pin=[])) == "Зараз доступно."
+        assert [c[0] for c in calls] == ["cloud", "fallback", "cloud"], calls
+        # 3. nothing clean anywhere -> sent as is (logged), never silently "fixed" into nonsense
+        _stub([OllamaUnavailable("down")] * 5, "Это доступно.")
+        assert asyncio.run(_translate("This is available.", "Ukrainian", "English", pin=[])) == "Это доступно."
+        assert _not_ukrainian("Зараз: що є") == [] and _not_ukrainian("сейчас ы") == ["сейчас", "ы"]
+    finally:
+        globals().update(chat_json=_real[0], chat_json_with_fallback=_real[1], OLLAMA_API_KEY=_real[2])
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))

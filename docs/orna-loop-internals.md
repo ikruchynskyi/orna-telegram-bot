@@ -1128,3 +1128,22 @@ answer "none" from the codex alone.
 
 Result: 3/3 correct answers (cheat sheet attached 2/3); new tier-2 case
 crucible-passives; all 16 end-to-end cases pass.
+
+**Ukrainian output: no Russian, and it stays on gemma (2026-10-07).**
+Translation already used gemma4:31b with a "no Russian" rule and a retry. The
+leaks were around it:
+- Translation calls used the general cloud->local fallback, so a busy or
+  slow cloud sent Ukrainian to the LOCAL model, the source of Russian-tinged
+  Ukrainian. The Russian retry could land there too.
+- When the retry was still Russian, the bad text was sent anyway.
+- When translation failed entirely, the loop's raw draft went out
+  unchecked.
+
+Now:
+- `UKRAINIAN_RULES` is the one instruction for every text the bot writes in
+  Ukrainian.
+- Ukrainian goes straight to cloud TRANSLATION_MODEL (90s, one retry when
+  busy or slow). The local fallback runs only if that fails.
+- `_without_russian` checks the result, wherever it came from (translation,
+  local fallback or the raw draft), and has cloud gemma rewrite it up to 2
+  times. If it is still not clean, the log says "SENT WITH ...".
