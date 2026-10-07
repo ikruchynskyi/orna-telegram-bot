@@ -1110,3 +1110,21 @@ Blades of Finesse arena", hit three faults at once:
   when the user's OWN turns name community search, Discord or Reddit
   (`_user_asked_for_community`). Tool results and system notes never count:
   the refusal text itself names the tool.
+
+**Opened codex entries carry community knowledge (2026-10-07).**
+"які ефекти дає Тигель Освяченого" opened Hallowed Crucible (tier, rarity,
+nothing else). The model queried the codex effects table (0 rows) and
+answered "gives no effects" at confidence 90 - never calling
+knowledge_search, although the Discord cheat sheet of the passives the
+crucible rolls was in the index. The general failure: missing codex data was
+read as evidence that nothing exists, and "effects" was taken literally.
+
+Fix in code: `open_entry` appends `_entity_knowledge` - up to 2 retrieval
+hits that NAME the entity (with their image list), ~0.4s. The model sees
+"codex: nothing" and "community: HP +1000-2000, Two-Handed Power 4-7%, ..."
+in one result. General rule 10 backs it up: a codex entry shows what a thing
+IS; what it gives or does is often only in community knowledge, so never
+answer "none" from the codex alone.
+
+Result: 3/3 correct answers (cheat sheet attached 2/3); new tier-2 case
+crucible-passives; all 16 end-to-end cases pass.

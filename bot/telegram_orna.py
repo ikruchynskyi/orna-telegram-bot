@@ -2387,6 +2387,45 @@ async def _retrieve(query: str) -> list:
         return []
 
 
+# What the community knows about an entity the model just opened in the codex,
+# attached to that result. Live 2026-10-07: "які ефекти дає Тигель Освяченого"
+# opened Hallowed Crucible (tier, rarity - nothing else), queried its codex
+# effects (0 rows) and answered "gives no effects" - while the Discord cheat
+# sheet of the passives it rolls was in the index. A codex entry says what a
+# thing IS; what it gives or does is often only in community knowledge, and the
+# model did not think to look. Now it does not have to.
+_ENTITY_HITS = 2
+_ENTITY_CHARS = 3000
+
+
+async def _entity_knowledge(observation: str, sources: Optional[list] = None) -> str:
+    """Up to _ENTITY_HITS community passages that NAME the entity an open_entry
+    observation is about ("<Name>: Tier: ..."), with any charts among them. ""
+    when the observation is not an entry or nothing names it."""
+    name = observation.split(":", 1)[0].strip() if ":" in observation[:120] else ""
+    if len(name) < 4 or "\n" in name:
+        return ""
+    try:
+        hits = await _retrieve(name)
+    except Exception:
+        logger.warning("orna: entity knowledge failed for %r", name, exc_info=True)
+        return ""
+    named = [h for h in hits if name.lower() in h["text"].lower()][:_ENTITY_HITS]
+    if not named:
+        return ""
+    body = _truncate_lines("\n\n".join(f"[{_SOURCE_NOTES[h['ns']][0]}] {h['text']}" for h in named),
+                           _ENTITY_CHARS, _KN_TRIM)
+    if sources is not None:
+        for h in named:
+            _add_source(sources, h.get("title", ""), h.get("url", ""))
+    images = _IMAGE_LINE_RE.findall(body)
+    return (f"\n\nCOMMUNITY KNOWLEDGE about {name} (the codex shows what it IS; this says what players know it "
+            "gives, does or is used for - use it before you answer that it has nothing):\n" + body
+            + ("\n\nIMAGES in these results - if one is the source of your answer, send it with "
+               'finish(images=["<id>"]):\n' + "\n".join(f"  #{i}: {d[:100]}" for i, d in images[:4])
+               if images else ""))
+
+
 async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     """The shared community-knowledge aggregation knowledge_search and research
     both use. "" when nothing matched, for the caller to report.
@@ -3225,7 +3264,10 @@ _GENERAL_RULES = (
     "7. Results from knowledge_search, web_search, community_search and class_guide are not posted. Write the "
     "full answer from them in finish().\n"
     "8. A failed search costs nothing: the user sees only your final answer. Try a simpler input before you stop.\n"
-    "9. Do not repeat a tool call with the same input. Use the earlier result. Ask a maximum of once."
+    "9. Do not repeat a tool call with the same input. Use the earlier result. Ask a maximum of once.\n"
+    "10. A codex entry shows what a thing IS. What it gives, does or is used for is often only in community "
+    "knowledge. Do not answer \"none\" or \"no effect\" from the codex alone: check knowledge_search first. Think "
+    "what the user wants to know: the \"effects\" of a crucible are the gear bonuses it can roll."
 )
 
 
@@ -4404,7 +4446,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         if action == "events":
             return await _run_listing(session, message, lambda m: _run_events_tool(m, action_input))
         if action == "open_entry":
-            return await _run_open_entry_tool(message, action_input, sources, session)
+            obs = await _run_open_entry_tool(message, action_input, sources, session)
+            return obs + await _entity_knowledge(obs, sources)
         if action == "research":
             return await _run_research_tool(message, action_input, args, sources, session)
         if action == "knowledge_search":
@@ -6263,6 +6306,12 @@ def _demo() -> None:
         spy = _ImgSpy(photo_ok=False)                                  # rejected as a photo -> sent as a file
         assert asyncio.run(_send_answer_images(spy, {}, {"images": "1228387935544676443"})) == 1 and spy.docs
         assert asyncio.run(_send_answer_images(_ImgSpy(), {}, {})) == 0
+
+    # --- an opened codex entry brings what the community knows about it (here: the crucible's passives) ---
+    if orna_pinecone.enabled() and orna_discord_search.image_info("1555276422191251516"):
+        ek = asyncio.run(_entity_knowledge("Hallowed Crucible: Tier: ★ 10; Rarity: Legendary; Useable by: All classes"))
+        assert "COMMUNITY KNOWLEDGE about Hallowed Crucible" in ek and "Two-Handed" in ek, ek[:300]
+    assert asyncio.run(_entity_knowledge("no entry here")) == ""                 # not an entry: nothing added
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))

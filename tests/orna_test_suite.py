@@ -636,6 +636,12 @@ def build_cases() -> list:
         *([Case("image-knowledge", 2, "how does the Prometheus sigil work?",
                 Expect(final_any_of=[["burn"]], tools_any=["knowledge_search", "research"]))]
           if "Acts like Burning" in json.dumps(orna_discord_search._load_json("images.json", {})) else []),
+        # The codex has no effects for a crucible - what it "gives" are the gear
+        # passives it rolls, only in community knowledge (a Discord cheat sheet).
+        # Live 2026-10-07 this was answered "gives no effects" from the codex alone.
+        Case("crucible-passives", 2, "які ефекти дає Тигель Освяченого?",
+             Expect(final_any_of=[["two-handed", "дворуч", "swash", "мана", "mana", "спритн", "dexterity"]],
+                    final_none_of=["не дає жодних", "no effects"])),
 
         # --------------------------- tier 3: research and judgement --------
         # _STRATEGY_RULE: a boss's elemental immunities are in NO structured
