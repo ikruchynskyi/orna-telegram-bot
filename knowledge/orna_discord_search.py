@@ -302,16 +302,76 @@ _TRANSCRIBE = (
     "If it has no readable text, describe it in \"summary\" and leave \"text\" empty.")
 
 
-def _transcribe(url: str) -> dict:
-    """One image -> {"summary", "text"} via the vision model on Ollama Cloud."""
+# The images themselves, kept so the bot can SEND a chart with its answer
+# (finish(images=[...])). Pinecone holds only text; it finds an image through its
+# transcription, whose line carries the image's id. Attachment URLs are signed
+# and expire within a day, so a file is saved whenever the image is fetched.
+IMG_DIR = CACHE_DIR / "img"
+_IMG_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _image_file(att_id: str) -> Optional[Path]:
+    hits = [p for p in IMG_DIR.glob(f"{att_id}.*") if p.suffix.lower() in _IMG_TYPES] if IMG_DIR.is_dir() else []
+    return hits[0] if hits else None
+
+
+def _fetch_image(a: dict) -> bytes:
+    """The image's bytes - from disk if saved, else downloaded and saved."""
+    saved = _image_file(a["id"])
+    if saved:
+        return saved.read_bytes()
+    r = httpx.get(a["url"], timeout=60, follow_redirects=True)
+    r.raise_for_status()
+    ext = Path(a.get("name") or "").suffix.lower()
+    IMG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = IMG_DIR / f"{a['id']}.tmp"
+    tmp.write_bytes(r.content)
+    os.replace(tmp, IMG_DIR / f"{a['id']}{ext if ext in _IMG_TYPES else '.png'}")
+    return r.content
+
+
+def save_images(records: Optional[list] = None) -> int:
+    """Download every harvested image not yet on disk; returns how many."""
+    n = 0
+    for r in records if records is not None else _load_json("messages.json", []):
+        for a in r["images"]:
+            if not _image_file(a["id"]):
+                try:
+                    _fetch_image(a)
+                    n += 1
+                except Exception as e:      # an expired link: the next harvest has a fresh one
+                    logger.warning("image %s not saved: %s", a["name"], e)
+    return n
+
+
+def image_info(ref: str) -> Optional[dict]:
+    """An image id from a knowledge result -> {"path", "caption", "url"}, or
+    None. Exact id, or a unique tail of at least 6 digits (a model can copy a
+    19-digit number imperfectly). Only harvested images that are on disk."""
+    ref = str(ref).strip().lstrip("#")
+    if len(ref) < 6 or not ref.isdigit():
+        return None
+    found = [(r, a) for r in _load_json("messages.json", []) for a in r["images"] if a["id"].endswith(ref)]
+    if len(found) != 1:
+        return None
+    r, a = found[0]
+    path = _image_file(a["id"])
+    if not path:
+        return None
+    return {"path": path, "url": f"https://discord.com/channels/{r['guild']}/{r['channel']}/{r['id']}",
+            "caption": f"{GUILDS[r['guild']]} #{r['channel_name']}, {r['ts'][:10]}"}
+
+
+def _transcribe(a: dict) -> dict:
+    """One image -> {"summary", "text"} via the vision model on Ollama Cloud.
+    The image is saved on the way (see _fetch_image)."""
     from llm.ollama_client import OLLAMA_CLOUD_HOST, OllamaBusy, chat_json
-    img = httpx.get(url, timeout=60, follow_redirects=True)
-    img.raise_for_status()
+    content = _fetch_image(a)
     for attempt in range(6):
         try:
             out = asyncio.run(chat_json(
                 OLLAMA_CLOUD_HOST, VISION_MODEL,
-                [{"role": "user", "content": _TRANSCRIBE, "images": [base64.b64encode(img.content).decode()]}],
+                [{"role": "user", "content": _TRANSCRIBE, "images": [base64.b64encode(content).decode()]}],
                 headers={"Authorization": f"Bearer {os.environ['OLLAMA_API_KEY']}"},
                 timeout=httpx.Timeout(300.0)))
             break
@@ -358,6 +418,7 @@ def harvest() -> None:
     _write_json(CACHE_DIR / "messages.json", records)
 
     transcribe(records)
+    print(f"{save_images(records)} image file(s) saved")
 
 
 def transcribe(records: Optional[list] = None) -> None:
@@ -370,7 +431,7 @@ def transcribe(records: Optional[list] = None) -> None:
     images = _load_json("images.json", {})
     todo = [a for r in records for a in r["images"] if images.get(a["id"], {}).get("model") != VISION_MODEL]
     with ThreadPoolExecutor(2) as pool:
-        futures = {pool.submit(_transcribe, a["url"]): a for a in todo}
+        futures = {pool.submit(_transcribe, a): a for a in todo}
         for i, f in enumerate(as_completed(futures), 1):
             a = futures[f]
             try:
@@ -411,7 +472,7 @@ def units() -> list:
         for a in r["images"]:
             t = images.get(a["id"])
             if t:
-                lines.append(f"[image {a['name']}: {t['summary']}]")
+                lines.append(f"[image #{a['id']}: {t['summary']}]")
                 lines.extend(t["text"].splitlines())
         if sum(len(l) for l in lines) < MIN_CONTENT:
             continue
@@ -602,6 +663,8 @@ if __name__ == "__main__":
         login()
     elif args == ["harvest"]:
         harvest()
+    elif args == ["images"]:
+        print(save_images(), "image file(s) saved")
     elif args == ["transcribe"]:
         transcribe()
     elif args[:1] == ["search"]:

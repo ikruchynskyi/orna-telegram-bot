@@ -168,6 +168,8 @@ _STEP_TOOLS = [{"type": "function", "function": {
         "action_input": {"type": "string"},
         "args": {"type": "object"},
         "options": {"type": "array", "items": {"type": "string"}},
+        # finish() only: ids of harvested charts to send with the answer.
+        "images": {"type": "array", "items": {"type": "string"}},
         # finish() only: 0-100, how sure the answer is. Gated at
         # _CONFIDENCE_FLOOR and clamped by _evidence_ceiling.
         "confidence": {"type": "integer"},
@@ -2427,10 +2429,17 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
         legend = "\n".join(f"  [{tag}] {note}" for tag, note in tags.items())
         body = "\n\n".join(f"[{_SOURCE_NOTES[h['ns']][0]}] {text}" for h, text in shown)
         omitted = len(hits) - len(shown)
+        # The images in these results, listed where the model is reading: a rule
+        # only in the prompt went unused (2/2 runs answered from the Rune Effects
+        # chart's transcription and never sent the chart itself).
+        images = _IMAGE_LINE_RE.findall(body)
         blocks.append("COMMUNITY KNOWLEDGE - best match first, each tagged with its source:\n" + legend
                       + "\n\n" + body
                       + (f"\n\n[{omitted} lower-ranked match(es) omitted - ask a NARROWER question for them.]"
-                         if omitted else ""))
+                         if omitted else "")
+                      + ("\n\nIMAGES in these results - if one is the source of your answer, send it with "
+                         'finish(images=["<id>"]):\n' + "\n".join(f"  #{i}: {d[:100]}" for i, d in images[:6])
+                         if images else ""))
         if sources is not None:
             for h, _t in shown:
                 _add_source(sources, h.get("title", ""), h.get("url", ""))
@@ -3374,6 +3383,8 @@ _TOOLS_TEXT = (
     "missing immunities in the codex do NOT mean \"no immunities\". In Monster Data, the element columns "
     "(Arcane/Dark/Dragon/Earth/Fire/Holy/Lightning/Physical/Water) are damage MULTIPLIERS: 1 is normal, 0 is "
     "full IMMUNITY (never \"neutral\"), more than 1 is a weakness, less than 1 is a resistance.\n"
+    "  A line \"[image #<id>: ...]\" is a chart or screenshot: the lines after it are its text. To show "
+    "that picture to the user, put its id in finish()'s \"images\".\n"
     "  Try it BEFORE web_search for all that it can contain. Nothing relevant: use web_search.\n"
     "- releases(action_input=<item, class or mechanic name, English - or empty for the latest notes>): The "
     "official patch notes of the last few months. The codex and the community sources show what IS, not what "
@@ -3396,7 +3407,9 @@ _TOOLS_TEXT = (
     "wider itself. The content is from players and not verified: use only what answers the question, and say "
     "that it comes from players.\n"
     "- ask(action_input=<question>, options=[2-4 short choices]): Asks the user a question. See CLARIFICATION.\n"
-    "- finish(action_input=<the answer, or EMPTY>): Ends the turn. If a tool POSTED the full answer (monuments, "
+    "- finish(action_input=<the answer, or EMPTY>, images=[<optional: up to 2 image ids from a knowledge_search "
+    "result>]): Ends the turn. Add an image only when it is the source of your answer and the user benefits from "
+    "seeing it (a chart, a table, a checklist). If a tool POSTED the full answer (monuments, "
     "today, next and towers say so), send an EMPTY action_input. If a tool POSTED part of the answer, send one "
     "short closing sentence. An answer from knowledge_search, web_search, community_search or class_guide is "
     "not posted: then finish() is the full answer. Do not finish before you have enough information.\n"
@@ -4130,6 +4143,38 @@ _EMPTY_FINISH_NOTE = (
     "answer the question, say so.")
 
 
+# finish(images=[...]): charts from the Discord harvest, picked by the model by
+# the id its knowledge result showed ("[image #<id>: ...]"), validated here -
+# an id that is not a harvested image on disk is dropped, never guessed at.
+_ANSWER_IMAGES_MAX = 2
+_IMAGE_LINE_RE = re.compile(r"\[image #(\d+): ([^\]\n]*)")
+
+
+async def _send_answer_images(message, step: dict, args: dict) -> int:
+    refs = step.get("images") or (args or {}).get("images") or []
+    refs = [refs] if isinstance(refs, (str, int)) else list(refs)
+    sent = 0
+    for ref in refs:
+        if sent >= _ANSWER_IMAGES_MAX:
+            break
+        info = await asyncio.to_thread(orna_discord_search.image_info, str(ref))
+        if not info:
+            logger.info("orna: finish named image %r, which is not a harvested image - dropped", ref)
+            continue
+        caption = f'<a href="{info["url"]}">{html.escape(info["caption"])}</a>'
+        try:
+            try:
+                with open(info["path"], "rb") as fh:
+                    await message.reply_photo(fh, caption=caption, parse_mode="HTML")
+            except TelegramError:   # too big or too long for a photo: send it as a file
+                with open(info["path"], "rb") as fh:
+                    await message.reply_document(fh, caption=caption, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            logger.warning("orna: could not send image %s", ref, exc_info=True)
+    return sent
+
+
 def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %A")
     actions = "|".join(f'"{a}"' for a in _ACTIONS)
@@ -4209,8 +4254,9 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         "RULES).\n\n"
         "OUTPUT: Each turn, reply with one strict JSON object and no other text: "
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, not used for query/today>",'
-        '"args":{"...for the tools that take args..."},"options":["<opt1>","<opt2>"],"confidence":<0-100>}. '
-        "\"options\" is only for ask. \"confidence\" is only for finish. Send the JSON object as normal message "
+        '"args":{"...for the tools that take args..."},"options":["<opt1>","<opt2>"],"confidence":<0-100>,'
+        '"images":["<image id>"]}. '
+        "\"options\" is only for ask. \"confidence\" and \"images\" are only for finish. Send the JSON object as normal message "
         "content. A native tool call with one of the action names is also understood, but never mix the two."
     )
 
@@ -4965,6 +5011,8 @@ async def _advance_inner(sid: str, message) -> None:
             if listing_only and session.allow_ask:
                 answer += "\n\n" + _clarify_hint(session)
             await _reply_markdown(message, answer, reply_markup=markup)
+            if session.allow_ask:       # inline mode has no chat to send a picture to
+                await _send_answer_images(message, step, args)
             return
 
         if action == "ask":
@@ -6188,6 +6236,23 @@ def _demo() -> None:
         assert len(spy.sent) == 2 and "A Feast of Feathers" in spy.sent[0], spy.sent
     finally:
         globals()["fetch_events"] = _real_fetch
+
+    # --- finish(images=[...]): real harvested images are sent, capped; anything else is dropped ---
+    if orna_discord_search.image_info("1228387935544676443"):        # needs the harvest on disk
+        class _ImgSpy:
+            def __init__(self, photo_ok=True): self.photos, self.docs, self.photo_ok = [], [], photo_ok
+            async def reply_photo(self, fh, caption="", **kw):
+                if not self.photo_ok:
+                    raise TelegramError("photo too big")
+                self.photos.append(caption)
+            async def reply_document(self, fh, caption="", **kw): self.docs.append(caption)
+        all_ids = [a["id"] for r in orna_discord_search._load_json("messages.json", []) for a in r["images"]]
+        spy = _ImgSpy()
+        n = asyncio.run(_send_answer_images(spy, {"images": ["#676443", "123", "9999999999"] + all_ids[:3]}, {}))
+        assert n == 2 and len(spy.photos) == 2 and "useful-tips-and-charts" in spy.photos[0], spy.photos
+        spy = _ImgSpy(photo_ok=False)                                  # rejected as a photo -> sent as a file
+        assert asyncio.run(_send_answer_images(spy, {}, {"images": "1228387935544676443"})) == 1 and spy.docs
+        assert asyncio.run(_send_answer_images(_ImgSpy(), {}, {})) == 0
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))
