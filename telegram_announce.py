@@ -30,6 +30,7 @@ chat with the channel's whole history.
 
 from __future__ import annotations
 
+import paths
 import asyncio
 import html
 import json
@@ -49,7 +50,7 @@ from telegram_go import GO_ALLOWED_USER_IDS, _markdown_to_html
 
 logger = logging.getLogger(__name__)
 
-STATE_PATH = Path(__file__).parent / "announce_chats.json"
+STATE_PATH = paths.STATE / "announce_chats.json"
 POLL_INTERVAL_SECONDS = 120
 # The translation model is telegram_orna.TRANSLATION_MODEL - one choice for
 # every translation the bot makes; the measurement behind it is noted there.

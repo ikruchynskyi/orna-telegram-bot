@@ -14,14 +14,14 @@ telegram_go.py's web search.
 """
 from __future__ import annotations
 
+import paths
 import logging
 import time
-from pathlib import Path
 from typing import NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_PATH = Path(__file__).with_name("orna_knowledge.txt")
+DATA_PATH = paths.DATA / "orna_knowledge.txt"
 # The sheets behind this corpus are hand-maintained by the community and DO
 # change, so the committed .txt goes stale between manual scraper runs. Same
 # treatment as orna_aussies/orna_releases: refresh into a gitignored cache on
@@ -29,7 +29,7 @@ DATA_PATH = Path(__file__).with_name("orna_knowledge.txt")
 # unreachable or a sheet was deleted, we serve the last good copy instead of
 # losing the knowledge base entirely, which is strictly better than what a
 # fetch-only design would do.
-CACHE_DIR = Path(__file__).parent / ".knowledge_cache"
+CACHE_DIR = paths.CACHE / "knowledge"
 CACHE_FILE = "orna_knowledge.txt"
 CACHE_TTL_SECONDS = 7 * 24 * 3600
 
@@ -142,7 +142,7 @@ def _corpus_text() -> str:
             logger.warning("orna_knowledge: cache unreadable, rebuilding")
 
     try:
-        from orna_scrape_knowledge import build_text
+        from scrapers.orna_scrape_knowledge import build_text
         text = build_text()
         # Compare against the committed copy rather than a bare "looks
         # non-empty" check: a partial fetch can still produce every section
@@ -213,7 +213,7 @@ def source_url(section_title: str) -> Optional[str]:
     global _SECTION_URLS
     if _SECTION_URLS is None:
         try:
-            from orna_scrape_knowledge import _TABLES
+            from scrapers.orna_scrape_knowledge import _TABLES
             _SECTION_URLS = {
                 f"{title} ({source})": f"https://docs.google.com/spreadsheets/d/{doc}/edit#gid={gid}"
                 for title, doc, gid, source in _TABLES

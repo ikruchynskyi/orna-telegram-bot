@@ -51,6 +51,7 @@ reasonable staleness bound against Orna's own patch cadence.
 """
 from __future__ import annotations
 
+import paths
 import difflib
 import json
 import logging
@@ -76,7 +77,7 @@ HEADERS = {
 }
 HTTP_TIMEOUT = 30.0
 
-CACHE_DIR = Path(__file__).parent / ".aussies_cache"
+CACHE_DIR = paths.CACHE / "aussies"
 CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 

@@ -9,11 +9,11 @@ Sheets, playorna/aussiescodex, Ollama), so a suite that mocks them tests
 nothing that breaks in production. See .claude/skills/verifying-orna-changes.
 
     set -a && source .env && set +a
-    python3 orna_test_suite.py                  # tier 0 only (fast, exact)
-    TIER=0,1,2,3 N=3 python3 orna_test_suite.py # the real gate
-    TIER=2 CASE=trifecta-mages python3 orna_test_suite.py
-    SAVE_BASELINE=1 TIER=0,1,2,3 N=3 python3 orna_test_suite.py   # record
-    FORCE_LOCAL=1 JOBS=1 TIER=1 python3 orna_test_suite.py        # local model
+    python3 tests/orna_test_suite.py                  # tier 0 only (fast, exact)
+    TIER=0,1,2,3 N=3 python3 tests/orna_test_suite.py # the real gate
+    TIER=2 CASE=trifecta-mages python3 tests/orna_test_suite.py
+    SAVE_BASELINE=1 TIER=0,1,2,3 N=3 python3 tests/orna_test_suite.py   # record
+    FORCE_LOCAL=1 JOBS=1 TIER=1 python3 tests/orna_test_suite.py        # local model
 
 THE TIERS
   0  deterministic  no LLM at all. Pure functions and retrieval against live
@@ -79,7 +79,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-REPO_ROOT = os.environ.get("ORNA_REPO_ROOT") or os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.environ.get("ORNA_REPO_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 if not os.environ.get("SHEETS_API_KEY"):
@@ -94,7 +94,7 @@ import orna_assess                      # noqa: E402
 import orna_echo                        # noqa: E402
 import orna_pinecone                    # noqa: E402
 import orna_discord_search              # noqa: E402
-import orna_scrape_questline            # noqa: E402
+from scrapers import orna_scrape_questline  # noqa: E402
 import orna_aussies                     # noqa: E402
 import orna_guides                      # noqa: E402
 import orna_knowledge                   # noqa: E402
@@ -103,7 +103,7 @@ import orna_towers                      # noqa: E402
 import telegram_orna as T               # noqa: E402
 
 CYRILLIC = re.compile(r"[Ѐ-ӿ]")
-BASELINE_PATH = os.environ.get("BASELINE") or os.path.join(REPO_ROOT, "orna_test_baseline.json")
+BASELINE_PATH = os.environ.get("BASELINE") or os.path.join(REPO_ROOT, "tests", "orna_test_baseline.json")
 # A tier-1 fact lookup should never fail; the prompt-dependent tiers are
 # measured, not assumed - these thresholds are what this repo has actually
 # observed as healthy, not aspirations.
@@ -257,7 +257,7 @@ def _check_corpora_do_not_contradict_taxonomy() -> None:
     they DO use the loose wording (41/101/51 hits of "specialization"), which is
     not ours to police. That half is handled by _TAXONOMY_RULE telling the loop
     its own taxonomy outranks a community source's wording."""
-    path = os.path.join(REPO_ROOT, "orna_mechanics.txt")
+    path = os.path.join(REPO_ROOT, "data", "orna_mechanics.txt")
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as fh:
@@ -289,7 +289,7 @@ def _check_corpora_do_not_contradict_towers() -> None:
     from someone else's site, so its wording is not ours to police - a wrong
     claim there is handled by the `towers` tool description telling the loop
     the tool outranks guide prose on floors and timing."""
-    path = os.path.join(REPO_ROOT, "orna_mechanics.txt")
+    path = os.path.join(REPO_ROOT, "data", "orna_mechanics.txt")
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as fh:
@@ -380,6 +380,15 @@ def _check_retrieval_benchmark() -> None:
     assert median <= _RETRIEVAL_MEDIAN_MAX, f"observations grew: median {median} chars"
 
 
+def _check_model_usage_unit() -> None:
+    """tests/test_model_usage.py (unittest) - run here so the one gate covers it.
+    It was outside the gate once, and went stale unnoticed (2026-10-06)."""
+    import unittest
+    result = unittest.TextTestRunner(verbosity=0).run(
+        unittest.defaultTestLoader.loadTestsFromName("tests.test_model_usage"))
+    assert result.wasSuccessful(), f"{len(result.failures)} failure(s), {len(result.errors)} error(s)"
+
+
 def _check_ban_guard() -> None:
     """Ban/unban round-trip, persistence, and the pre-dispatch guard.
 
@@ -453,6 +462,7 @@ TIER0 = [
     ("keyword-index", lambda: __import__("orna_textindex")._demo()),
     ("reddit-search", lambda: __import__("orna_reddit_search")._demo()),
     ("retrieval-benchmark", _check_retrieval_benchmark),
+    ("model-usage-unit", _check_model_usage_unit),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
 ]
@@ -614,7 +624,7 @@ def build_cases() -> list:
         Case("ward-formula", 2, "how is ward capacity calculated in orna?",
              Expect(all_of=[ward_formula], tools_all=["knowledge_search"])),
 
-        # The questline guide (orna_scrape_questline.py) is the only source that
+        # The questline guide (scrapers/orna_scrape_questline.py) is the only source that
         # says HOW to finish a story quest; the guide's two routes for this one
         # are a Goblin Fortress dungeon or a Tier 1 boss gauntlet.
         Case("questline", 2, "how do I complete Samson's quest to defeat a Goblin Lord?",

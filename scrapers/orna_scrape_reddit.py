@@ -17,7 +17,7 @@ spend a rate-limited API budget re-fetching thousands of unchanged
 comments to learn nothing. So this is committed to the repo and re-run by
 hand, the same pattern as orna_scrape_material_names.py. Run:
 
-    REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 orna_scrape_reddit.py
+    REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 -m scrapers.orna_scrape_reddit
 
 There is no ANONYMOUS path any more. Verified 2026-09-24:
 `/user/<name>/submitted.json` returns 403 for any User-Agent,
@@ -45,6 +45,7 @@ one-liners ("Fixed!", "thanks") that make up much of any dev's history.
 """
 from __future__ import annotations
 
+import paths
 import html
 import json
 import os
@@ -56,7 +57,7 @@ from typing import Optional
 
 import httpx
 
-OUTPUT_PATH = Path(__file__).with_name("orna_reddit.txt")
+OUTPUT_PATH = paths.DATA / "orna_reddit.txt"
 TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 API_BASE = "https://oauth.reddit.com"
 USER_AGENT = "macos:orna-telegram-bot:1.0 (knowledge-base builder)"
@@ -266,10 +267,10 @@ def main() -> None:
             "REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET are required - Reddit blocks anonymous\n"
             "listing reads (verified: 403 on www and api, login redirect on old.reddit).\n"
             "Create a 'script' app at https://www.reddit.com/prefs/apps and re-run with:\n"
-            "  REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 orna_scrape_reddit.py\n"
+            "  REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=... python3 -m scrapers.orna_scrape_reddit\n"
             "\nOr, if app registration is gated for your account, save the listing JSON from a\n"
             "logged-in browser and build from that instead - no credentials needed:\n"
-            "  python3 orna_scrape_reddit.py --from-dir ~/reddit_json"
+            "  python3 -m scrapers.orna_scrape_reddit --from-dir ~/reddit_json"
         )
     text = build_text(client_id, client_secret, progress=print)
     OUTPUT_PATH.write_text(text, encoding="utf-8")
@@ -279,7 +280,7 @@ def main() -> None:
 def _demo() -> None:
     """Formatting checks against realistic API payloads - no network, so this
     still guards the parser when credentials aren't to hand. Run
-    `python3 orna_scrape_reddit.py --demo`."""
+    `python3 -m scrapers.orna_scrape_reddit --demo`."""
     long_body = ("Orn bonus from gear is multiplicative with the party bonus, not additive. "
                  "So two 10% pieces give 1.1 * 1.1 = 1.21, not 1.2. This trips people up constantly.")
     items = [

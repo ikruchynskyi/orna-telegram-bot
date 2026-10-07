@@ -37,10 +37,10 @@ fuzzy "does this bonus count" judgment call.
 """
 from __future__ import annotations
 
+import paths
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -54,7 +54,7 @@ HEADERS = {
 }
 HTTP_TIMEOUT = 15.0
 
-CACHE_DIR = Path(__file__).parent / ".aussies_cache"
+CACHE_DIR = paths.CACHE / "aussies"
 CACHE_PATH = CACHE_DIR / "calendar.html"
 CACHE_TTL_SECONDS = 6 * 3600
 

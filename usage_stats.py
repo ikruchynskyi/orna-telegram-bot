@@ -16,16 +16,16 @@ undercount noticeably.
 """
 from __future__ import annotations
 
+import paths
 import json
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_STORE_PATH = Path(__file__).parent / "usage_stats.json"
+_STORE_PATH = paths.STATE / "usage_stats.json"
 
 MAX_LOG_PER_USER = 40
 # Bug reports kept per user. The 11th drops the oldest, so a single user

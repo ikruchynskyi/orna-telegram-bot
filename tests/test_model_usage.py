@@ -41,7 +41,7 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_billing_fallback_override_and_tokens(self):
-        for status in (402, 403, 429):
+        for status in (402, 403):
             with self.subTest(status=status):
                 requests = []
                 ollama_client.set_cloud_model("chosen:cloud")
@@ -68,9 +68,30 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
                     ("localhost", "env:local"), ("localhost", "env:local"),
                 ])
         data = usage_stats.snapshot()
-        self.assertEqual(data["llm_input_tokens"]["env:local (local)"], 72)
-        self.assertEqual(data["llm_output_tokens"]["env:local (local)"], 42)
+        self.assertEqual(data["llm_input_tokens"]["env:local (local)"], 48)
+        self.assertEqual(data["llm_output_tokens"]["env:local (local)"], 28)
         self.assertNotIn("chosen:cloud (cloud)", data["llm_input_tokens"])
+
+    async def test_busy_cloud_falls_back_without_parking(self):
+        """429 = the account's concurrent-request cap is full: retried, then local
+        for THIS call only. It must not park the cloud for everyone (ollama_client,
+        OllamaBusy)."""
+        requests = []
+        ollama_client.set_cloud_model("chosen:cloud")
+
+        def handle(request):
+            requests.append((request.url.host, json.loads(request.content)["model"]))
+            if request.url.host == "ollama.com":
+                return httpx.Response(429, json={"error": "too many concurrent requests"})
+            return httpx.Response(200, json={"message": {"content": '{"action":"finish"}'},
+                                             "prompt_eval_count": 1, "eval_count": 1})
+
+        with self.transport(handle), patch.object(ollama_client, "_BUSY_RETRY_DELAYS", (0, 0)):
+            result = await ollama_client.chat_json_with_fallback(
+                "env:cloud", "http://localhost:11434", "env:local", [])
+        self.assertEqual(result["action"], "finish")
+        self.assertFalse(ollama_client.cloud_is_parked())
+        self.assertEqual(requests, [("ollama.com", "chosen:cloud")] * 3 + [("localhost", "env:local")])
 
     async def test_tokens_count_even_when_content_is_unusable(self):
         def handle(request):

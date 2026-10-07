@@ -75,7 +75,7 @@ glue around three live, unmocked external services.
   queryable DB, built in 0.29s from the same dump `orna_aussies` caches.
   Exists because `query_records` is a FILTER, not a query language: it cannot
   COUNT, GROUP BY, join a record to its drops' stats, or full-text search.
-  SQLite, not MySQL/MongoDB — see `README-db.md` for the measured comparison.
+  SQLite, not MySQL/MongoDB — see `docs/codex-db.md` for the measured comparison.
   Backs `/orna`'s `sql` tool; rebuilt by `/update_codex`. Read-only connection
   (`mode=ro`) is the write guarantee, not a prompt rule.
 - `telegram_orna.py` — `/orna <text>`, a real ReAct loop (today/next/need/
@@ -95,7 +95,7 @@ glue around three live, unmocked external services.
   `tower.ts` (pinned commit) and cross-checked against that original
   TypeScript's actual output under Node before deploying — see the `/orna`
   section. Pure time-based math, no external data source at all.
-- `orna_classes.py` / `orna_classes.json` / `orna_scrape_classes.py` — the
+- `orna_classes.py` / `orna_classes.json` / `scrapers/orna_scrape_classes.py` — the
   per-class and per-specialization stat modifiers, bonus stats and passive
   effects behind aussiescodex's stats estimator, plus the estimator math
   (Ascension Level, PVP). Committed, NOT crawlable — see the `/orna`
@@ -103,7 +103,7 @@ glue around three live, unmocked external services.
 - `orna_bonuses.py` — Amities and Crucibles scraped from aussiescodex's
   two HTML pages, disk-cached a week like `orna_releases.py`. See the
   `/orna` section for why these needed a source of their own.
-- `orna_reddit.py` / `orna_reddit.txt` / `orna_scrape_reddit.py` — what
+- `orna_reddit.py` / `orna_reddit.txt` / `scrapers/orna_scrape_reddit.py` — what
   Orna's own developers (u/OrnaOdie, u/Widogeist) have written on Reddit:
   hidden mechanics, exact formulas, "why it works like that" answers. Static
   and committed, NOT re-crawled — see the `/orna` section.
@@ -113,15 +113,15 @@ glue around three live, unmocked external services.
   (`.releases_cache/`, gitignored) with a 1-week TTL like
   `orna_aussies.py`. See the `/orna` section for why a changelog earns its
   own source alongside the codex.
-- `orna_knowledge.py` / `orna_knowledge.txt` / `orna_scrape_knowledge.py` —
+- `orna_knowledge.py` / `orna_knowledge.txt` / `scrapers/orna_scrape_knowledge.py` —
   a curated community-knowledge reference (flattened text, fuzzy-searched)
   for what playorna's codex genuinely doesn't track at all — most notably
   per-boss elemental damage resistances/immunities. Static generated file
   + the script that (re)generates it, same pattern as
-  `orna_material_names_uk.json`/`orna_scrape_material_names.py`. See the
+  `orna_material_names_uk.json`/`scrapers/orna_scrape_material_names.py`. See the
   `/orna` section for sources and why this is flattened text rather than
   typed tables.
-- `orna_echo.py` / `orna_echo.txt` / `orna_scrape_echo.py` — playerecho.com's
+- `orna_echo.py` / `orna_echo.txt` / `scrapers/orna_scrape_echo.py` — playerecho.com's
   37 Orna guides, the only source in the repo that states FORMULAS and
   mechanics outright (Ward capacity, Ascension altar costs, dungeon
   cooldowns/godforging, anguish proofs, per-event tier gates). Committed and
@@ -135,11 +135,11 @@ glue around three live, unmocked external services.
   Ithra/Thor/Vulcan/Demeter gives what on which floor. Backs `/orna`'s
   `monuments` tool. Disk-cached 6h + refetched at the ISO-week rollover
   (`.monuments_cache/`, gitignored). See "Monuments" below.
-- `orna_ornabook.txt` / `orna_scrape_ornabook.py` — Ornabook (book.cadelabs.ovh),
+- `orna_ornabook.txt` / `scrapers/orna_scrape_ornabook.py` — Ornabook (book.cadelabs.ovh),
   a community mechanics book. No reader of its own: same `=== Title (url) ===`
   / `## Heading` format as `orna_echo.txt`, read by `orna_echo.search(...,
   path=...)`. Surfaced as a `knowledge_search` block. See "Ornabook" below.
-- `orna_guides.py` / `orna_guide_<topic>.txt` (×8) / `orna_scrape_guides.py`
+- `orna_guides.py` / `orna_guide_<topic>.txt` (×8) / `scrapers/orna_scrape_guides.py`
   — long-form WRITTEN community class/build guides (Summoner, Realmshifter/
   Thief, Deity, Gilgamesh, Beowulf, Swash, Heretic, Towers of Olympia
   mechanics), one static file per topic, deliberately NOT merged into
@@ -183,7 +183,7 @@ glue around three live, unmocked external services.
 - `orna_assess.py` — pure math: upgrade-projection from OCR'd stats.
 - `orna_proofs.py` — pure math: guild-proof pricing, ported from
   OrnaCodex's `ProofView.vue`. See the docstring for the formula.
-- `orna_material_names_uk.py` / `.json` / `orna_scrape_material_names.py` —
+- `orna_material_names_uk.py` / `.json` / `scrapers/orna_scrape_material_names.py` —
   static EN↔UK material name table + the script that generates it.
 - `telegram_go.py` — hidden `/go` command, deliberately unrelated to Orna.
   See its own section below; it's the most complex module in the repo and
@@ -776,7 +776,7 @@ Next.js chunk that feeds their UI. **Committed, and deliberately not on a
 TTL like every other scraped source**, because there is no stable address
 to poll: the chunk's filename carries a content hash
 (`218-cb72350c16e02252.js`) that changes on every one of their deploys, so
-yesterday's URL 404s. `orna_scrape_classes.py` takes the URL as an
+yesterday's URL 404s. `scrapers/orna_scrape_classes.py` takes the URL as an
 argument and prints where to find the current one. Same
 committed-and-manual treatment as `orna_reddit.txt`, for a different
 reason — that one is append-only history, this one has no fetchable URL.
@@ -900,7 +900,7 @@ which is precisely why the prose corpora earn their place.
 
 ### The playerecho guide corpus - the only source that states a FORMULA
 
-`orna_echo.py` / `orna_echo.txt` / `orna_scrape_echo.py`, added 2026-09-25 on
+`orna_echo.py` / `orna_echo.txt` / `scrapers/orna_scrape_echo.py`, added 2026-09-25 on
 ask. Every other source describes RESULTS: the codex gives an entry's own
 numbers and never a formula, the community sheets tabulate outcomes, the reddit
 corpus has devs explaining things in passing. playerecho.com/orna's 37 guides
@@ -956,7 +956,7 @@ dungeon modes/cooldowns/godforging, or for per-EVENT tier gates and rewards -
 
 ### Ornabook - a guide whose key tables are drawn in icons (2026-10-05)
 
-`orna_scrape_ornabook.py` crawls the 10 chapter pages of book.cadelabs.ovh into
+`scrapers/orna_scrape_ornabook.py` crawls the 10 chapter pages of book.cadelabs.ovh into
 `orna_ornabook.txt` (60 articles). robots.txt is Cloudflare's content-signal
 preamble with NO signal values and no Disallow - by its own rule, unset neither
 grants nor restricts. Things a plain crawl gets wrong here, all pinned in
@@ -1109,7 +1109,7 @@ What the cross-check found against the repo's own math:
 ### The reddit developer corpus - searched by `knowledge_search`, not its own tool
 
 Orna's devs answer mechanics questions on Reddit in detail that exists in no
-codex page, community sheet or patch note. `orna_scrape_reddit.py` pulls
+codex page, community sheet or patch note. `scrapers/orna_scrape_reddit.py` pulls
 u/OrnaOdie's submissions + comments and u/Widogeist's comments into
 `orna_reddit.txt`; `orna_reddit.py` reads it. Added 2026-09-24 on ask.
 - **Reddit allows no anonymous access.** Verified 2026-09-24:
@@ -1389,7 +1389,7 @@ weekly). It also does the third requirement better than either: MongoDB allows
 **one text index per collection**, which is a hard ceiling on "full-text search
 by any field", while FTS5 gives per-column matching, prefixes and BM25.
 Measured: parse 14ms, in-memory filter scan 5.4ms, DB build 0.29s, GROUP BY
-0.34ms. Full comparison and the "if you still want MySQL" path: `README-db.md`.
+0.34ms. Full comparison and the "if you still want MySQL" path: `docs/codex-db.md`.
 
 - **The bug under the ask was NOT storage, and it was reporting a cap as a
   total.** `query_records` returns `results[offset:offset+limit]`, and
@@ -1732,7 +1732,7 @@ fallback when it doesn't have the answer either.
 
 - **`knowledge_search`** (`orna_knowledge.py`, reading
   `orna_knowledge.txt`) is a static, generated reference built from 4
-  user-provided Google Sheets (`orna_scrape_knowledge.py`'s `_TABLES`
+  user-provided Google Sheets (`scrapers/orna_scrape_knowledge.py`'s `_TABLES`
   list): 2 tabs of a "Gear XP/Orn/Gold Boosts + Combat Mechanics Notes"
   spreadsheet, 12 tabs of the community "Ornapedia" spreadsheet (Badges,
   Boost Items, Buildings, End of Gauntlet Items, Monster Data, Pets/
@@ -1759,7 +1759,7 @@ fallback when it doesn't have the answer either.
     a Google outage degrades to the last good copy rather than taking the
     knowledge base down. Verified by simulating one: still 16 sections,
     search still answers.
-  - Still worth re-running `python3 orna_scrape_knowledge.py` and committing
+  - Still worth re-running `python3 -m scrapers.orna_scrape_knowledge` and committing
     occasionally, precisely BECAUSE that file is the safety net - left alone
     for a year it becomes a very old one.
   - **A rebuild is validated PER SECTION against the committed copy before
@@ -1971,7 +1971,7 @@ already confirmed by hand - a real cross-check, not just "it ran without
 an exception."
 
 **`class_guide` reads long-form written community guides
-(`orna_guides.py` / `orna_guide_<topic>.txt` ×8 / `orna_scrape_guides.py`)
+(`orna_guides.py` / `orna_guide_<topic>.txt` ×8 / `scrapers/orna_scrape_guides.py`)
 for a SPECIFIC named class/build** - Summoner, Realmshifter/Thief, Deity,
 Gilgamesh, Beowulf, the Swash build (usable by any class, not a class
 itself), Heretic, plus a Towers of Olympia mechanics/rewards guide
@@ -2550,7 +2550,7 @@ economics, and the multi-strike "debuff rolls once" rule.
 
 ### The player Q&A corpus - the only source indexed by the QUESTION
 
-`orna_qa.py` / `orna_qa.txt` / `orna_scrape_qa.py`, added 2026-09-26 on ask.
+`orna_qa.py` / `orna_qa.txt` / `scrapers/orna_scrape_qa.py`, added 2026-09-26 on ask.
 r/OrnaRPG questions paired with their best-voted answers. Every other corpus is
 keyed on an ANSWER's wording (`orna_knowledge` tabular, `orna_reddit` dev prose,
 `orna_echo` guide sections, `orna_guides` whole guides); an incoming question
@@ -2570,7 +2570,7 @@ followers"), which the tool description tells the model to look for.
   and the corpus rebuilds from the whole cache on every run. **At 5s per request
   the third run completed 800/800 with zero failures and four handled 429 pauses
   -> 751 threads / 1,806 answers, 809KB.** Re-run
-  `REDDIT_COOKIE=... QA_HELDOUT_IDS=... python3 orna_scrape_qa.py` to extend it;
+  `REDDIT_COOKIE=... QA_HELDOUT_IDS=... python3 -m scrapers.orna_scrape_qa` to extend it;
   it skips everything cached.
 - **Scoring is IDF-weighted, and the three wrong designs before it are the
   lesson.** (1) Binary keep/drop of "common" words by document frequency
@@ -2770,7 +2770,7 @@ not tokens/sec.
 
 Three tiers, run before and after a major update and compared. No framework,
 no mocks - same reasoning as everything else here: mocking the codex/sheets/
-Ollama would test nothing that actually breaks. `python3 orna_test_suite.py`
+Ollama would test nothing that actually breaks. `python3 tests/orna_test_suite.py`
 is tier 0 alone (~1s); `TIER=0,1,2,3 N=3` is the real gate (~20 min, so record
 a baseline one tier at a time - `SAVE_BASELINE=1` MERGES rather than replaces
 for exactly that reason).

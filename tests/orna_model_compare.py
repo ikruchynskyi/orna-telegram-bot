@@ -12,7 +12,7 @@ sequence each model chose.
     set -a && source .env && set +a
     MODELS="nemotron-3.5-lightning:30b-mlx,qwen3.8:27b-mlx" \
         CASES="falx-facts,trifecta-classes,ward-formula,sirus-strategy" \
-        N=1 python3 orna_model_compare.py
+        N=1 python3 tests/orna_model_compare.py
 
 Every run is LOCAL-ONLY (MAX_CLOUD_CALLS=0): comparing local models through a
 cloud-first loop would mostly measure the cloud. Results append to
@@ -37,7 +37,7 @@ import statistics
 import sys
 import time
 
-REPO_ROOT = os.environ.get("ORNA_REPO_ROOT") or os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.environ.get("ORNA_REPO_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 if not os.environ.get("SHEETS_API_KEY"):
@@ -49,10 +49,10 @@ os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
 import ollama_client            # noqa: E402  - to clear the cloud circuit breaker
-import orna_test_suite as S      # noqa: E402  - cases, graders and FakeMessage
+from tests import orna_test_suite as S      # noqa: E402  - cases, graders and FakeMessage
 import telegram_orna as T        # noqa: E402
 
-RESULTS_PATH = os.path.join(REPO_ROOT, "orna_model_compare.json")
+RESULTS_PATH = os.path.join(REPO_ROOT, "data", "cache", "orna_model_compare.json")
 # What the loop posts to the user when a step's model call dies outright. Such a
 # run says nothing about answer quality - only that the backend failed.
 _RUN_ERROR_SIGNATURES = ("Не вдалося обробити запит", "Ollama request failed",

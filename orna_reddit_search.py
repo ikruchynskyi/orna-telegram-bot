@@ -24,6 +24,7 @@ Run: python3 orna_reddit_search.py search <query>   one live search, printed
 """
 from __future__ import annotations
 
+import paths
 import json
 import logging
 import os
@@ -36,10 +37,9 @@ from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent
-PROFILE_DIR = ROOT / ".reddit_chrome"
-CACHE_DIR = ROOT / ".reddit_cache"
-QA_CACHE = ROOT / ".qa_cache"          # orna_scrape_qa's crawl: one <post id>.json per thread
+PROFILE_DIR = paths.STATE / "reddit_chrome"
+CACHE_DIR = paths.CACHE / "reddit"
+QA_CACHE = paths.QA_CRAWL                # orna_scrape_qa's crawl: one <post id>.json per thread
 LIVE_FILE = CACHE_DIR / "live.json"
 SITE = "https://www.reddit.com"
 MIN_INTERVAL = 2.0                     # seconds between requests
@@ -129,7 +129,7 @@ def search(query: str, threads: int = THREADS) -> list:
     """Threads answering `query`, most relevant first: [{"id", "title", "url",
     "block", "new"}]. "new" = not yet in the corpus or the kept store - those
     are what save_live keeps. Blocking (Selenium) - call through to_thread."""
-    from orna_scrape_qa import _block
+    from scrapers.orna_scrape_qa import _block
     live = _load_live()
     out = []
     try:
@@ -191,7 +191,7 @@ def _demo() -> None:
         {"kind": "t1", "data": {"score": 5, "author": "OrnaOdie", "body": "Summons are not followers, no."}},
         {"kind": "more", "data": {}}]}}]
     assert _comments(blob) == [{"score": 5, "author": "OrnaOdie", "body": "Summons are not followers, no."}]
-    from orna_scrape_qa import _block
+    from scrapers.orna_scrape_qa import _block
     block = _block({"id": "x1", "title": "Are summons followers?", "created_utc": 1700000000, "score": 3,
                     "permalink": "/r/OrnaRPG/comments/x1/"}, _comments(blob))
     assert "A [5up DEV]: Summons are not followers" in block and "OrnaOdie" not in block, block

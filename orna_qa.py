@@ -29,6 +29,7 @@ Self-check: `python3 orna_qa.py`.
 """
 from __future__ import annotations
 
+import paths
 import logging
 import math
 import os
@@ -37,7 +38,7 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-CORPUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_qa.txt")
+CORPUS_PATH = str(paths.DATA / "orna_qa.txt")
 
 _HEADER_RE = re.compile(r"^=== (?P<title>.+?) \(r/OrnaRPG (?P<when>[\d-]+), (?P<score>\d+)up, (?P<url>[^)]+)\) ===$")
 

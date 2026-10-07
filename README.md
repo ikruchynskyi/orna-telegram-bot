@@ -81,7 +81,7 @@ list (English and Ukrainian listings, matched by item slug) and is the
 *deterministic* source of truth for translating OCR'd Ukrainian material
 names — it's tried before falling back to the LLM, which is not reliable
 enough on its own for this (the same input can return a hit on one call and
-a miss on the next). Regenerate it with `orna_scrape_material_names.py` if
+a miss on the next). Regenerate it with `scrapers/orna_scrape_material_names.py` if
 the game adds new materials.
 
 ## Prerequisites
@@ -105,7 +105,7 @@ Three ways, in increasing order of effort:
 | | Needs on the host | Use when |
 |---|---|---|
 | **[Docker](#docker-the-whole-stack-in-two-containers)** | Docker only | moving to a new host, or you want nothing installed |
-| **[`./install.sh`](#scripted-native-install)** | Python + a package manager | running natively on your own machine |
+| **[`./deploy/install.sh`](#scripted-native-install)** | Python + a package manager | running natively on your own machine |
 | **[Manual](#1-clone-and-install-python-dependencies)** | everything below | you want to understand each piece |
 
 ### Docker: the whole stack in two containers
@@ -155,8 +155,8 @@ model pull, no Tesseract, no Python.
 ### Scripted native install
 
 ```bash
-./install.sh              # system packages + venv + deps + codex DB
-./install.sh --no-deps    # skip the system packages
+./deploy/install.sh              # system packages + venv + deps + codex DB
+./deploy/install.sh --no-deps    # skip the system packages
 ```
 
 Idempotent, so it is safe to re-run after a `git pull`. It never overwrites an
@@ -364,7 +364,7 @@ Bot:  <b>Adamantine</b> — потрібно 300
 If the game adds new materials, regenerate the Ukrainian name table:
 
 ```bash
-python orna_scrape_material_names.py
+python3 -m scrapers.orna_scrape_material_names
 ```
 
 This re-scrapes `https://playorna.com/codex/items/?c=material` in both
@@ -374,7 +374,7 @@ After re-scraping any knowledge corpus, re-index that namespace in Pinecone
 (the local keyword index rebuilds itself):
 
 ```bash
-python3 orna_scrape_questline.py && python3 orna_pinecone.py questline
+python3 -m scrapers.orna_scrape_questline && python3 orna_pinecone.py questline
 python3 orna_discord_search.py harvest && python3 orna_pinecone.py discord
 python3 orna_pinecone.py --probe "<question>"   # raw scores per namespace, to tune PINECONE_MIN_SCORE
 ```

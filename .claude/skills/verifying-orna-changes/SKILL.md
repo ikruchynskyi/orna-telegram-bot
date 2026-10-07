@@ -63,8 +63,8 @@ you can recognize right vs wrong output. Where truth lives depends on the
 feature:
 
 - **Guides / knowledge** (`orna_guide_*.txt`, `orna_knowledge.txt`): these
-  are generated from public Google Sheets by `orna_scrape_guides.py` /
-  `orna_scrape_knowledge.py`. Read those scripts' `_SOURCES` / `_TABLES`
+  are generated from public Google Sheets by `scrapers/orna_scrape_guides.py` /
+  `scrapers/orna_scrape_knowledge.py`. Read those scripts' `_SOURCES` / `_TABLES`
   lists for the spreadsheet id + gid, then fetch the tab directly as CSV to
   see the real data:
 

@@ -13,7 +13,7 @@ WHY SQLITE AND NOT MYSQL/MONGODB. The data is 2.4MB, 5,080 records, READ-ONLY
 by ONE process. A server engine would add a daemon to start, a port, credentials
 and a second container for zero gain: an in-process query beats a localhost
 round-trip, there is nothing to be consistent about with no writers, and
-sqlite3 + FTS5 + JSON1 ship in the stdlib. See README-db.md for the full
+sqlite3 + FTS5 + JSON1 ship in the stdlib. See docs/codex-db.md for the full
 comparison.
 
 SCHEMA, and why it is shaped this way. The dump is IRREGULAR - 37 top-level
@@ -46,6 +46,7 @@ Run directly to (re)build and self-check: python3 orna_codex_db.py
 
 from __future__ import annotations
 
+import paths
 import json
 import logging
 import os
@@ -57,7 +58,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).parent / "codex.sqlite3"
+DB_PATH = paths.CACHE / "codex.sqlite3"
 
 # Scalar top-level fields promoted to indexed columns. Everything else stays
 # reachable via json_extract(json, '$.field') - these are just the ones worth

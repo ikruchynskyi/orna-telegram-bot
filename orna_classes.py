@@ -59,15 +59,15 @@ and pinned in _demo so a later edit cannot silently change them.
 """
 from __future__ import annotations
 
+import paths
 import difflib
 import json
 import logging
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_PATH = Path(__file__).with_name("orna_classes.json")
+DATA_PATH = paths.DATA / "orna_classes.json"
 _data: Optional[dict] = None
 
 # The stats a specialization's base table carries, in the order they are

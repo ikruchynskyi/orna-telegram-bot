@@ -17,9 +17,9 @@ only caller.
 """
 from __future__ import annotations
 
+import paths
 import difflib
 import re
-from pathlib import Path
 from typing import Optional
 
 GUIDES = {
@@ -138,7 +138,7 @@ def read_guide(topic_key: str) -> Optional[str]:
     g = GUIDES.get(topic_key)
     if g is None:
         return None
-    path = Path(__file__).with_name(g["path"])
+    path = paths.DATA / g["path"]
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")

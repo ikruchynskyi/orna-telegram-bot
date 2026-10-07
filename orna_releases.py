@@ -41,11 +41,11 @@ force-refreshes both when that matters.
 """
 from __future__ import annotations
 
+import paths
 import json
 import logging
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -54,7 +54,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 RELEASES_URL = "https://playorna.com/releases/"
-CACHE_DIR = Path(__file__).parent / ".releases_cache"
+CACHE_DIR = paths.CACHE / "releases"
 CACHE_FILE = "releases.json"
 CACHE_TTL_SECONDS = 7 * 24 * 3600
 HTTP_TIMEOUT = 20.0

@@ -13,7 +13,7 @@ Committed and re-run BY HAND, like `orna_reddit.txt` and `orna_guide_*.txt`,
 NOT on a TTL like the community sheets. These are published articles: they
 change when their author revises them, not weekly, so re-fetching 37 pages on a
 timer would spend the budget to learn nothing. Re-run it when the site adds
-guides (`python3 orna_scrape_echo.py`), read the diff, and commit.
+guides (`python3 -m scrapers.orna_scrape_echo`), read the diff, and commit.
 
 Enumerated from the site's own SITEMAP, not by scraping the four paginated
 index pages: the sitemap is the canonical list, so a pagination change or a

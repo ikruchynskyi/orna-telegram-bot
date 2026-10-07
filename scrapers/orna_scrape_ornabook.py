@@ -6,8 +6,8 @@ Output is the `=== Title (url) ===` / `## Heading` format that orna_echo's
 section reader parses, so the same reader serves both corpora
 (orna_echo._load(path=ORNABOOK_PATH)) - no second parser.
 
-Run: python3 orna_scrape_ornabook.py          crawl + write the corpus
-     python3 orna_scrape_ornabook.py --demo   self-check, no network
+Run: python3 -m scrapers.orna_scrape_ornabook          crawl + write the corpus
+     python3 -m scrapers.orna_scrape_ornabook --demo   self-check, no network
 
 WHAT IS NOT OBVIOUS ABOUT THIS SITE
   * The most important tables are written in ICONS. The status-effect table's
@@ -42,6 +42,7 @@ section here carries its page URL so answers cite the source.
 
 from __future__ import annotations
 
+import paths
 import os
 import re
 import sys
@@ -52,11 +53,11 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 # Reused, not copied: the encoding-safe fetch (the site-without-charset bug
 # orna_echo hit), whitespace cleaning, and the mojibake guard.
-from orna_scrape_echo import DELAY_SECONDS, _MOJIBAKE_RE, _clean, _fetch_text
+from scrapers.orna_scrape_echo import DELAY_SECONDS, _MOJIBAKE_RE, _clean, _fetch_text
 
 BASE = "https://book.cadelabs.ovh/"
 TOC_URL = BASE + "TableOfContents.html"
-OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_ornabook.txt")
+OUT_PATH = str(paths.DATA / "orna_ornabook.txt")
 # Pages with no game content.
 _SKIP_PAGES = {"TableOfContents.html", "Contributors.html", "print.html"}
 EMPTY_CELL = "—"

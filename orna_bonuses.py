@@ -33,11 +33,11 @@ into slightly messier text instead of a crash.
 """
 from __future__ import annotations
 
+import paths
 import json
 import logging
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 AMITIES_URL = "https://www.aussiescodex.com/orna-amities"
 CRUCIBLES_URL = "https://www.aussiescodex.com/orna-crucibles"
-CACHE_DIR = Path(__file__).parent / ".bonuses_cache"
+CACHE_DIR = paths.CACHE / "bonuses"
 CACHE_FILE = "bonuses.json"
 CACHE_TTL_SECONDS = 7 * 24 * 3600
 HTTP_TIMEOUT = 30.0

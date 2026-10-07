@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+*.log
+.venv/
+venv/
 .env
 # Any .env variant - NOT just ".env". A `cp .env .env.bak-151721`
 # safety copy made before editing was matched by none of these rules,
@@ -8,37 +11,14 @@ __pycache__/
 # hours). The negation keeps the committed template tracked.
 .env.*
 !.env.dist
-*.log
-.venv/
-venv/
-reminders.json
-.aussies_cache/
-usage_stats.json
-.releases_cache/
-.knowledge_cache/
-.bonuses_cache/
-orna_model_compare.json
-# .qa_cache/ is deliberately COMMITTED, unlike every other cache here. It is the
-# raw r/OrnaRPG crawl - 800 threads' comments - and it is the one artefact that
-# is expensive to reproduce: an hour of rate-limited fetching that took three
-# runs and four 429 backoffs to complete. Keeping it means orna_scrape_qa.py can
-# resume or extend from any checkout without re-fetching, and that a lost working
-# copy costs nothing. The other caches stay ignored because they refetch in
-# seconds (.aussies_cache) or have a committed fallback (.knowledge_cache ->
-# orna_knowledge.txt).
-amities.json
-nicknames.json
-codex.sqlite3
-codex.sqlite3-shm
-codex.sqlite3-wal
-codex.sqlite3.tmp
-.monuments_cache/
-announce_chats.json
-.discord_chrome/
-# Harvested Discord posts + image transcriptions: other players' messages, kept
-# local (Pinecone holds the indexed copy). Rebuild: orna_discord_search.py harvest
-.discord_cache/
-.textindex.sqlite3
-.textindex.tmp
-.reddit_chrome/
-.reddit_cache/
+
+# Everything the bot writes lives under data/ (see paths.py):
+#   data/cache/  refetchable caches and derived indexes (codex.sqlite3,
+#                textindex, the Discord harvest + image transcriptions, ...)
+#   data/state/  live state: reminders, amities, nicknames, usage stats,
+#                announce chats, browser logins - back these up
+# data/qa_crawl/ is deliberately COMMITTED: the raw r/OrnaRPG crawl (800
+# threads) took an hour of rate-limited fetching to build, and keeping it lets
+# scrapers/orna_scrape_qa.py resume from any checkout.
+data/cache/
+data/state/

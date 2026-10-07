@@ -22,7 +22,7 @@ REDDIT NEEDS A LOGGED-IN SESSION. Anonymous access 403s (see
 orna_scrape_reddit's docstring and CLAUDE.md). Pass a browser session cookie
 via the environment - NEVER hardcode or commit one:
 
-    REDDIT_COOKIE="$(cat /path/to/cookie)" python3 orna_scrape_qa.py
+    REDDIT_COOKIE="$(cat /path/to/cookie)" python3 -m scrapers.orna_scrape_qa
 
 Resumable on purpose: a full crawl is one HTTP request per post and runs for
 tens of minutes, so every post's raw comment JSON is cached under
@@ -38,6 +38,7 @@ guarantee.
 """
 from __future__ import annotations
 
+import paths
 import html as _html
 import json
 import os
@@ -49,9 +50,9 @@ from datetime import datetime, timezone
 import requests
 
 BASE = "https://www.reddit.com"
-OUT_PATH = "orna_qa.txt"
-HELDOUT_PATH = "orna_qa_heldout.txt"
-CACHE_DIR = ".qa_cache"
+OUT_PATH = str(paths.DATA / "orna_qa.txt")
+HELDOUT_PATH = str(paths.DATA / "orna_qa_heldout.txt")
+CACHE_DIR = str(paths.QA_CRAWL)
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
 # 1.0s was NOT enough: a first full run got 429 Too Many Requests after ~88

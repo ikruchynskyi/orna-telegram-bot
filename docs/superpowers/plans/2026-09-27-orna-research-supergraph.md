@@ -6,7 +6,7 @@
 
 **Architecture:** A pure data builder in `orna_aussies.py` resolves a name→(category,id) locally, walks its `[cat,id]` edge lists one level, and joins each target to its leaf record — all from the already-loaded `codex.json`/`translations.en.json`, zero network. A wrapper in `telegram_orna.py` renders that bundle to one observation, appends the existing 7-corpus knowledge aggregation (factored into a shared `_gather_knowledge`), records touched entities for `finish()` buttons, and is dispatched as a new `research` action.
 
-**Tech Stack:** Python 3, stdlib only (`difflib` already used), existing modules `orna_aussies`, `telegram_orna`, `orna_test_suite`. No new dependency. No test framework — checks live in each module's `_demo()` and the tiered `orna_test_suite.py`, run with `python3 <module>.py` / `python3 orna_test_suite.py`, matching repo convention.
+**Tech Stack:** Python 3, stdlib only (`difflib` already used), existing modules `orna_aussies`, `telegram_orna`, `orna_test_suite`. No new dependency. No test framework — checks live in each module's `_demo()` and the tiered `orna_test_suite.py`, run with `python3 <module>.py` / `python3 tests/orna_test_suite.py`, matching repo convention.
 
 **Spec:** `docs/superpowers/specs/2026-09-27-orna-research-supergraph-design.md`
 
@@ -17,7 +17,7 @@
 - Any blocking call (disk read, CPU scan) invoked from an async handler is wrapped in `asyncio.to_thread` at the call site (the event-loop rule in CLAUDE.md).
 - `_ACTIONS` stays the **single source** for both the prompt action enum and `_STEP_TOOLS` — never hardcode a second action list.
 - **Observation honesty:** any truncated list carries `PARTIAL` plus the true total; a cap must never read as "that's all there is."
-- Tier 0 (`python3 orna_test_suite.py`) **must stay 100%**.
+- Tier 0 (`python3 tests/orna_test_suite.py`) **must stay 100%**.
 - Verify with **real data and the real-model harness (N≥5)**, no mocks (CLAUDE.md "Verifying changes").
 - End every commit message with: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 
@@ -662,14 +662,14 @@ Register it:
 
 - [ ] **Step 2: Run to verify it fails** (before Tasks 1–5 are done) / passes (after)
 
-Run: `set -a && source .env && set +a && python3 orna_test_suite.py`
+Run: `set -a && source .env && set +a && python3 tests/orna_test_suite.py`
 Expected after Tasks 1–5: `mechanics-wired`… `research-supergraph` PASS, `ALL GREEN`.
 
 - [ ] **Step 3: (implementation already done in Tasks 1–5)** — no code beyond the check.
 
 - [ ] **Step 4: Run the whole Tier 0**
 
-Run: `set -a && source .env && set +a && python3 orna_test_suite.py`
+Run: `set -a && source .env && set +a && python3 tests/orna_test_suite.py`
 Expected: `ALL GREEN` (Tier 0 100%).
 
 - [ ] **Step 5: Commit**

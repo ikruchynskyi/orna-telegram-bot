@@ -7,7 +7,7 @@ back their UI.
 
 Run (the URL changes on every one of their deploys, see below):
 
-    python3 orna_scrape_classes.py https://www.aussiescodex.com/_next/static/chunks/218-<hash>.js
+    python3 -m scrapers.orna_scrape_classes https://www.aussiescodex.com/_next/static/chunks/218-<hash>.js
 
 **This is NOT crawlable on a schedule, which is why the result is
 committed.** The data lives inside a Next.js webpack chunk whose filename
@@ -34,13 +34,13 @@ handles the "deity" spelling at lookup time instead.
 """
 from __future__ import annotations
 
+import paths
 import json
 import sys
-from pathlib import Path
 
 import httpx
 
-OUTPUT_PATH = Path(__file__).with_name("orna_classes.json")
+OUTPUT_PATH = paths.DATA / "orna_classes.json"
 HTTP_TIMEOUT = 30.0
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"}
@@ -108,7 +108,7 @@ def build(url: str) -> dict:
 def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(
-            "usage: python3 orna_scrape_classes.py <chunk url>\n\n"
+            "usage: python3 -m scrapers.orna_scrape_classes <chunk url>\n\n"
             "The URL is NOT stable - it carries a content hash that changes on every\n"
             "aussiescodex deploy. To find the current one: open\n"
             "https://www.aussiescodex.com/orna-stats-estimator, view source, and look for\n"
@@ -122,7 +122,7 @@ def main() -> None:
 
 def _demo() -> None:
     """Pins extraction and shape-classification against the real literals,
-    with no network. Run `python3 orna_scrape_classes.py --demo`."""
+    with no network. Run `python3 -m scrapers.orna_scrape_classes --demo`."""
     src = (
         "let s=JSON.parse('{\"None\":{\"hp\":0,\"view_distance\":0},"
         "\"Gilgamesh\":{\"hp\":12509,\"attack\":1304,\"view_distance\":0}}'),"

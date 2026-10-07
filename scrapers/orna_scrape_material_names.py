@@ -21,10 +21,11 @@ is unambiguous.
 Run this again if new materials are added to the game (or orna_sheets'
 Material Forecast tab lists a name this script's output doesn't cover):
 
-    AI/venv/bin/python3 orna_scrape_material_names.py
+    AI/venv/bin/python3 -m scrapers.orna_scrape_material_names
 """
 from __future__ import annotations
 
+import paths
 import json
 import time
 from pathlib import Path
@@ -32,12 +33,12 @@ from typing import Dict
 
 from orna_codex import fetch_codex_json
 
-OUTPUT_PATH = Path(__file__).with_name("orna_material_names_uk.json")
+OUTPUT_PATH = paths.DATA / "orna_material_names_uk.json"
 # Every item (2,773 in 2026-10): potions, keys, tokens, gear - what tool cards
 # show next to materials. Kept SEPARATE from the materials table on purpose:
 # telegram_offerings and the /orna input glossary fuzzy-match against that one,
 # and 2,700 more names would turn near-misses into wrong matches.
-ITEMS_OUTPUT_PATH = Path(__file__).with_name("orna_item_names_uk.json")
+ITEMS_OUTPUT_PATH = paths.DATA / "orna_item_names_uk.json"
 MAX_PAGES = 200  # runaway guard; the full list is ~70 pages
 
 

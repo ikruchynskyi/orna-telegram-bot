@@ -39,13 +39,13 @@ auth needed.
 Run this again if the user points at updated/additional guides, or a
 live report shows one has gone stale:
 
-    AI/venv/bin/python3 orna_scrape_guides.py
+    AI/venv/bin/python3 -m scrapers.orna_scrape_guides
 """
 from __future__ import annotations
 
+import paths
 import csv
 import io
-from pathlib import Path
 from typing import Optional
 
 import requests
@@ -355,7 +355,7 @@ def main() -> None:
             f"codex data. Title: {source['title']!r}. Source: {source['source_url']} . Generated "
             f"by orna_scrape_guides.py.\n"
         )
-        out_path = Path(__file__).with_name(source["filename"])
+        out_path = paths.DATA / source["filename"]
         out_path.write_text(header + "\n" + body + "\n", encoding="utf-8")
         print(f"Wrote {out_path.name} ({out_path.stat().st_size} bytes)\n")
 

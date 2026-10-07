@@ -4,16 +4,16 @@ One `## Tier N - Quest M: ...` section per quest, in the `=== Title (url) ===`
 format orna_echo's section reader parses (same as orna_ornabook.txt), so it is
 searchable by grep and by Pinecone ("questline" namespace) with no new reader.
 
-Run: python3 orna_scrape_questline.py && python3 orna_pinecone.py questline
+Run: python3 -m scrapers.orna_scrape_questline && python3 orna_pinecone.py questline
 """
+import paths
 import re
-from pathlib import Path
 
 import httpx
 
 DOC_ID = "1z6Efh6Heuo6lF1O5_FnvXpJbT8KVyBnghUTiqCie5UM"
 SOURCE_URL = f"https://docs.google.com/document/d/{DOC_ID}/edit"
-OUT = Path(__file__).with_name("orna_questline.txt")
+OUT = paths.DATA / "orna_questline.txt"
 TITLE = "Unfelled questline guide by Konq (April 2022)"
 
 _TIER_RE = re.compile(r"^Tier (\d+) Quests\s*$")

@@ -2,7 +2,7 @@
 # docker compose logs -f bot      - the `orna:` / `go:` step logs
 #
 # Two containers, no database service - the codex is a SQLite FILE inside the
-# bot container (see README-db.md for why that beat MySQL/Mongo here), so there
+# bot container (see docs/codex-db.md for why that beat MySQL/Mongo here), so there
 # is nothing to start, no port and no credentials for it.
 #
 # MOVING TO A NEW HOST: everything the bot needs is these two images plus .env.
@@ -12,13 +12,15 @@
 
 services:
   bot:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: orna-telegram-bot
     container_name: orna-bot
     restart: unless-stopped
     # Secrets come from the environment at RUN time, never from an image
     # layer - this repo has already leaked a committed .env once.
-    env_file: .env
+    env_file: ../.env
     environment:
       # Points at the ollama SERVICE below, overriding whatever .env says.
       # This has to be here rather than left to .env: the host's own .env sets
@@ -29,14 +31,12 @@ services:
       # .env uses) is Apple-Silicon-only and cannot run here at all.
       OLLAMA_MODEL: ${OLLAMA_MODEL_DOCKER:-gpt-oss:20b}
       TZ: ${TZ:-Europe/Kyiv}
-    # The repo is bind-mounted so the bot's own state files persist on the
-    # host exactly as they do for a native run. The code writes them beside
-    # __file__ with a temp-file + os.replace, which REPLACES the target - so
-    # single-file volume mounts or symlinks would be silently eaten on the
-    # first write. A whole-directory mount is the one shape that works
-    # without refactoring every module's paths.
+    # The repo is bind-mounted so state (data/state), caches (data/cache) and
+    # corpora persist on the host exactly as they do for a native run. State
+    # is written with a temp-file + os.replace, which REPLACES the target - so
+    # mount whole directories, never single files or symlinks.
     volumes:
-      - .:/app
+      - ..:/app
     depends_on:
       ollama:
         # Waits for the model server to answer, not just for the process to
@@ -53,8 +53,8 @@ services:
 
   ollama:
     build:
-      context: .
-      dockerfile: Dockerfile.ollama
+      context: ..
+      dockerfile: deploy/Dockerfile.ollama
       args:
         # Space-separated. Add NSFW_MODEL here if you use /go nsfw.
         OLLAMA_MODELS: ${OLLAMA_MODELS:-gpt-oss:20b}

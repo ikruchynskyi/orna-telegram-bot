@@ -52,7 +52,7 @@ Data sources (each = reader module + cache or committed file + scraper):
   `python3 orna_pinecone.py [ns ...]`. Also feeds the PLAN call a short primer (`_plan_primer`).
 - `orna_textindex.py` → `.textindex.sqlite3` - SQLite FTS5 over the same chunks; the fallback when
   Pinecone is off/failing. Rebuilds itself when a source file is newer.
-- `orna_questline.txt` (`orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
+- `orna_questline.txt` (`scrapers/orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
 - `orna_discord_search.py` - Discord through a Selenium Chrome logged in as the user (`.discord_chrome/`;
   user-account automation, ToS risk accepted by the user). `harvest`: FAQ/guide channels + pinned posts,
   images transcribed by a vision model (new images only; cached per attachment) → `.discord_cache/` →
@@ -141,10 +141,10 @@ Data sources (each = reader module + cache or committed file + scraper):
 
 ## Verifying
 
-- `python3 orna_test_suite.py` - tier 0, no LLM, must be 100%. Runs every module's `_demo()`, plus the
+- `python3 tests/orna_test_suite.py` - tier 0, no LLM, must be 100%. Runs every module's `_demo()`, plus the
   retrieval benchmark (`_RETRIEVAL_CASES`, needs Pinecone: 12/13 on 2026-10-06) - the number to watch
   when changing chunking, `MIN_SCORE`, top-k or `_SOURCE_NOTES`.
-  Full gate: `TIER=0,1,2,3 N=3 python3 orna_test_suite.py`.
+  Full gate: `TIER=0,1,2,3 N=3 python3 tests/orna_test_suite.py`.
 - Pure logic you add gets an `assert`-based `_demo()` in its module.
 - End-to-end: `Q="..." N=5 python3 .claude/skills/verifying-orna-changes/scripts/orna_loop_harness.py`
   (`FORCE_LOCAL=1` for local only). Env: `set -a && source .env && set +a`.

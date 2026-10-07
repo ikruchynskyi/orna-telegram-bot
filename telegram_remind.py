@@ -29,6 +29,7 @@ buttons - never ask again.
 """
 from __future__ import annotations
 
+import paths
 import json
 import logging
 import re
@@ -36,7 +37,6 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -51,7 +51,7 @@ import usage_stats
 
 logger = logging.getLogger(__name__)
 
-_STORE_PATH = Path(__file__).parent / "reminders.json"
+_STORE_PATH = paths.STATE / "reminders.json"
 
 _UNIT_SECONDS = {
     "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,

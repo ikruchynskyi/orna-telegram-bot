@@ -18,6 +18,7 @@ chat's other images never reach this module.
 """
 from __future__ import annotations
 
+import paths
 import asyncio
 import datetime
 import difflib
@@ -26,7 +27,6 @@ import json
 import logging
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
 from telegram import Update
@@ -34,8 +34,8 @@ from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
 
-_STORE_PATH = Path(__file__).parent / "amities.json"
-_NICKS_PATH = Path(__file__).parent / "nicknames.json"   # telegram user id -> in-game nickname (/iam)
+_STORE_PATH = paths.STATE / "amities.json"
+_NICKS_PATH = paths.STATE / "nicknames.json"   # telegram user id -> in-game nickname (/iam)
 PENDING_TTL_SECONDS = 600
 
 COLORS = {  # colour -> (emoji, stems in EN / UK / RU, lowercase)

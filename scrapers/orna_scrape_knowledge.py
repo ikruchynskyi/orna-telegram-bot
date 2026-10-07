@@ -41,17 +41,17 @@ these would ever usefully answer a player's question.
 Run this again if the user points at updated/additional sheets, or if a
 live report shows this data has gone stale:
 
-    AI/venv/bin/python3 orna_scrape_knowledge.py
+    AI/venv/bin/python3 -m scrapers.orna_scrape_knowledge
 """
 from __future__ import annotations
 
+import paths
 import csv
 import io
-from pathlib import Path
 
 import requests
 
-OUTPUT_PATH = Path(__file__).with_name("orna_knowledge.txt")
+OUTPUT_PATH = paths.DATA / "orna_knowledge.txt"
 HTTP_TIMEOUT = 20.0
 
 # (section title, spreadsheet id, gid, source note) - source note is kept

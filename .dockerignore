@@ -10,14 +10,9 @@ AI/
 __pycache__/
 *.pyc
 *.log
-# Derived at build/runtime in ~0.3s - no reason to ship 12MB of it.
-codex.sqlite3
-codex.sqlite3-*
-# Caches refetch in seconds; .qa_cache is 6.7MB of committed crawl the
-# running bot never reads (only orna_scrape_qa.py does).
-.aussies_cache/
-.knowledge_cache/
-.releases_cache/
-.bonuses_cache/
-.qa_cache/
-.monuments_cache/
+# Caches and state are bind-mounted at run time (deploy/docker-compose.yml), and
+# the codex DB rebuilds in ~0.3s - none of it belongs in an image. The Q&A
+# crawl is 6.7MB the running bot never reads (only scrapers/orna_scrape_qa.py).
+data/cache/
+data/state/
+data/qa_crawl/

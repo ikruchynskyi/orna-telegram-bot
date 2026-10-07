@@ -19,6 +19,7 @@ Rebuild after a corpus changes (re-scrape): `python3 orna_pinecone.py [ns ...]`.
 /update_codex re-indexes the "knowledge" namespace itself, since that is the
 one corpus it refetches.
 """
+import paths
 import json
 import logging
 import os
@@ -114,7 +115,7 @@ def _units(namespace: str) -> list:
     if namespace in ("echo", "ornabook", "questline"):
         import orna_echo
         path = orna_echo.CORPUS_PATH if namespace == "echo" else \
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), f"orna_{namespace}.txt")
+            str(paths.DATA / f"orna_{namespace}.txt")
         return [(f"[{s.label}]", s.body.split("\n"), s.label[:60], s.url) for s in orna_echo._load(path)]
     if namespace == "qa":
         import orna_qa

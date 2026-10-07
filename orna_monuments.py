@@ -34,6 +34,7 @@ Run: python3 orna_monuments.py    (self-check, no network)
 
 from __future__ import annotations
 
+import paths
 import datetime
 import difflib
 import json
@@ -41,7 +42,6 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -52,7 +52,7 @@ DATA_URL = ("https://script.google.com/macros/s/AKfycbyY7Tv_hkYrYCgfvKiy9mGOShuM
             "zKNEk7XCgTsQcOXZ_ogYh5a9gg/exec")
 SITE_URL = "https://floorchart.top/"
 MONUMENTS = ("ithra", "thor", "vulcan", "demeter")
-CACHE_DIR = Path(__file__).parent / ".monuments_cache"
+CACHE_DIR = paths.CACHE / "monuments"
 CACHE_PATH = CACHE_DIR / "rewards.json"
 CACHE_TTL_SECONDS = 6 * 3600
 HEADERS = {"User-Agent": "orna-telegram-bot/1.0 (guild helper bot; contact via github ikruchynskyi)"}

@@ -20,10 +20,10 @@ sheets/reddit/class corpora.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import paths
 from typing import Optional
 
-DATA_PATH = Path(__file__).with_name("orna_mechanics.txt")
+DATA_PATH = paths.DATA / "orna_mechanics.txt"
 # One curated source for the whole file, cited when any section is returned.
 SOURCE_TITLE = "Orna game mechanics (community-verified 2026)"
 SOURCE_URL = "https://www.ornalegends.com/home/the-ultimate-ornarpg-beginner-basics-guide"

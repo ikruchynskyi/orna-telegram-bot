@@ -32,6 +32,7 @@ Then: python3 orna_pinecone.py discord
 """
 from __future__ import annotations
 
+import paths
 import asyncio
 import base64
 import json
@@ -49,8 +50,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-PROFILE_DIR = Path(__file__).with_name(".discord_chrome")
-CACHE_DIR = Path(__file__).with_name(".discord_cache")
+PROFILE_DIR = paths.STATE / "discord_chrome"
+CACHE_DIR = paths.CACHE / "discord"
 API = "https://discord.com/api/v9"
 MIN_CONTENT = 25            # "lol same" carries no knowledge
 MIN_INTERVAL = 2.5          # seconds between requests - human pace, not a crawler

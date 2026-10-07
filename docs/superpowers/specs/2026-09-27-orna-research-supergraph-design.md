@@ -183,7 +183,7 @@ user question
 - **Real-model (harness, N≥5)**: the exact centaurus question → one `research`
   call + `finish`, answer names drops and reasons class-fit; a
   "how to beat <immune boss>" question uses `research` and cites immunities.
-- Run `python3 orna_test_suite.py` (Tier 0 must stay 100%) at the end.
+- Run `python3 tests/orna_test_suite.py` (Tier 0 must stay 100%) at the end.
 
 ## Rollout / phasing
 

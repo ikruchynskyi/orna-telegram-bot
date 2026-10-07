@@ -2,13 +2,13 @@
 # Native install (macOS/Homebrew or Debian/Ubuntu). For a container instead,
 # see docker-compose.yml - that needs nothing on the host but Docker.
 #
-#   ./install.sh            full install
-#   ./install.sh --no-deps  skip system packages (venv + python deps + DB only)
+#   ./deploy/install.sh            full install
+#   ./deploy/install.sh --no-deps  skip system packages (venv + python deps + DB only)
 #
 # Idempotent: safe to re-run after a pull.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."      # the repo root - this script lives in deploy/
 REPO="$PWD"
 VENV="$REPO/.venv"
 SKIP_SYS=0
@@ -122,6 +122,6 @@ PY
 cat <<EOF
 
 Start it:   $VENV/bin/python telegram_bot.py
-Self-check: $VENV/bin/python orna_test_suite.py
+Self-check: $VENV/bin/python tests/orna_test_suite.py
 Docker:     docker compose up -d
 EOF

@@ -28,6 +28,7 @@ Self-check: `python3 orna_echo.py`.
 """
 from __future__ import annotations
 
+import paths
 import logging
 import os
 import re
@@ -35,7 +36,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-CORPUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_echo.txt")
+CORPUS_PATH = str(paths.DATA / "orna_echo.txt")
 SITE_URL = "https://playerecho.com/orna"
 # A heading hit is worth more than a body hit: "## Ward Capacity: The Base
 # Formula" is what the section is ABOUT, while the same word in a paragraph may

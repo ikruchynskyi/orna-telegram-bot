@@ -19,18 +19,17 @@ are mode=ro, as for codex.sqlite3.
 """
 from __future__ import annotations
 
+import paths
 import logging
 import os
 import re
 import sqlite3
 import sys
 import threading
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent
-DB_PATH = ROOT / ".textindex.sqlite3"
+DB_PATH = paths.CACHE / "textindex.sqlite3"
 _lock = threading.Lock()
 
 # Words that match everything and rank nothing. BM25 already discounts common
@@ -43,9 +42,9 @@ _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 def _sources() -> list:
     """Every file the index is built from - its mtimes decide staleness."""
-    out = list(ROOT.glob("orna_*.txt")) + [ROOT / "orna_classes.json"]
-    for d in (".knowledge_cache", ".discord_cache"):
-        out += list((ROOT / d).glob("*")) if (ROOT / d).is_dir() else []
+    out = list(paths.DATA.glob("*.txt")) + [paths.DATA / "orna_classes.json"]
+    for d in ("knowledge", "discord", "reddit"):
+        out += list((paths.CACHE / d).glob("*")) if (paths.CACHE / d).is_dir() else []
     return [p for p in out if p.exists()]
 
 

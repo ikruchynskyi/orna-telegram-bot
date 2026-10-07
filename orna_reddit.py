@@ -18,6 +18,7 @@ results" rather than breaking knowledge_search for everyone.
 """
 from __future__ import annotations
 
+import paths
 import logging
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DATA_PATH = Path(__file__).with_name("orna_reddit.txt")
+DATA_PATH = paths.DATA / "orna_reddit.txt"
 _entries: Optional[list] = None
 
 # "[2023-11-14] u/OrnaOdie in r/OrnaRPG - re: How does orn bonus stack?"
