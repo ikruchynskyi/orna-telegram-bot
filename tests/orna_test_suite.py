@@ -713,7 +713,9 @@ async def run_case_once(case: Case) -> tuple:
         if action and action not in ("finish", "ask"):   # the loop now records these too
             tools.append(action)
 
-    texts = [t for name, t in replies if name != "delete"]
+    # A picture sent WITH the answer (finish(images=...)) comes after the text and
+    # is not the answer - grading its caption failed image-knowledge 2/4.
+    texts = [t for name, t in replies if name not in ("delete", "reply_photo", "reply_document")]
     # The status message edits itself in place and is deleted at the end; it is
     # chrome, never an answer, so it must not be graded as the finish text.
     answers = [t for t in texts if not t.startswith(("\U0001F914", "\U0001F50E", "\U0001F4DA", "⏳"))]

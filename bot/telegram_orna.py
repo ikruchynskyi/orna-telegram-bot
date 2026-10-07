@@ -44,6 +44,7 @@ import ast
 import asyncio
 import httpx
 import datetime
+import hashlib
 import html
 import io
 import json
@@ -4153,7 +4154,7 @@ _IMAGE_LINE_RE = re.compile(r"\[image #(\d+): ([^\]\n]*)")
 async def _send_answer_images(message, step: dict, args: dict) -> int:
     refs = step.get("images") or (args or {}).get("images") or []
     refs = [refs] if isinstance(refs, (str, int)) else list(refs)
-    sent = 0
+    sent, seen = 0, set()
     for ref in refs:
         if sent >= _ANSWER_IMAGES_MAX:
             break
@@ -4161,6 +4162,12 @@ async def _send_answer_images(message, step: dict, args: dict) -> int:
         if not info:
             logger.info("orna: finish named image %r, which is not a harvested image - dropped", ref)
             continue
+        # The same chart is often posted in both servers (two attachment ids,
+        # identical bytes) - live 2026-10-07 the Rune Effects chart went out twice.
+        digest = hashlib.sha256(info["path"].read_bytes()).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
         caption = f'<a href="{info["url"]}">{html.escape(info["caption"])}</a>'
         try:
             try:
@@ -6250,6 +6257,9 @@ def _demo() -> None:
         spy = _ImgSpy()
         n = asyncio.run(_send_answer_images(spy, {"images": ["#676443", "123", "9999999999"] + all_ids[:3]}, {}))
         assert n == 2 and len(spy.photos) == 2 and "useful-tips-and-charts" in spy.photos[0], spy.photos
+        # the same chart twice (same file, two references) is sent once
+        spy = _ImgSpy()
+        assert asyncio.run(_send_answer_images(spy, {"images": ["1228387935544676443", "#676443"]}, {})) == 1
         spy = _ImgSpy(photo_ok=False)                                  # rejected as a photo -> sent as a file
         assert asyncio.run(_send_answer_images(spy, {}, {"images": "1228387935544676443"})) == 1 and spy.docs
         assert asyncio.run(_send_answer_images(_ImgSpy(), {}, {})) == 0
