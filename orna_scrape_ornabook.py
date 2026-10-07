@@ -4,7 +4,7 @@ effect magnitudes, dungeons and key multipliers, raids, kingdoms, Anguish 2.0.
 
 Output is the `=== Title (url) ===` / `## Heading` format that orna_echo's
 section reader parses, so the same reader serves both corpora
-(orna_echo.search(..., path=ORNABOOK_PATH)) - no second search engine.
+(orna_echo._load(path=ORNABOOK_PATH)) - no second parser.
 
 Run: python3 orna_scrape_ornabook.py          crawl + write the corpus
      python3 orna_scrape_ornabook.py --demo   self-check, no network

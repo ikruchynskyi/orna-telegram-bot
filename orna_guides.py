@@ -185,7 +185,7 @@ def guide_excerpt(text: str, query: str, max_chars: int) -> str:
     TIER 2 (word scan) - broader fallback when no header word-matches: the
     lines containing the most distinct query words, with a little context.
 
-    # ponytail: still no fuzzy/typo correction like orna_knowledge.search has
+    # ponytail: no fuzzy/typo correction
     # (difflib against the guide's own vocabulary) - add it if a class-guide
     # ask with a genuine typo (not just different wording) turns up nothing.
     """

@@ -14,9 +14,7 @@ telegram_go.py's web search.
 """
 from __future__ import annotations
 
-import difflib
 import logging
-import re
 import time
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -34,7 +32,6 @@ DATA_PATH = Path(__file__).with_name("orna_knowledge.txt")
 CACHE_DIR = Path(__file__).parent / ".knowledge_cache"
 CACHE_FILE = "orna_knowledge.txt"
 CACHE_TTL_SECONDS = 7 * 24 * 3600
-_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 
 
 class Section(NamedTuple):
@@ -44,7 +41,6 @@ class Section(NamedTuple):
 
 
 _sections: Optional[list] = None
-_word_vocab: Optional[set] = None
 
 
 def _looks_like_header(line: str) -> bool:
@@ -172,8 +168,8 @@ def _corpus_text() -> str:
 
 def refresh_cache() -> None:
     """Force a rebuild from the sheets next time the corpus is needed."""
-    global _sections, _word_vocab
-    _sections = _word_vocab = None
+    global _sections
+    _sections = None
     (CACHE_DIR / CACHE_FILE).unlink(missing_ok=True)
 
 
@@ -199,130 +195,6 @@ def _load() -> list:
         sections.append(Section(title=title, header=header, lines=lines))
     _sections = sections
     return sections
-
-
-def list_sections() -> list:
-    """Section titles, for the /orna system prompt to advertise what this
-    covers - derived from the data itself rather than a second hardcoded
-    list that could drift out of sync with it."""
-    return [s.title for s in _load()]
-
-
-def _vocab() -> set:
-    """Every distinct capitalized-ish word appearing anywhere in the
-    knowledge base, for fuzzy query correction (see search())."""
-    global _word_vocab
-    if _word_vocab is None:
-        vocab = set()
-        for sec in _load():
-            for line in sec.lines:
-                vocab.update(_WORD_RE.findall(line))
-        _word_vocab = vocab
-    return _word_vocab
-
-
-def _fuzzy_correct(query: str) -> Optional[str]:
-    """A transliterated name (e.g. "Sirius" from Ukrainian "Сіріус") often
-    doesn't exactly match the game's actual spelling ("Sirus") - the same
-    problem search_codex's own retries exist for, and the same fix
-    already used elsewhere in this codebase (orna_aussies.
-    _resolve_stat_field/_resolve_attr_field): fuzzy-match each word
-    against the corpus's real vocabulary and substitute the close match.
-    Returns None if nothing changed (caller then knows not to re-search)."""
-    vocab = _vocab()
-    # Match case-INSENSITIVELY, as the docstring's cited sibling
-    # (_resolve_stat_field) does: difflib.SequenceMatcher is case-sensitive,
-    # so a lowercase query word ("sirius") vs a capitalized corpus word
-    # ("Sirus") scores 0.727 (below the 0.75 cutoff) and silently fails to
-    # correct - the exact transliteration case this function exists for.
-    # Lowercase both for scoring (0.909, passes), then substitute the real
-    # original-case corpus spelling.
-    lower_to_orig: dict = {}
-    for v in vocab:
-        lower_to_orig.setdefault(v.lower(), v)
-    lower_vocab = list(lower_to_orig)
-    words = query.split()
-    corrected = []
-    changed = False
-    for w in words:
-        wl = w.lower()
-        if wl in lower_to_orig:
-            corrected.append(w)
-            continue
-        close = difflib.get_close_matches(wl, lower_vocab, n=1, cutoff=0.75)
-        if close:
-            corrected.append(lower_to_orig[close[0]])
-            changed = True
-        else:
-            corrected.append(w)
-    return " ".join(corrected) if changed else None
-
-
-def _block(sec, shown: list) -> str:
-    """One section's result block: title, its column header (once), rows."""
-    block = [f"[{sec.title}]"]
-    if sec.header and sec.header not in shown:
-        block.append(sec.header)
-    block.extend(shown)
-    return "\n".join(block)
-
-
-def _search_once(needle: str, section: str, limit: int) -> str:
-    out = []
-    matched_total = 0
-    for sec in _load():
-        if section and section.strip().lower() not in sec.title.lower():
-            continue
-        hits = [l for l in sec.lines if needle in l.lower()]
-        if not hits:
-            continue
-        shown = hits[:max(1, limit - matched_total)]
-        out.append(_block(sec, shown))
-        matched_total += len(shown)
-        if matched_total >= limit:
-            break
-    return "\n\n".join(out)
-
-
-def _search_words(needle: str, section: str, limit: int) -> str:
-    """Rank lines by how many DISTINCT query words they contain, for a query
-    that names SEVERAL things at once.
-
-    _search_once needs the whole query as one substring, so a combined query
-    can only match a line containing every subject - i.e. nothing. Live bug
-    2026-09-24: knowledge_search("Shrine of Luck Lucky Silver Coin Temple of
-    Wealth Volcan's Brew") returned empty, the loop was told "not in the
-    knowledge base", and it invented the multipliers instead (two runs of one
-    request answered x195.81 and x305.80 for the same question). An earlier
-    fix split the query on ","/"and"/"та", which worked until the model wrote
-    the same list space-separated with no delimiter at all - hence scoring
-    words, which needs no delimiter and covers both.
-
-    Words shorter than 3 chars are dropped so "of"/"a" can't match every row.
-    A line needs >= 2 distinct query words to count, which is what keeps a
-    single shared word from dragging in the whole corpus."""
-    words = {w for w in _WORD_RE.findall(needle.lower()) if len(w) >= 3}
-    if len(words) < 2:
-        return ""
-    scored = []
-    for order, sec in enumerate(_load()):
-        if section and section.strip().lower() not in sec.title.lower():
-            continue
-        for line in sec.lines:
-            low = line.lower()
-            score = sum(1 for w in words if w in low)
-            if score >= 2:
-                scored.append((score, order, sec, line))
-    if not scored:
-        return ""
-    scored.sort(key=lambda t: -t[0])
-    keep = scored[:limit]
-    out, seen = [], {}
-    for _, order, sec, line in sorted(keep, key=lambda t: t[1]):
-        seen.setdefault(id(sec), (sec, []))[1].append(line)
-    for sec, lines in seen.values():
-        out.append(_block(sec, lines))
-    return "\n\n".join(out)
 
 
 _SECTION_URLS: Optional[dict] = None
@@ -352,35 +224,9 @@ def source_url(section_title: str) -> Optional[str]:
     return _SECTION_URLS.get(section_title)
 
 
-def search(query: str, section: str = "", limit: int = 20) -> str:
-    """Case-insensitive substring search across the knowledge base.
-    `section` narrows to sections whose title contains it (case-
-    insensitive substring, e.g. "monster" -> "Monster Data (...)");
-    leave empty to search every section. Returns matching lines grouped
-    by section, each group prefixed with that section's best-guess header
-    line (once) so a bare data row like "0 | 0 | 0" isn't meaningless on
-    its own - capped to `limit` matched lines total. On an exact-substring
-    miss, retries once with each query word fuzzy-corrected against the
-    corpus's own vocabulary (see _fuzzy_correct) before giving up. Empty
-    string if nothing matched anywhere (caller decides how to report that)."""
-    query = query.strip()
-    if not query:
-        return ""
-    result = _search_once(query.lower(), section, limit)
-    if result:
-        return result
-    corrected = _fuzzy_correct(query)
-    if corrected:
-        result = _search_once(corrected.lower(), section, limit)
-        if result:
-            return result
-    # Last resort: score by shared words, for a query naming several things
-    # at once (no single line can contain all of them). See _search_words.
-    return _search_words(corrected or query, section, limit)
-
-
 def _demo() -> None:
-    """Pins _looks_like_header against the two lines that actually fight
+    """Searching this corpus is orna_pinecone / orna_textindex's job now; this
+    pins the PARSER. _looks_like_header against the two lines that actually fight
     over the "Gear XP/Orn/Gold Boosts" section (see that function), plus
     the Proofs header a stricter rule kept rejecting. Run:
     `python3 orna_knowledge.py`."""
@@ -403,9 +249,8 @@ def _demo() -> None:
             assert len(sec.header.split(" | ")[0].split()) <= 4, (sec.title, sec.header[:60])
 
     # The live regression: Orns is a NAMED column now, not the 5th unlabelled one.
-    hit = search("Temple of Wealth", limit=3)
-    assert "| Orns |" in hit, hit
-    assert "Temple of Wealth | - | Kingdom Research | - | 1.2" in hit, hit
+    wealth = next(s for s in _load() if any("Temple of Wealth | - | Kingdom Research | - | 1.2" in l for l in s.lines))
+    assert "| Orns |" in wealth.header, wealth.header
 
     # A truncated rebuild must be rejected, not cached for a week.
     full = DATA_PATH.read_text(encoding="utf-8")
@@ -427,15 +272,6 @@ def _demo() -> None:
     assert _sane_rebuild(parts[0] + "".join("\n=== " + p for p in trimmed[1:]), full), \
         "a few removed rows is a normal edit, not a failed fetch"
 
-    # A multi-subject query must find every subject, with NO delimiter to
-    # split on, and across a spelling the corpus doesn't use ("Volcan's" ->
-    # "Vulcan's"). This returned "" before _search_words existed.
-    multi = search("Shrine of Luck Lucky Silver Coin Temple of Wealth Volcan's Brew", limit=8)
-    for row in ("Lucky Silver Coin | 4", "Vulcan's Brew | 6", "Shrine of Luck | -", "Temple of Wealth | -"):
-        assert row in multi, (row, multi[:300])
-    assert "| Orns |" in multi, multi[:300]
-    # ...and a single-subject query must still take the exact-substring path.
-    assert "Knight Sirus" in search("Knight Sirus", limit=3)
     print("orna_knowledge: all checks passed")
 
 

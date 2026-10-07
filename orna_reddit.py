@@ -79,46 +79,6 @@ def _load() -> list:
     return entries
 
 
-def search(query: str, limit: int = 6) -> list:
-    """Entries mentioning `query`, best first. Scored by how many distinct
-    query words appear, so a multi-word ask still ranks the entry that
-    covers most of it - the same shape orna_knowledge._search_words uses,
-    for the same reason (nobody phrases a question the way a comment is
-    written)."""
-    entries = _load()
-    q = query.strip().lower()
-    if not q or not entries:
-        return []
-    words = {w for w in re.findall(r"[^\W_]+", q) if len(w) > 2}
-    scored = []
-    for e in entries:
-        hay = f"{e.head}\n{e.body}".lower()
-        if q in hay:
-            scored.append((100, e))          # exact phrase always wins
-        elif words:
-            hits = sum(1 for w in words if w in hay)
-            if hits >= max(2, len(words) // 2):
-                scored.append((hits, e))
-    scored.sort(key=lambda t: -t[0])
-    return [e for _s, e in scored[:limit]]
-
-
-def format_entries(entries: list, max_chars: int = 8000) -> str:
-    """Entries as text for the model, truncated as a whole rather than per
-    entry so one long comment can't crowd the rest out silently."""
-    out, used = [], 0
-    for e in entries:
-        block = e.text
-        if used + len(block) > max_chars:
-            block = block[: max(0, max_chars - used)] + " …"
-            if block.strip():
-                out.append(block)
-            break
-        out.append(block)
-        used += len(block)
-    return "\n\n".join(out)
-
-
 def _demo() -> None:
     """Parses a fixture in the exact shape orna_scrape_reddit writes, so the
     reader and writer can't drift. Run `python3 orna_reddit.py`."""
@@ -150,22 +110,13 @@ def _demo() -> None:
         assert entries[0].url.endswith("/abc/x/")
         assert entries[1].head.startswith("[2022-01-02]")
 
-        hits = search("orn bonus multiplicative")
-        assert hits and "multiplicative" in hits[0].body, [h.head for h in hits]
-        assert search("ward magic damage"), "multi-word ask must match the ward entry"
-        assert search("completely unrelated zzzz") == []
-
-        text = format_entries(hits)
-        assert "reddit.com" in text and "1.21" in text, text
-        # truncation is whole-corpus, and marked
-        assert format_entries(hits, max_chars=40).endswith("…")
     finally:
         DATA_PATH, _entries = orig, None
         tmp.unlink(missing_ok=True)
 
     # a missing corpus disables cleanly instead of raising
     DATA_PATH, _entries = Path("/nonexistent/orna_reddit.txt"), None
-    assert search("anything") == []
+    assert _load() == []
     DATA_PATH, _entries = orig, None
     print("orna_reddit: all checks passed")
 

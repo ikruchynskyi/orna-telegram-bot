@@ -616,7 +616,7 @@ def fuzzy_codex_name(query: str, cutoff: float = 0.72) -> str:
     reach it (it strips quality words, possessives and trailing words; a typo
     INSIDE a word is a different shape), so this matches the whole query against
     the real name vocabulary instead. Same "fuzzy-correct against the corpus's
-    own words" fix orna_knowledge.search and _resolve_stat_field already use.
+    own words" fix _resolve_stat_field already uses.
 
     Fast enough to call inline - difflib over ~5k names measured at under 10ms -
     but callers still go through asyncio.to_thread because building the

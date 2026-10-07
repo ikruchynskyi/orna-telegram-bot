@@ -240,7 +240,7 @@ def refetch_now() -> dict:
 def search(query: str, limit: int = 40) -> str:
     """Matching lines, grouped under their section header, or "" if nothing
     matches. Exact substring first, then a word-overlap fallback - the same
-    two-stage shape orna_knowledge.search uses, and for the same reason: a
+    two-stage shape orna_knowledge's old search used, for the same reason: a
     question says "crit crucible on legs" while the row says "Crit Chance |
     Regular Anguish 2.0 | ... | Can apply to Legs"."""
     q = query.strip().lower()

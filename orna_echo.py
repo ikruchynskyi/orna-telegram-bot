@@ -40,13 +40,8 @@ SITE_URL = "https://playerecho.com/orna"
 # A heading hit is worth more than a body hit: "## Ward Capacity: The Base
 # Formula" is what the section is ABOUT, while the same word in a paragraph may
 # be an aside. Tuned on the real corpus, not guessed - see _demo.
-_HEADING_WEIGHT = 3
-_TITLE_WEIGHT = 2
-_MIN_WORD_LEN = 3
-_MAX_BODY_CHARS = 6000
 
 _ARTICLE_RE = re.compile(r"^=== (?P<title>.+?) \((?P<url>[^)]+)\) ===$")
-_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 # path -> parsed sections. A dict, not one global: the same reader serves
 # more than one corpus file (orna_ornabook.txt too), with one parse each.
@@ -117,46 +112,6 @@ def _load(path: str = CORPUS_PATH) -> list:
     return _SECTIONS[path]
 
 
-def search(query: str, limit: int = 6, path: str = CORPUS_PATH) -> list:
-    """Sections mentioning `query`, best first, scored by how many DISTINCT
-    query words appear - heading and title hits weighted above body hits.
-
-    Distinct-word scoring (not whole-query substring) for the reason
-    orna_knowledge learned the hard way: nobody phrases a question the way a
-    guide phrases its heading, and a query naming several subjects at once
-    ("ward absorption turns") matches no single substring anywhere."""
-    sections = _load(path)
-    words = {w for w in _WORD_RE.findall(query.lower()) if len(w) >= _MIN_WORD_LEN}
-    if not words or not sections:
-        return []
-    scored = []
-    for sec in sections:
-        body_words = set(_WORD_RE.findall(sec.body.lower()))
-        head_words = set(_WORD_RE.findall(sec.heading.lower()))
-        title_words = set(_WORD_RE.findall(sec.title.lower()))
-        score = (len(words & body_words)
-                 + _HEADING_WEIGHT * len(words & head_words)
-                 + _TITLE_WEIGHT * len(words & title_words))
-        if score:
-            scored.append((score, len(sec.body), sec))
-    # Longest body breaks a tie: between two equally-matching sections the
-    # fuller one is the better answer to hand a reading model.
-    scored.sort(key=lambda t: (-t[0], -t[1]))
-    return [sec for _score, _len, sec in scored[:limit]]
-
-
-def search_text(query: str, limit: int = 6, path: str = CORPUS_PATH) -> str:
-    """`search` rendered as one labelled block for a tool observation."""
-    hits = search(query, limit, path)
-    if not hits:
-        return ""
-    parts = []
-    for sec in hits:
-        body = sec.body if len(sec.body) <= _MAX_BODY_CHARS else sec.body[:_MAX_BODY_CHARS] + " …"
-        parts.append(f"[{sec.label}]\n{body}")
-    return "\n\n".join(parts)
-
-
 def _demo() -> None:
     """Checks the parser on a fixture, then the real corpus if it is present."""
     fixture = (
@@ -180,28 +135,15 @@ def _demo() -> None:
     assert secs[3].title == "Fishing Guide"
     assert secs[1].label == "Ward Guide: Capacity - Ward Capacity: The Base Formula"
 
-    _SECTIONS[CORPUS_PATH] = secs
-    # A heading word must outrank a body-only mention: "capacity" is in the
-    # Ward section's heading and nowhere else.
-    assert search("ward capacity formula")[0].heading == "Ward Capacity: The Base Formula"
-    assert "Ward_Base = (HP + MP) / 2" in search_text("ward capacity formula")
-    assert search("fishing line")[0].title == "Fishing Guide"
-    assert search("") == [] and search("a") == []          # too-short words cannot match everything
-    assert search("nonexistentsubject") == []
-    _SECTIONS.pop(CORPUS_PATH, None)
-
     if os.path.exists(CORPUS_PATH):
         real = _load()
         assert len(real) > 300, f"only {len(real)} sections parsed from the real corpus"
         articles = {s.url for s in real}
         assert len(articles) >= 30, articles
-        # The formula this corpus exists for must be reachable by an obvious
-        # question, not just present in the file.
-        hit = search_text("how is ward capacity calculated")
-        assert "Ward_Base = (HP + MP) / 2" in hit, hit[:400]
-        # ...and a mechanic the codex has no field for at all.
-        assert search("ascension altar cost"), "ascension costs unreachable"
-        assert search("dungeon cooldown"), "dungeon cooldowns unreachable"
+        # The formula this corpus exists for must be in a section of its own,
+        # with its formula line intact (finding it is retrieval's job).
+        ward = [x for x in real if "Ward_Base = (HP + MP) / 2" in x.body]
+        assert ward and "Ward Capacity" in ward[0].heading, [x.label for x in ward]
         print(f"orna_echo: all checks passed ({len(real)} sections, {len(articles)} guides)")
     else:
         print("orna_echo: fixture checks passed (no corpus file yet)")

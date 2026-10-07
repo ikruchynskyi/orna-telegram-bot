@@ -558,8 +558,7 @@ def build_cases() -> list:
 
     # The Ward formula as the corpus states it, e.g. "(HP + MP) / 2" - pulled
     # from the guide rather than hardcoded here.
-    ward_hit = orna_echo.search_text("ward capacity base formula")
-    ward_formula = next((ln.strip() for ln in ward_hit.splitlines()
+    ward_formula = next((ln.strip() for sec in orna_echo._load() for ln in sec.body.splitlines()
                          if "ward_base" in ln.lower() and "=" in ln), "")
     assert ward_formula, "ward formula not found in orna_echo.txt - re-run orna_scrape_echo.py"
     ward_formula = ward_formula.split("=", 1)[1].strip()          # the right-hand side
