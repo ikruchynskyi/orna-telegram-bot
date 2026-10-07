@@ -83,6 +83,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
 import orna_echo
+import orna_pinecone
 import orna_qa
 import orna_classes
 import orna_guides
@@ -2290,6 +2291,32 @@ _KN_BLOCK_MAX = 15000
 _KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question for the rest …]"
 
 
+# Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
+# more of them; the rest are whole sections/threads/comments.
+_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6}
+# Keep only hits within this of the query's BEST score across all corpora.
+# Measured 2026-10-06: without it every query filled the 40k cap, and the cap
+# drops blocks from the END - so "are summons followers" lost its best hit (a
+# dev's direct answer, 0.50, in the last block) to 14 table rows at ~0.30.
+_VECTOR_RELATIVE = 0.15
+
+
+async def _vector_knowledge(query: str) -> Optional[dict]:
+    """{namespace: [hit, ...]} from Pinecone (see orna_pinecone), or None to
+    fall back to the grep scorers: Pinecone not configured, or any search
+    failed - one dead namespace must not leave knowledge_search half-blind."""
+    if not orna_pinecone.enabled():
+        return None
+    try:
+        found = await asyncio.gather(*(asyncio.to_thread(orna_pinecone.search, ns, query, k)
+                                       for ns, k in _VECTOR_TOP_K.items()))
+    except Exception as e:
+        logger.warning("orna: pinecone search failed for %r, falling back to grep (%s)", query[:60], e)
+        return None
+    floor = max((h["score"] for hits in found for h in hits), default=0) - _VECTOR_RELATIVE
+    return {ns: [h for h in hits if h["score"] >= floor] for ns, hits in zip(_VECTOR_TOP_K, found)}
+
+
 async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     """The shared community-knowledge aggregation both knowledge_search and
     research reuse (extracted so there is no second copy). Returns "" when
@@ -2318,12 +2345,25 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # orna_knowledge.search now (its word-scoring fallback) rather than by
     # splitting on punctuation here - the model writes those lists with
     # commas, with "and", or with nothing at all between them.
-    result = await asyncio.to_thread(orna_knowledge.search, query, "", 60)
+    vec = await _vector_knowledge(query)
+
+    def _vec_text(ns: str) -> str:
+        """One namespace's hits as a block body, each hit cited."""
+        hits = vec.get(ns) or []
+        if sources is not None:
+            for h in hits:
+                _add_source(sources, h.get("title", ""), h.get("url", ""))
+        return "\n\n".join(h["text"] for h in hits)
+
+    if vec is not None:
+        result = _vec_text("knowledge")
+    else:
+        result = await asyncio.to_thread(orna_knowledge.search, query, "", 60)
     # Cite the sheet+tab each matched section came from. search() prefixes
     # every block with "[<section title>]", and that title is the key
     # orna_knowledge.source_url resolves, so the citation is per-TAB rather
     # than one vague "the knowledge base" link.
-    if result and sources is not None:
+    if vec is None and result and sources is not None:
         for line in result.split("\n"):
             if line.startswith("[") and line.endswith("]"):
                 title = line[1:-1]
@@ -2336,11 +2376,15 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # "community sheet" vs "what a dev said on reddit" is a distinction about
     # the ANSWER's provenance, not about which question to ask. Matched at
     # ENTRY level so a paragraph of reasoning arrives whole - see orna_reddit.
-    reddit_hits = await asyncio.to_thread(orna_reddit.search, query)
-    if reddit_hits and sources is not None:
-        for entry in reddit_hits[:3]:
-            if entry.url:
-                _add_source(sources, entry.head[:60], entry.url)
+    if vec is not None:
+        reddit = _vec_text("reddit")
+    else:
+        reddit_hits = await asyncio.to_thread(orna_reddit.search, query)
+        if reddit_hits and sources is not None:
+            for entry in reddit_hits[:3]:
+                if entry.url:
+                    _add_source(sources, entry.head[:60], entry.url)
+        reddit = await asyncio.to_thread(orna_reddit.format_entries, reddit_hits) if reddit_hits else ""
 
     # Amities/crucibles live in neither the sheets nor the codex (checked:
     # aussies' codex.json has no such category), so they ride along on the
@@ -2357,7 +2401,8 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # item's stats". to_thread: first call reads the file off disk. See
     # orna_mechanics.py.
     try:
-        mechanics = await asyncio.to_thread(orna_mechanics.search, query)
+        mechanics = _vec_text("mechanics") if vec is not None else \
+            await asyncio.to_thread(orna_mechanics.search, query)
     except Exception as e:
         logger.warning("orna: mechanics lookup failed for %r (%s)", query[:60], e)
         mechanics = ""
@@ -2395,12 +2440,12 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # than becoming a 19th action, same reasoning as the amity/class/reddit
     # blocks above: this is another provenance of answer, not another question.
     try:
-        echo = await asyncio.to_thread(orna_echo.search_text, query)
+        echo = _vec_text("echo") if vec is not None else await asyncio.to_thread(orna_echo.search_text, query)
     except Exception as e:
         logger.warning("orna: echo lookup failed for %r (%s)", query[:60], e)
         echo = ""
     if echo:
-        if sources is not None:
+        if vec is None and sources is not None:
             for sec in await asyncio.to_thread(orna_echo.search, query):
                 _add_source(sources, sec.label[:60], sec.url)
         blocks.append(
@@ -2424,12 +2469,13 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     #     community sheet, and no dev comment settles it - recorded in
     #     orna_mechanics.txt so an answer states both rather than picking one.
     try:
-        book = await asyncio.to_thread(orna_echo.search_text, query, 6, _ORNABOOK_PATH)
+        book = _vec_text("ornabook") if vec is not None else \
+            await asyncio.to_thread(orna_echo.search_text, query, 6, _ORNABOOK_PATH)
     except Exception as e:
         logger.warning("orna: ornabook lookup failed for %r (%s)", query[:60], e)
         book = ""
     if book:
-        if sources is not None:
+        if vec is None and sources is not None:
             for sec in await asyncio.to_thread(orna_echo.search, query, 6, _ORNABOOK_PATH):
                 _add_source(sources, sec.label[:60], sec.url)
         blocks.append(
@@ -2445,12 +2491,12 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
     # the one axis none of the other corpora have, and the only source carrying
     # a CORRECTED PREMISE ("those are summons, not followers").
     try:
-        qa = await asyncio.to_thread(orna_qa.search_text, query)
+        qa = _vec_text("qa") if vec is not None else await asyncio.to_thread(orna_qa.search_text, query)
     except Exception as e:
         logger.warning("orna: qa lookup failed for %r (%s)", query[:60], e)
         qa = ""
     if qa:
-        if sources is not None:
+        if vec is None and sources is not None:
             for th in await asyncio.to_thread(orna_qa.search, query):
                 _add_source(sources, f"r/OrnaRPG: {th.title}"[:60], th.url)
         blocks.append(
@@ -2459,12 +2505,12 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "developers. Read these for a CORRECTED PREMISE too: the top answer often says the question itself is "
             "based on a misunderstanding, which is worth more than answering it as asked. Each block carries its "
             "DATE - an old answer may predate a patch, so releases() outranks it on numbers):\n" + _truncate_lines(qa, _KN_BLOCK_MAX, _KN_TRIM))
-    if reddit_hits:
+    if reddit:
         blocks.append(
             "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
             "sheets, but some are years old, so a later patch may have changed the numbers; check "
             "releases() before quoting a figure that matters):\n"
-            + await asyncio.to_thread(orna_reddit.format_entries, reddit_hits)
+            + _truncate_lines(reddit, _KN_BLOCK_MAX, _KN_TRIM)
         )
     if not blocks:
         return ""
@@ -5609,6 +5655,13 @@ async def handle_update_codex(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.warning("update_codex: knowledge refetch failed", exc_info=True)
         lines.append(f"база знань: не вдалося оновити ({e})")
+    if orna_pinecone.enabled():
+        try:
+            n = await asyncio.to_thread(orna_pinecone.index_corpus, "knowledge")
+            lines.append(f"Pinecone: {n} фрагментів бази знань")
+        except Exception as e:
+            logger.warning("update_codex: pinecone reindex failed", exc_info=True)
+            lines.append(f"Pinecone: не вдалося переіндексувати ({e})")
 
     try:
         bon = await asyncio.to_thread(orna_bonuses.refetch_now)

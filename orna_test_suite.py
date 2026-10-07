@@ -92,6 +92,7 @@ os.environ.setdefault("ORNA_LLM_SEED", "20260925")
 
 import orna_assess                      # noqa: E402
 import orna_echo                        # noqa: E402
+import orna_pinecone                    # noqa: E402
 import orna_aussies                     # noqa: E402
 import orna_guides                      # noqa: E402
 import orna_knowledge                   # noqa: E402
@@ -400,6 +401,7 @@ TIER0 = [
     ("mechanics-wired", _check_mechanics_wired_into_loop),
     ("research-supergraph", _check_research_supergraph),
     ("echo-corpus", lambda: orna_echo._demo()),
+    ("pinecone-chunking", lambda: orna_pinecone._demo()),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
 ]

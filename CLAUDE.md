@@ -47,6 +47,8 @@ Data sources (each = reader module + cache or committed file + scraper):
 - Text corpora for `knowledge_search`: `orna_knowledge` (sheets), `orna_echo` (+ `orna_ornabook.txt`),
   `orna_mechanics.txt` (ours), `orna_reddit` (dev comments), `orna_qa` (player Q&A).
   `orna_guides` + `orna_guide_*.txt` back `class_guide`.
+- `orna_pinecone.py` - semantic search over those text corpora (one namespace each; `PINECONE_API_KEY`).
+  Grep scorers are the fallback when unset/failing. Re-index after re-scraping: `python3 orna_pinecone.py [ns ...]`.
 - `orna_material_names_uk.*` - static EN↔UK material names.
 
 ## `/orna` loop - what you need to know to change it
