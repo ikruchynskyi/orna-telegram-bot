@@ -78,7 +78,7 @@ def search(namespace: str, query: str, top_k: int = 6) -> list:
     if r.status_code == 404:        # namespace never indexed: nothing there, not an outage
         return []
     r.raise_for_status()
-    return [{**h["fields"], "score": h["_score"]} for h in r.json()["result"]["hits"]
+    return [{**h["fields"], "_id": h["_id"], "ns": namespace, "score": h["_score"]} for h in r.json()["result"]["hits"]
             if h["_score"] >= MIN_SCORE]
 
 

@@ -314,16 +314,15 @@ def _check_towers_are_self_consistent() -> None:
 
 
 def _check_mechanics_wired_into_loop() -> None:
-    """The verified mechanics corpus must be reachable through the SAME module
-    the loop imports (T.orna_mechanics), not just as a standalone file - this
-    is what would have caught a missing/typo'd import in _run_knowledge_tool.
-    Synchronous on purpose (no network), unlike the full knowledge tool which
-    also hits reddit/bonuses/classes."""
-    fac = T.orna_mechanics.search("factions element damage")
+    """The verified mechanics corpus must reach the model through the loop's
+    own retrieval (T._gather_knowledge -> the keyword index, plus Pinecone when
+    configured), not just exist as a file - this is what would have caught a
+    corpus left out of the index."""
+    fac = asyncio.run(T._gather_knowledge("factions element damage"))
     for name in ("Earthen Legion", "Stormforce", "Knights of Inferno", "Frozenguard"):
         assert name in fac, (name, fac[:200])
     assert "+25%" in fac and "-20%" in fac, fac[:120]
-    assert "+1%" in T.orna_mechanics.search("ascension level"), "AL scaling must be findable"
+    assert "+1%" in asyncio.run(T._gather_knowledge("ascension level")), "AL scaling must be findable"
 
 
 def _check_research_supergraph() -> None:
@@ -451,6 +450,7 @@ TIER0 = [
     ("discord-harvest", lambda: orna_discord_search._demo()),
     ("questline-parse", lambda: orna_scrape_questline._demo()),
     ("ollama-cloud-limits", lambda: __import__("ollama_client")._demo()),
+    ("keyword-index", lambda: __import__("orna_textindex")._demo()),
     ("retrieval-benchmark", _check_retrieval_benchmark),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),

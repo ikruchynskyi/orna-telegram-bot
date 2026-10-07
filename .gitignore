@@ -38,3 +38,5 @@ announce_chats.json
 # Harvested Discord posts + image transcriptions: other players' messages, kept
 # local (Pinecone holds the indexed copy). Rebuild: orna_discord_search.py harvest
 .discord_cache/
+.textindex.sqlite3
+.textindex.tmp

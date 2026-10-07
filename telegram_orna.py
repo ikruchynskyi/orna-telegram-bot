@@ -82,15 +82,12 @@ from orna_aussies import _codex as _aussies_codex
 from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
-import orna_echo
 import orna_discord_search
 import orna_pinecone
-import orna_qa
+import orna_textindex
 import orna_classes
 import orna_guides
 import orna_knowledge
-import orna_mechanics
-import orna_reddit
 import orna_releases
 import orna_towers
 from orna_assess import (
@@ -2279,19 +2276,6 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
     return orna_guides.guide_excerpt(text, query, _GUIDE_EXCERPT_CHARS)
 
 
-# knowledge_search can compose six source blocks; capped in TOTAL, not just
-# per block - see the note where they are joined. A generous CEILING for the
-# 256k-context model, not a tight bound: real multi-corpus results run a few KB,
-# well under this, so the cap only bites a pathological query and then drops
-# WHOLE blocks (marked), never a silent mid-block cut.
-_KNOWLEDGE_OBS_MAX = 40000
-# Per-corpus ceiling. Also generous: a single corpus rarely returns this much,
-# but if one does it is trimmed at a LINE boundary with this marker, never
-# clipped mid-row/mid-formula (a half-row is worse than a marked-short one).
-_KN_BLOCK_MAX = 15000
-_KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question for the rest …]"
-
-
 # Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
 # more of them; the rest are whole sections/threads/comments.
 _VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4}
@@ -2303,127 +2287,92 @@ _VECTOR_RELATIVE = 0.15
 
 
 async def _vector_knowledge(query: str) -> Optional[dict]:
-    """{namespace: [hit, ...]} from Pinecone (see orna_pinecone), or None to
-    fall back to the grep scorers: Pinecone not configured, or any search
-    failed - one dead namespace must not leave knowledge_search half-blind."""
+    """{namespace: [hit, ...]} from Pinecone (see orna_pinecone), or None when
+    it is not configured or any search failed - _retrieve then runs on the
+    keyword index alone rather than half-blind."""
     if not orna_pinecone.enabled():
         return None
     try:
         found = await asyncio.gather(*(asyncio.to_thread(orna_pinecone.search, ns, query, k)
                                        for ns, k in _VECTOR_TOP_K.items()))
     except Exception as e:
-        logger.warning("orna: pinecone search failed for %r, falling back to grep (%s)", query[:60], e)
+        logger.warning("orna: pinecone search failed for %r, keyword index only (%s)", query[:60], e)
         return None
     floor = max((h["score"] for hits in found for h in hits), default=0) - _VECTOR_RELATIVE
     return {ns: [h for h in hits if h["score"] >= floor] for ns, hits in zip(_VECTOR_TOP_K, found)}
 
 
-async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
-    """The shared community-knowledge aggregation both knowledge_search and
-    research reuse (extracted so there is no second copy). Returns "" when
-    nothing matched, for the caller to report. Every corpus below is a
-    different PROVENANCE of answer, not a different question, which is why they
-    ride one call rather than one tool each. Original notes preserved:
+# knowledge_search's text retrieval: Pinecone (dense vectors - meaning, so
+# "two weapons with exp boost" finds the dual-wield formula), or the local BM25
+# index orna_textindex when Pinecone is off or failing - the same chunks either
+# way, as ONE list, best first. One list rather than a block per corpus: with
+# fixed blocks and a total cap, the cap dropped whole blocks from the END, which
+# is how "are summons followers" lost its best hit (a dev's direct answer) on
+# 2026-10-06. Merging BM25 into Pinecone's ranking (reciprocal-rank fusion) was
+# measured the same day and added nothing - 8/8 exact-name questions and 12/13
+# of the retrieval benchmark either way - while growing results ~1k chars; so
+# the keyword index is the fallback only.
+_KEYWORD_K = 20             # BM25 hits when it is the whole retrieval
+_RANKED_MAX = 16000         # the ranked list's budget (median result measured at ~15k)
+_HIT_MAX = 4000             # one hit's ceiling - a long Q&A thread is cut at a line, marked
+_KN_BLOCK_MAX = 15000
+_KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question for the rest …]"
 
-    Curated community reference (orna_knowledge.txt, see
-    orna_scrape_knowledge.py) for exactly the gap web_search exists for -
-    most notably per-monster/boss elemental damage resistances/immunities,
-    which the live codex doesn't track at all (verified: not even an empty
-    field). Free, instant, no API call, and - being pre-vetted community
-    data rather than an arbitrary web page - more trustworthy than a
-    fresh web_search, so this is the one to try FIRST for that kind of
-    question; web_search is the fallback when this doesn't have it either.
-    Same no-reply_text pattern as web_search: the matched rows are raw
-    semi-structured data (see orna_knowledge.py), not something to show
-    the user verbatim - the model reads this observation and writes the
-    real answer in finish()."""
-    # asyncio.to_thread: same reasoning as _run_assess_tool's aussies
-    # lookup - _load()'s first call does a synchronous disk read (306KB),
-    # and a fuzzy-correction miss runs difflib over a ~3500-word
-    # vocabulary; individually fast, but any blocking call on the event
-    # loop stalls every other chat's request too, not just this one.
-    # A query naming several things at once is handled inside
-    # orna_knowledge.search now (its word-scoring fallback) rather than by
-    # splitting on punctuation here - the model writes those lists with
-    # commas, with "and", or with nothing at all between them.
+# Each corpus's tag and what the model must know to weigh it. Only the tags
+# present in a result are explained, once, above the hits.
+_SOURCE_NOTES = {
+    "knowledge": ("sheet", "player-maintained Google Sheets - table rows; the line under a [title] is its column header"),
+    "mechanics": ("mechanics", "community-verified 2026 reference on how each system works; for an exact current "
+                  "number prefer the codex / releases()"),
+    "echo": ("guide", "playerecho.com guides - the source to quote for a FORMULA; indented lines are verbatim "
+             "formulas, use them as written"),
+    "ornabook": ("ornabook", "book.cadelabs.ovh community guide - [brackets] are decoded game icons ([T. Att ↑↑↑] the "
+                 "temporary triple attack buff), '—' an empty table cell; where it and another source give a "
+                 "different number, give both"),
+    "questline": ("questline", "Konq's walkthrough of the Unfelled story questline (April 2022) - quest objectives "
+                  "are stable, monster locations and gear advice may predate patches"),
+    "qa": ("player-qa", "r/OrnaRPG threads - [Nup] is an answer's upvotes (heavily upvoted = strong evidence), DEV "
+           "marks Orna's developers; the top answer often CORRECTS the question's premise; dated - releases() "
+           "outranks an old number"),
+    "reddit": ("dev", "Orna's own developers on reddit - more authoritative than community sources, but some "
+               "are years old; check releases() before quoting a number that matters"),
+    "discord": ("discord", "curated Discord FAQ/guide/pinned posts (community-written); lines after \"[image ...]\" "
+                "are a machine transcription of a chart - quote its numbers carefully"),
+}
+
+
+async def _retrieve(query: str) -> list:
+    """Every text corpus, best first: [{"_id","ns","title","url","text"}, ...].
+    Pinecone when it answers, else the keyword index. [] when nothing relevant
+    matched (Pinecone's score floors; BM25 needs a content word to match)."""
     vec = await _vector_knowledge(query)
-
-    def _vec_text(ns: str) -> str:
-        """One namespace's hits as a block body, each hit cited."""
-        hits = vec.get(ns) or []
-        if sources is not None:
-            for h in hits:
-                _add_source(sources, h.get("title", ""), h.get("url", ""))
-        return "\n\n".join(h["text"] for h in hits)
-
     if vec is not None:
-        result = _vec_text("knowledge")
-    else:
-        result = await asyncio.to_thread(orna_knowledge.search, query, "", 60)
-    # Cite the sheet+tab each matched section came from. search() prefixes
-    # every block with "[<section title>]", and that title is the key
-    # orna_knowledge.source_url resolves, so the citation is per-TAB rather
-    # than one vague "the knowledge base" link.
-    if vec is None and result and sources is not None:
-        for line in result.split("\n"):
-            if line.startswith("[") and line.endswith("]"):
-                title = line[1:-1]
-                url = await asyncio.to_thread(orna_knowledge.source_url, title)
-                if url:
-                    _add_source(sources, title, url)
+        return sorted((h for hits in vec.values() for h in hits), key=lambda h: -h["score"])
+    try:
+        return await asyncio.to_thread(orna_textindex.search, query, _KEYWORD_K)
+    except Exception:
+        logger.warning("orna: keyword index failed for %r", query[:60], exc_info=True)
+        return []
 
-    # The developer corpus (orna_reddit) is searched by the SAME tool rather
-    # than getting its own: the model already picks between 18 actions, and
-    # "community sheet" vs "what a dev said on reddit" is a distinction about
-    # the ANSWER's provenance, not about which question to ask. Matched at
-    # ENTRY level so a paragraph of reasoning arrives whole - see orna_reddit.
-    if vec is not None:
-        reddit = _vec_text("reddit")
-    else:
-        reddit_hits = await asyncio.to_thread(orna_reddit.search, query)
-        if reddit_hits and sources is not None:
-            for entry in reddit_hits[:3]:
-                if entry.url:
-                    _add_source(sources, entry.head[:60], entry.url)
-        reddit = await asyncio.to_thread(orna_reddit.format_entries, reddit_hits) if reddit_hits else ""
 
-    # Amities/crucibles live in neither the sheets nor the codex (checked:
-    # aussies' codex.json has no such category), so they ride along on the
-    # same tool rather than becoming a 19th action - see orna_bonuses.
+async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
+    """The shared community-knowledge aggregation knowledge_search and research
+    both use. "" when nothing matched, for the caller to report.
+
+    Exact-name lookups first (amity/crucible tables, class stats - structured
+    data that only appears when the query names one), then the ranked list over
+    every text corpus (see _retrieve), within _RANKED_MAX - whatever
+    did not fit is COUNTED, never silently dropped."""
+    blocks = []
     try:
         bonuses = await asyncio.to_thread(orna_bonuses.search, query)
     except Exception as e:
         logger.warning("orna: bonuses lookup failed for %r (%s)", query[:60], e)
         bonuses = ""
-
-    # Curated, community-verified (2026) prose on how each core system works
-    # (factions/ascension/quality/forging/adornments/towers/flasks/...) - the
-    # gap the codex leaves for "how does X work" as opposed to "what are this
-    # item's stats". to_thread: first call reads the file off disk. See
-    # orna_mechanics.py.
-    try:
-        mechanics = _vec_text("mechanics") if vec is not None else \
-            await asyncio.to_thread(orna_mechanics.search, query)
-    except Exception as e:
-        logger.warning("orna: mechanics lookup failed for %r (%s)", query[:60], e)
-        mechanics = ""
-
-    blocks = []
-    if result:
-        blocks.append(_truncate_lines(result, _KN_BLOCK_MAX, _KN_TRIM))
-    if mechanics:
-        if sources is not None:
-            _add_source(sources, orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
-        blocks.append(
-            "GAME MECHANICS (community-verified 2026 reference - how the system works in "
-            "general; for an exact current number prefer the codex / releases()):\n" + mechanics)
     if bonuses:
         if sources is not None:
             _add_source(sources, "Amities / Crucibles (aussiescodex)", orna_bonuses.AMITIES_URL)
         blocks.append("AMITY / CRUCIBLE DATA (aussiescodex):\n" + _truncate_lines(bonuses, _KN_BLOCK_MAX, _KN_TRIM))
-
-    # Class/specialization stat modifiers, bonus stats and passives. Not in
-    # the codex either - see orna_classes.
     try:
         classes = await asyncio.to_thread(orna_classes.search, query)
     except Exception as e:
@@ -2435,138 +2384,28 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
             "applied to your gear-derived stats; a tier-10 specialization also has absolute base stats. "
             "Ascension Level adds +1% per level to every stat (AL 100 doubles them), and PVP doubles HP "
             "only:\n" + _truncate_lines(classes, _KN_BLOCK_MAX, _KN_TRIM))
-    # Written guides that state the MECHANICS AND FORMULAS outright - the one
-    # thing no other source here has (the codex gives an entry's numbers and
-    # never a formula; the sheets tabulate results). Rides on this tool rather
-    # than becoming a 19th action, same reasoning as the amity/class/reddit
-    # blocks above: this is another provenance of answer, not another question.
-    try:
-        echo = _vec_text("echo") if vec is not None else await asyncio.to_thread(orna_echo.search_text, query)
-    except Exception as e:
-        logger.warning("orna: echo lookup failed for %r (%s)", query[:60], e)
-        echo = ""
-    if echo:
-        if vec is None and sources is not None:
-            for sec in await asyncio.to_thread(orna_echo.search, query):
-                _add_source(sources, sec.label[:60], sec.url)
-        blocks.append(
-            "GUIDE MECHANICS / FORMULAS (playerecho.com community guides - the source to quote for a "
-            "FORMULA or a mechanic the codex has no field for: Ward capacity, Ascension altar costs, "
-            "dungeon cooldowns and godforging, anguish proofs, per-event tier gates. Indented lines are "
-            "verbatim formulas - use them as written rather than reasoning one out):\n" + _truncate_lines(echo, _KN_BLOCK_MAX, _KN_TRIM))
-    # Ornabook (book.cadelabs.ovh): a community mechanics book, read by the SAME
-    # section reader as orna_echo (orna_echo.search with its own path) rather
-    # than a second search engine. Audited against the other corpora on
-    # 2026-10-05 by READING them, after a regex pass mislabelled two covered
-    # facts as new:
-    #   * genuinely new: the dual-wield BONUS formula, (1 + 0.65*B)^2 - the
-    #     repo had only a rejected "50% for world bonuses" claim for that -
-    #     raid "sanding", per-stat buff rows (T. Crit ↑↑↑ also gives +10% Att,
-    #     not Mag), Drakeblight's 500 cap;
-    #   * already covered, now independently CORROBORATED: buff tiers
-    #     +25/+50/+100% and that they stack multiplicatively (orna_knowledge),
-    #     hybrid fighting the mean of Def and Res (orna_mechanics);
-    #   * one CONFLICT, unresolved: T. Crit ↑↑↑ is +60% here and +80% in the
-    #     community sheet, and no dev comment settles it - recorded in
-    #     orna_mechanics.txt so an answer states both rather than picking one.
-    try:
-        book = _vec_text("ornabook") if vec is not None else \
-            await asyncio.to_thread(orna_echo.search_text, query, 6, _ORNABOOK_PATH)
-    except Exception as e:
-        logger.warning("orna: ornabook lookup failed for %r (%s)", query[:60], e)
-        book = ""
-    if book:
-        if vec is None and sources is not None:
-            for sec in await asyncio.to_thread(orna_echo.search, query, 6, _ORNABOOK_PATH):
-                _add_source(sources, sec.label[:60], sec.url)
-        blocks.append(
-            "ORNABOOK MECHANICS (book.cadelabs.ovh, a community-written guide - quote it for the dual-wield "
-            "BONUS formula, how buffs stack, per-stat status-effect tiers, dungeon modes/options and key-cost "
-            "multipliers, raids and sanding, gauntlets, Anguish 2.0. Where it and another source give a "
-            "DIFFERENT number, say so and give both rather than picking one. Labels in [brackets] are decoded game icons: "
-            "[T. Att ↑↑↑] is the temporary triple attack buff, [Def] the defense stat; '—' is an empty "
-            "table cell, kept so every number stays under its own column. It is community-written: the "
-            "codex and releases() outrank it for any number they also state):\n"
-            + _truncate_lines(book, _KN_BLOCK_MAX, _KN_TRIM))
-    # Konq's Unfelled questline guide, one section per story quest (orna_scrape_questline.py).
-    try:
-        quests = _vec_text("questline") if vec is not None else \
-            await asyncio.to_thread(orna_echo.search_text, query, 4, _QUESTLINE_PATH)
-    except Exception as e:
-        logger.warning("orna: questline lookup failed for %r (%s)", query[:60], e)
-        quests = ""
-    if quests:
-        if vec is None and sources is not None:
-            for sec in await asyncio.to_thread(orna_echo.search, query, 4, _QUESTLINE_PATH):
-                _add_source(sources, sec.label[:60], sec.url)
-        blocks.append(
-            "STORY QUESTLINE GUIDE (Konq's walkthrough of the Unfelled story questline, written April 2022: each "
-            "quest's giver, objective and where/how to complete it, for new and returning players. Quest objectives "
-            "are stable, but monster locations and gear advice may predate later patches):\n"
-            + _truncate_lines(quests, _KN_BLOCK_MAX, _KN_TRIM))
-    # Player Q&A, indexed by the QUESTION rather than by an answer's wording -
-    # the one axis none of the other corpora have, and the only source carrying
-    # a CORRECTED PREMISE ("those are summons, not followers").
-    try:
-        qa = _vec_text("qa") if vec is not None else await asyncio.to_thread(orna_qa.search_text, query)
-    except Exception as e:
-        logger.warning("orna: qa lookup failed for %r (%s)", query[:60], e)
-        qa = ""
-    if qa:
-        if vec is None and sources is not None:
-            for th in await asyncio.to_thread(orna_qa.search, query):
-                _add_source(sources, f"r/OrnaRPG: {th.title}"[:60], th.url)
-        blocks.append(
-            "PLAYER Q&A (r/OrnaRPG threads where someone asked this before. The [Nup] figure is that answer's "
-            "upvotes - a heavily-upvoted answer is strong evidence and a 2up one is weak; DEV marks Orna's own "
-            "developers. Read these for a CORRECTED PREMISE too: the top answer often says the question itself is "
-            "based on a misunderstanding, which is worth more than answering it as asked. Each block carries its "
-            "DATE - an old answer may predate a patch, so releases() outranks it on numbers):\n" + _truncate_lines(qa, _KN_BLOCK_MAX, _KN_TRIM))
-    if reddit:
-        blocks.append(
-            "DEVELOPER COMMENTS (Orna's own devs on reddit - more authoritative than the community "
-            "sheets, but some are years old, so a later patch may have changed the numbers; check "
-            "releases() before quoting a figure that matters):\n"
-            + _truncate_lines(reddit, _KN_BLOCK_MAX, _KN_TRIM)
-        )
-    # Curated Discord posts (orna_discord_search): FAQ/guide channels and pinned
-    # messages, images transcribed. Pinecone-only - there is no grep reader.
-    discord = _vec_text("discord") if vec is not None else ""
-    if discord:
-        blocks.append(
-            "DISCORD GUIDES / PINNED POSTS (players' FAQ and guide channels and pinned class/strategy posts on the "
-            "official Orna server and Orna Legends; community-written. Lines after \"[image ...]\" are a machine "
-            "transcription of a chart or screenshot - quote its numbers carefully, and the codex and releases() "
-            "outrank it):\n" + _truncate_lines(discord, _KN_BLOCK_MAX, _KN_TRIM))
-    if not blocks:
-        return ""
-    # TOTAL cap, not just a per-block one. Each block was capped individually
-    # (3000, 2000, ...) but knowledge_search now composes up to SIX of them -
-    # sheets, player Q&A, guide formulas, mechanics, class data, dev comments -
-    # and one call was measured at 14,909 characters. That is a large slice of
-    # the step's context spent on sources that may all be marginal, which is the
-    # opposite of helping the model reason. Whole blocks are dropped from the END
-    # (they are appended in deliberate order) and the model is TOLD how many, so
-    # it can narrow the query rather than assume it saw everything - the same
-    # "never let a truncation look complete" rule as _names_observation.
-    out, dropped = [], 0
-    used = 0
-    for block in blocks:
-        if used + len(block) > _KNOWLEDGE_OBS_MAX and out:
-            dropped += 1
-            continue
-        out.append(block)
-        used += len(block) + 2
-    if dropped:
-        out.append(f"[{dropped} further source block(s) omitted to keep this observation readable - "
-                   "ask a NARROWER question if you need them.]")
-    return "\n\n".join(out)
 
-
-# The Ornabook corpus, read by orna_echo's section reader (see
-# orna_scrape_ornabook.py for why the format is shared, not duplicated).
-_ORNABOOK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_ornabook.txt")
-_QUESTLINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orna_questline.txt")
+    hits = await _retrieve(query)
+    shown, used = [], 0
+    for h in hits:
+        text = _truncate_lines(h["text"], _HIT_MAX, _KN_TRIM)
+        if shown and used + len(text) > _RANKED_MAX:
+            break
+        shown.append((h, text))
+        used += len(text)
+    if shown:
+        tags = {_SOURCE_NOTES[h["ns"]][0]: _SOURCE_NOTES[h["ns"]][1] for h, _t in shown}
+        legend = "\n".join(f"  [{tag}] {note}" for tag, note in tags.items())
+        body = "\n\n".join(f"[{_SOURCE_NOTES[h['ns']][0]}] {text}" for h, text in shown)
+        omitted = len(hits) - len(shown)
+        blocks.append("COMMUNITY KNOWLEDGE - best match first, each tagged with its source:\n" + legend
+                      + "\n\n" + body
+                      + (f"\n\n[{omitted} lower-ranked match(es) omitted - ask a NARROWER question for them.]"
+                         if omitted else ""))
+        if sources is not None:
+            for h, _t in shown:
+                _add_source(sources, h.get("title", ""), h.get("url", ""))
+    return "\n\n".join(blocks)
 
 def _monument_line(group: list) -> str:
     """One floor of one monument: its matched cells. A category cell is shown
@@ -4864,12 +4703,11 @@ _PLAN_PRIMER_CHARS = 3000
 
 
 async def _plan_primer(user_text: str) -> str:
-    """The best Pinecone hits for the request across every corpus, best first,
-    capped. "" when Pinecone is off, failed, or nothing clears the score floor."""
-    vec = await _vector_knowledge(user_text)
-    if not vec:
+    """The best retrieval hits for the request (see _retrieve), capped.
+    "" when nothing relevant matched."""
+    hits = (await _retrieve(user_text))[:_PLAN_PRIMER_HITS]
+    if not hits:
         return ""
-    hits = sorted((h for hs in vec.values() for h in hs), key=lambda h: -h["score"])[:_PLAN_PRIMER_HITS]
     return _truncate_lines("\n\n".join(h["text"] for h in hits), _PLAN_PRIMER_CHARS,
                            "\n[… primer trimmed …]")
 
@@ -6331,7 +6169,7 @@ def _demo() -> None:
 
     # --- shared knowledge aggregator (research + knowledge_search reuse it) ---
     kg = asyncio.run(_gather_knowledge("factions"))
-    assert "GAME MECHANICS" in kg, kg[:200]                 # mechanics corpus still wired
+    assert "[mechanics]" in kg, kg[:200]                     # mechanics corpus still wired
     assert asyncio.run(_gather_knowledge("xyzzy plugh frobnicate")) == ""   # honest empty
 
     # --- discord_search is gated in code: refused until knowledge_search AND web_search ran ---
@@ -6364,23 +6202,26 @@ def _demo() -> None:
         orna_discord_search.search = _real_search
         orna_discord_search.enabled = _real_enabled
 
-    # --- PLAN primer: empty without Pinecone, capped with it ---
+    # --- PLAN primer: capped, and empty for nonsense ---
+    primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))
+    assert primer and len(primer) <= _PLAN_PRIMER_CHARS + 40, len(primer)
+    assert asyncio.run(_plan_primer("xyzzy plugh frobnicate")) == ""
+
+    # --- Pinecone down: the keyword index alone still answers, in the same format ---
     _real_pc = orna_pinecone.enabled
     orna_pinecone.enabled = lambda: False
     try:
-        assert asyncio.run(_plan_primer("how does ward work")) == ""
+        kw_only = asyncio.run(_gather_knowledge("Samson quest defeat a Goblin Lord"))
     finally:
         orna_pinecone.enabled = _real_pc
-    if orna_pinecone.enabled():
-        primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))
-        assert primer and len(primer) <= _PLAN_PRIMER_CHARS + 40, len(primer)
+    assert "[questline]" in kw_only and "Goblin Fortress" in kw_only, kw_only[:300]
 
     # --- the questline guide and the Discord harvest are wired into knowledge_search ---
     ql = asyncio.run(_gather_knowledge("Samson quest defeat a Goblin Lord"))
-    assert "STORY QUESTLINE GUIDE" in ql and "Goblin Fortress" in ql, ql[:300]
+    assert "[questline]" in ql and "Goblin Fortress" in ql, ql[:300]
     if orna_pinecone.enabled() and orna_discord_search.units():
         dc = asyncio.run(_gather_knowledge("Hallowed Crucible gear passives"))
-        assert "DISCORD GUIDES / PINNED POSTS" in dc, dc[:300]
+        assert "[discord]" in dc, dc[:300]
 
     # --- research tool: wiring + one-call observation ---
     # Self-contained stubs (the _Spy/_Sess names above are shadowed by later
