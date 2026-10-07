@@ -451,6 +451,7 @@ TIER0 = [
     ("questline-parse", lambda: orna_scrape_questline._demo()),
     ("ollama-cloud-limits", lambda: __import__("ollama_client")._demo()),
     ("keyword-index", lambda: __import__("orna_textindex")._demo()),
+    ("reddit-search", lambda: __import__("orna_reddit_search")._demo()),
     ("retrieval-benchmark", _check_retrieval_benchmark),
     ("ban-guard", _check_ban_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),

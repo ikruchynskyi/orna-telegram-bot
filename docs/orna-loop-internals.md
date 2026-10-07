@@ -1032,3 +1032,26 @@ for 5 minutes. Now `chat_json` holds a process-wide slot
 (`OLLAMA_CLOUD_CONCURRENCY`), retries a 429 after 2/5/10s, and then raises
 `OllamaBusy`. That falls back to local for the one call and never parks the
 cloud.
+
+**community_search: Reddit joins Discord (2026-10-06).** r/OrnaRPG live
+search was added the same way as Discord: search, use, keep. It was merged with
+`discord_search` into ONE action, `community_search`: same last-resort gate,
+same role, and one fewer tool for the model to choose from. Each side runs in
+its own browser, in parallel, and either can fail without losing the other's
+results; the failure is named in the observation.
+- **Access.** Anonymous API-style access 403s, and so does a HEADLESS
+  Chrome. A normal Chrome window gets 200 from `/r/OrnaRPG/search.json`
+  even logged out, so the search uses one positioned off-screen. A
+  Selenium-driven login with Google is refused by Google ("This browser or
+  app may not be secure"); logging in once in a normal Chrome on the same
+  profile works, but no login turned out to be needed.
+- **Search.** Reddit search is keyword AND ("prometheus sigil" -> 0
+  posts). A miss is retried OR'ed and ranked by relevance; ranked by top,
+  an OR query returns popular threads that merely mention a word.
+- **Rendering and keeping.** Threads render exactly like the crawled Q&A
+  corpus (`orna_scrape_qa._block`: top 3 answers, DEV flag, no other
+  names). A thread already crawled is rendered from `.qa_cache` with no
+  request. New ones are kept in `.reddit_cache/live.json` and upserted
+  into the `qa` namespace, keyed by post id, so a re-index keeps them.
+- **Verified live.** 26s for both sides, 2 new threads kept (qa 849 ->
+  851), found again by `knowledge_search`.

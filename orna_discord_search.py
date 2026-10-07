@@ -117,16 +117,19 @@ _HOOK = r"""
 """
 
 
-def _driver(headless: bool):
+def _driver(headless: bool, profile: Path = PROFILE_DIR, hook: Optional[str] = _HOOK):
+    """A Chrome on a dedicated, hand-logged-in profile (shared with
+    orna_reddit_search, which passes its own profile and no hook)."""
     from selenium import webdriver
     opts = webdriver.ChromeOptions()
-    opts.add_argument(f"--user-data-dir={PROFILE_DIR}")
+    opts.add_argument(f"--user-data-dir={profile}")
     opts.add_argument("--window-size=1400,900")
     if headless:
         opts.add_argument("--headless=new")
     drv = webdriver.Chrome(options=opts)
-    # Runs before Discord's own scripts on every load, so the hook survives reloads.
-    drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _HOOK})
+    if hook:
+        # Runs before the site's own scripts on every load, so the hook survives reloads.
+        drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": hook})
     return drv
 
 

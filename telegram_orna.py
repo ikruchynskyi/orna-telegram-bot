@@ -83,6 +83,7 @@ from orna_aussies import _parse_number as _aussies_parse_number
 from orna_calendar import CALENDAR_URL_UK, fetch_events
 import orna_bonuses
 import orna_discord_search
+import orna_reddit_search
 import orna_pinecone
 import orna_textindex
 import orna_classes
@@ -141,7 +142,7 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
-            "knowledge_search", "monuments", "releases", "web_search", "discord_search", "ask", "finish")
+            "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish")
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -2338,7 +2339,7 @@ _SOURCE_NOTES = {
                "are years old; check releases() before quoting a number that matters"),
     "discord": ("discord", "curated Discord FAQ/guide/pinned posts (community-written); lines after \"[image ...]\" "
                 "are a machine transcription of a chart - quote its numbers carefully"),
-    "discord_live": ("discord-chat", "raw player chat kept from earlier discord_search calls, UNVERIFIED - the "
+    "discord_live": ("discord-chat", "raw player chat kept from earlier community_search calls, UNVERIFIED - the "
                      "line marked ► matched a search, the rest is the conversation around it; use only what "
                      "actually answers, and say it comes from player chat"),
 }
@@ -2598,12 +2599,14 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     return out or f"no knowledge-base matches for {query!r} - try web_search instead"
 
 
-# discord_search is a LAST resort, gated in code (a prompt rule is ~70-90%):
-# each call drives a real Chrome on the user's Discord account (ban risk, see
-# orna_discord_search), takes 10-20s, and returns raw player chat. Measured
-# 2026-10-06: keyword search mostly returns people ASKING the question - worth
-# it only once the curated corpora and the web both came up short.
-_DISCORD_PREREQS = ("knowledge_search", "web_search")
+# community_search is a LAST resort, gated in code (a prompt rule is ~70-90%):
+# it drives real browsers - Discord on the user's own account (ban risk, see
+# orna_discord_search) and an off-screen Chrome on Reddit - takes 10-30s, and
+# returns raw player chat. Measured 2026-10-06: keyword search mostly returns
+# people ASKING the question - worth it only once the curated corpora and the
+# web both came up short. One action for both communities, not one each: same
+# gate, same last-resort role, and one fewer tool for the model to choose from.
+_COMMUNITY_PREREQS = ("knowledge_search", "web_search")
 
 
 def _keep_discord_hits(hits: list) -> None:
@@ -2614,42 +2617,77 @@ def _keep_discord_hits(hits: list) -> None:
     if new and orna_pinecone.enabled():
         recs = [r for r in orna_pinecone.records("discord_live") if r["_id"].split("-")[1] in new]
         orna_pinecone.upsert("discord_live", recs)
-        logger.info("orna: kept %d discord_search conversation(s) (%d chunks)", len(new), len(recs))
+        logger.info("orna: kept %d discord conversation(s) (%d chunks)", len(new), len(recs))
 
 
-async def _run_discord_search_tool(query: str, sources: Optional[list] = None, session=None) -> str:
-    if not query:
-        return "discord_search needs a query in action_input"
-    if not orna_discord_search.enabled():
-        return "discord_search is not available here (no logged-in Discord profile) - finish with what you have."
-    tried = {json.loads(sig)[0] for sig in (session.seen_calls if session else {})}
-    missing = [t for t in _DISCORD_PREREQS if t not in tried]
-    if missing:
-        return (f"discord_search REFUSED: it is the last resort, for when the curated sources and the web did not "
-                f"give an answer you are confident in. Call {' and '.join(missing)} for this first.")
+def _keep_reddit_threads(threads: list) -> None:
+    """New r/OrnaRPG threads, kept and upserted into the "qa" namespace - the
+    same corpus, format and trust label as the crawled Q&A."""
+    new = set(orna_reddit_search.save_live(threads))
+    if new and orna_pinecone.enabled():
+        recs = [r for r in orna_pinecone.records("qa") if r["_id"].split("-")[1] in new]
+        orna_pinecone.upsert("qa", recs)
+        logger.info("orna: kept %d reddit thread(s) (%d chunks)", len(new), len(recs))
+
+
+async def _search_side(name: str, search, keep, query: str):
+    """One community, searched and kept: (results, error). A failure on one side
+    never loses the other's results, and a failed keep never costs the answer."""
     try:
-        hits = await asyncio.wait_for(asyncio.to_thread(orna_discord_search.search, query), 120)
+        found = await asyncio.wait_for(asyncio.to_thread(search, query), 120)
     except Exception as e:
-        logger.warning("orna: discord_search failed for %r", query[:60], exc_info=True)
-        return f"discord_search did NOT run ({e}). Finish with what you have and say the answer is uncertain."
-    if not hits:
-        return (f"0 Discord messages matched {query!r}, even after cutting it down to "
-                f"{orna_discord_search._variants(query)[-1]!r} - full-text search, so the subject may be named "
-                "differently in chat (an abbreviation or a nickname); otherwise finish, saying no source covers it.")
-    if sources is not None:
-        for h in hits[:3]:
-            _add_source(sources, f"Discord {h['guild']} ({h['date']})", h["url"])
+        logger.warning("orna: community_search %s failed for %r", name, query[:60], exc_info=True)
+        return [], str(e) or type(e).__name__
     try:
-        await asyncio.to_thread(_keep_discord_hits, hits)
-    except Exception:   # keeping them is a bonus - never at the cost of this answer
-        logger.warning("orna: could not keep discord_search results", exc_info=True)
-    return ("DISCORD CHAT (keyword search of player chat on the official Orna server and Orna Legends, most relevant "
-            "first. Each hit (marked ►) comes with the 10 messages before and after it in that channel - the "
-            "matched message is often the QUESTION and the answer is in the replies around it. "
-            "UNVERIFIED: anyone can post, many hits are people ASKING rather than answering, and old messages "
-            "may predate a patch. Use a message only if it actually answers the question, prefer what several "
-            "messages agree on, and say it comes from player chat):\n"
-            + "\n\n".join(orna_discord_search.format_conversation(h) for h in hits))
+        await asyncio.to_thread(keep, found)
+    except Exception:
+        logger.warning("orna: could not keep %s results", name, exc_info=True)
+    return found, ""
+
+
+async def _run_community_search_tool(query: str, sources: Optional[list] = None, session=None) -> str:
+    if not query:
+        return "community_search needs a query in action_input"
+    tried = {json.loads(sig)[0] for sig in (session.seen_calls if session else {})}
+    missing = [t for t in _COMMUNITY_PREREQS if t not in tried]
+    if missing:
+        return (f"community_search REFUSED: it is the last resort, for when the curated sources and the web did not "
+                f"give an answer you are confident in. Call {' and '.join(missing)} for this first.")
+    sides = [("reddit", orna_reddit_search.search, _keep_reddit_threads)]
+    if orna_discord_search.enabled():
+        sides.append(("discord", orna_discord_search.search, _keep_discord_hits))
+    results = await asyncio.gather(*(_search_side(n, s, k, query) for n, s, k in sides))
+    found = dict(zip((n for n, _s, _k in sides), results))
+    threads, reddit_err = found["reddit"]
+    hits, discord_err = found.get("discord", ([], "not set up (no logged-in Discord profile)"))
+
+    parts = []
+    if threads:
+        if sources is not None:
+            for t in threads:
+                _add_source(sources, f"r/OrnaRPG: {t['title']}"[:60], t["url"])
+        parts.append("REDDIT r/OrnaRPG THREADS (keyword search, most relevant first; same format as player-qa: "
+                     "[Nup] is an answer's upvotes, DEV marks Orna's developers, a top answer may CORRECT the "
+                     "question's premise; dated - an old answer may predate a patch):\n"
+                     + "\n".join(t["block"] for t in threads))
+    if hits:
+        if sources is not None:
+            for h in hits[:3]:
+                _add_source(sources, f"Discord {h['guild']} ({h['date']})", h["url"])
+        parts.append("DISCORD CHAT (keyword search of player chat on the official Orna server and Orna Legends, "
+                     "most relevant first. Each hit (marked ►) comes with the 10 messages before and after it in "
+                     "that channel - the matched message is often the QUESTION and the answer is in the replies "
+                     "around it):\n" + "\n\n".join(orna_discord_search.format_conversation(h) for h in hits))
+    status = "; ".join(f"{name}: {'did NOT run (' + err + ')' if err else '0 matches'}"
+                       for name, (res, err) in (("reddit", (threads, reddit_err)), ("discord", (hits, discord_err)))
+                       if not res)
+    if not parts:
+        return (f"community_search found nothing for {query!r} ({status}). Both are keyword searches - the "
+                "subject may be named differently by players (an abbreviation or a nickname); otherwise finish, "
+                "saying no source covers it.")
+    return ("UNVERIFIED PLAYER CONTENT - anyone can post and many hits are people ASKING. Use only what actually "
+            "answers the question, prefer what several sources agree on, and say it comes from players."
+            + (f" ({status})" if status else "") + "\n\n" + "\n\n".join(parts))
 
 
 # Gear stats ADD together; the class/AL/PVP layer multiplies on top. Keeping
@@ -3363,12 +3401,12 @@ _TOOLS_TEXT = (
     "briefly mention a source if one was genuinely useful, and if nothing useful turns up, say so honestly rather "
     "than guessing. One follow-up web_search with a refined query is fine if the first didn't help; don't loop on "
     "it beyond that.\n"
-    "- discord_search(action_input=<1-3 general English keywords>): FULL-TEXT (not semantic) search of PLAYER CHAT on the official "
-    "Orna Discord and Orna Legends - the LAST resort, only after knowledge_search AND web_search both failed to give "
-    "an answer you are confident in (it refuses otherwise). Every word must appear in a message, so give the "
-    "subject's name and little else (\"prometheus sigil\", \"omniflask\" - never a sentence or a question); it "
-    "drops filler words and retries more generally by itself. Unverified chat: use only messages that actually "
-    "answer, and say the answer comes from player chat.\n"
+    "- community_search(action_input=<1-3 general English keywords>): FULL-TEXT (not semantic) live search of "
+    "r/OrnaRPG threads AND player chat on the official Orna Discord and Orna Legends - the LAST resort, only after "
+    "knowledge_search AND web_search both failed to give an answer you are confident in (it refuses otherwise). "
+    "Every word must match, so give the subject's name and little else (\"prometheus sigil\", \"omniflask\" - "
+    "never a sentence or a question); it drops filler words and widens the search by itself. Unverified player "
+    "content: use only what actually answers, and say the answer comes from players.\n"
     "- knowledge_search, web_search, AND class_guide - CRITICAL: only state a specific detail (a follower/spell/"
     "item name, an exact number, a named mechanic, a build/gear recommendation) if it's ACTUALLY present in what "
     "came back - never invent a plausible-sounding specific to make the answer feel more complete, and never fill "
@@ -4456,8 +4494,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return await _run_releases_tool(message, action_input, sources)
         if action == "web_search":
             return await _run_web_search_tool(message, action_input, sources)
-        if action == "discord_search":
-            return await _run_discord_search_tool(action_input, sources, session)
+        if action == "community_search":
+            return await _run_community_search_tool(action_input, sources, session)
         if action == "calculate":
             return await _run_calculate_tool(message, action_input)
         if action == "assess":
@@ -4538,7 +4576,7 @@ _ACTION_LABELS = {
     "knowledge_search": "📚 Шукаю в базі знань…",
     "releases": "🆕 Перевіряю патч-ноти…",
     "web_search": "🌐 Шукаю в інтернеті…",
-    "discord_search": "💬 Шукаю в Discord…",
+    "community_search": "💬 Шукаю в Reddit і Discord…",
     "research": "🔗 Збираю дані з кодексу…",
     "estimate_stats": "📊 Рахую характеристики…",
 }
@@ -6190,41 +6228,47 @@ def _demo() -> None:
     assert "[mechanics]" in kg, kg[:200]                     # mechanics corpus still wired
     assert asyncio.run(_gather_knowledge("xyzzy plugh frobnicate")) == ""   # honest empty
 
-    # --- discord_search is gated in code: refused until knowledge_search AND web_search ran ---
+    # --- community_search is gated in code: refused until knowledge_search AND web_search ran ---
     class _GateSess:
         seen_calls = {json.dumps(["knowledge_search", "x", {}]): "obs"}
-    _real_enabled = orna_discord_search.enabled
-    orna_discord_search.enabled = lambda: True
-    try:
-        gated = asyncio.run(_run_discord_search_tool("prometheus sigil", [], _GateSess()))
-    finally:
-        orna_discord_search.enabled = _real_enabled
-    assert gated.startswith("discord_search REFUSED") and "web_search" in gated, gated
-    # ...and runs once both have: every hit arrives as a conversation, cited.
+    gated = asyncio.run(_run_community_search_tool("prometheus sigil", [], _GateSess()))
+    assert gated.startswith("community_search REFUSED") and "web_search" in gated, gated
+    # ...and once both ran: both communities searched, cited, and KEPT (stubbed -
+    # never write test results to the real stores or Pinecone).
     _GateSess.seen_calls = {json.dumps(["knowledge_search", "x", {}]): "o", json.dumps(["web_search", "x", {}]): "o"}
-    _real_search = orna_discord_search.search
     _hit = {"id": "2", "guild": "Orna Legends", "date": "2026-01-01", "text": "what does it do?",
             "url": "https://discord.com/channels/1/2/3"}
     _hit["context"] = [_hit, {"id": "3", "text": "it doubles the buff"}]
+    _thread = {"id": "t1", "title": "Replica of Prometheus", "url": "https://www.reddit.com/r/OrnaRPG/comments/t1/",
+               "block": "=== Replica of Prometheus (...) ===\nA [14up]: it is a pet", "new": True}
+    real = (orna_discord_search.enabled, orna_discord_search.search, orna_reddit_search.search,
+            _keep_discord_hits, _keep_reddit_threads)
+    kept_d, kept_r = [], []
     orna_discord_search.enabled = lambda: True
-    _real_keep, kept = _keep_discord_hits, []
-    globals()["_keep_discord_hits"] = kept.extend          # never write test hits to the real store
+    globals()["_keep_discord_hits"], globals()["_keep_reddit_threads"] = kept_d.extend, kept_r.extend
     try:
         orna_discord_search.search = lambda q: [_hit]
+        orna_reddit_search.search = lambda q: [_thread]
         cited: list = []
-        opened = asyncio.run(_run_discord_search_tool("prometheus sigil", cited, _GateSess()))
-        assert "► what does it do?" in opened and "it doubles the buff" in opened, opened
-        assert cited and cited[0][1] == _hit["url"], cited
-        assert kept == [_hit], kept                          # results are kept, not wasted
-        globals()["_keep_discord_hits"] = lambda h: 1 / 0    # a failing keep never costs the answer
-        assert "► what does it do?" in asyncio.run(_run_discord_search_tool("sigil", [], _GateSess()))
-        orna_discord_search.search = lambda q: []
-        empty = asyncio.run(_run_discord_search_tool("How does the Prometheus sigil work?", [], _GateSess()))
-        assert empty.startswith("0 Discord messages") and "'prometheus'" in empty, empty   # says what it widened to
+        both = asyncio.run(_run_community_search_tool("prometheus sigil", cited, _GateSess()))
+        assert "A [14up]: it is a pet" in both and "► what does it do?" in both and "it doubles the buff" in both, both
+        assert {u for _l, u in cited} == {_hit["url"], _thread["url"]}, cited
+        assert kept_r == [_thread] and kept_d == [_hit], (kept_r, kept_d)      # results kept, not wasted
+        # one side failing never loses the other's results - and is SAID, not hidden
+        orna_reddit_search.search = lambda q: 1 / 0
+        half = asyncio.run(_run_community_search_tool("sigil", [], _GateSess()))
+        assert "► what does it do?" in half and "reddit: did NOT run" in half, half
+        # a failing keep never costs the answer
+        orna_reddit_search.search = lambda q: [_thread]
+        globals()["_keep_reddit_threads"] = lambda t: 1 / 0
+        assert "it is a pet" in asyncio.run(_run_community_search_tool("sigil", [], _GateSess()))
+        # nothing anywhere: an honest empty that names each side's outcome
+        orna_discord_search.search = orna_reddit_search.search = lambda q: []
+        empty = asyncio.run(_run_community_search_tool("sigil", [], _GateSess()))
+        assert empty.startswith("community_search found nothing") and "reddit: 0 matches" in empty, empty
     finally:
-        orna_discord_search.search = _real_search
-        orna_discord_search.enabled = _real_enabled
-        globals()["_keep_discord_hits"] = _real_keep
+        (orna_discord_search.enabled, orna_discord_search.search, orna_reddit_search.search,
+         globals()["_keep_discord_hits"], globals()["_keep_reddit_threads"]) = real
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))

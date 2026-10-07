@@ -118,8 +118,13 @@ def _units(namespace: str) -> list:
         return [(f"[{s.label}]", s.body.split("\n"), s.label[:60], s.url) for s in orna_echo._load(path)]
     if namespace == "qa":
         import orna_qa
-        return [(t.text.split("\n", 1)[0], t.text.split("\n")[1:], f"r/OrnaRPG: {t.title}"[:60], t.url)
-                for t in orna_qa._load()]
+        import orna_reddit_search
+        # + the threads community_search found live: keyed by post id, so each
+        # is upserted on its own and survives a re-index of this namespace.
+        return ([(t.text.split("\n", 1)[0], t.text.split("\n")[1:], f"r/OrnaRPG: {t.title}"[:60], t.url)
+                 for t in orna_qa._load()]
+                + [(t.text.split("\n", 1)[0], t.text.split("\n")[1:], f"r/OrnaRPG: {t.title}"[:60], t.url, pid)
+                   for pid, t in orna_reddit_search.live_threads()])
     if namespace == "reddit":
         import orna_reddit
         return [(e.head, e.body.split("\n"), e.head[:60], e.url) for e in orna_reddit._load()]

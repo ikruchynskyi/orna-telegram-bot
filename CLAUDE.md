@@ -55,9 +55,13 @@ Data sources (each = reader module + cache or committed file + scraper):
 - `orna_questline.txt` (`orna_scrape_questline.py`) - Konq's story questline guide, one section per quest.
 - `orna_discord_search.py` - Discord through a Selenium Chrome logged in as the user (`.discord_chrome/`;
   user-account automation, ToS risk accepted by the user). `harvest`: FAQ/guide channels + pinned posts,
-  images transcribed by a vision model → `.discord_cache/` → `discord` namespace. Live `discord_search`
-  action: last resort, refused in code until `knowledge_search` AND `web_search` ran; what it finds is
-  kept (`.discord_cache/live.json` → `discord_live` namespace) so the next ask hits `knowledge_search`.
+  images transcribed by a vision model (new images only; cached per attachment) → `.discord_cache/` →
+  `discord` namespace.
+- `orna_reddit_search.py` - live r/OrnaRPG search through an off-screen, NON-headless Chrome
+  (`.reddit_chrome/`; headless gets 403). Threads rendered like `orna_qa` (reuses `orna_scrape_qa._block`).
+- `community_search` action = Reddit + Discord live search in parallel: last resort, refused in code until
+  `knowledge_search` AND `web_search` ran. What it finds is kept (`.reddit_cache/live.json` → `qa`
+  namespace; `.discord_cache/live.json` → `discord_live`) so the next ask hits `knowledge_search`.
 - `orna_material_names_uk.*` - static EN↔UK material names.
 
 ## `/orna` loop - what you need to know to change it

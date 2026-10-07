@@ -72,7 +72,8 @@ telegram_bot.py            entry point — registers all handlers, runs polling
 └─ telegram_orna.py        /orna: a tool-using agent over everything above, plus
    ├─ orna_pinecone.py        knowledge_search: semantic search over the community corpora
    ├─ orna_textindex.py       local keyword index, the fallback when Pinecone is unavailable
-   └─ orna_discord_search.py  Discord: curated harvest + last-resort live search
+   ├─ orna_discord_search.py  Discord: curated harvest + live search
+   └─ orna_reddit_search.py   r/OrnaRPG live search
 ```
 
 `orna_material_names_uk.json` is scraped once from the codex's own materials
@@ -320,11 +321,15 @@ python3 orna_pinecone.py discord
 ```
 
 Images (charts, tier lists) are transcribed to text by a vision model on Ollama
-Cloud, once per image. With the Discord login in place, `/orna` also gets a
-`discord_search` tool: a live full-text search of player chat, used only after
-`knowledge_search` and `web_search` both came up short. Whatever it finds is
-kept and indexed, so the next similar question is answered without searching
-Discord again.
+Cloud, once per image - a later `harvest` transcribes only images it has not seen.
+
+**Live community search.** `/orna` also has a `community_search` tool: a live
+keyword search of r/OrnaRPG threads and (with the Discord login above) Discord
+player chat, run in parallel and used only after `knowledge_search` and
+`web_search` both came up short. Whatever it finds is kept and indexed, so the
+next similar question is answered without searching again. Reddit needs no
+login, but it refuses headless browsers, so the search opens a real Chrome
+window positioned off-screen.
 
 ## Usage
 

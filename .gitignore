@@ -40,3 +40,5 @@ announce_chats.json
 .discord_cache/
 .textindex.sqlite3
 .textindex.tmp
+.reddit_chrome/
+.reddit_cache/
