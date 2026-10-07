@@ -615,7 +615,7 @@ def build_cases() -> list:
         Case("eos-floor", 2, "what floor is the Eos wild tower on right now?",
              Expect(all_of=[str(eos)], tools_all=["towers"])),
         Case("top-magic", 2, "which item has the highest magic stat?",
-             Expect(all_of=[str(top_magic[0].sort_value)], tools_any=["query"])),
+             Expect(all_of=[str(top_magic[0].sort_value)], tools_any=["query", "sql"])),   # sql answers it too
 
         # The playerecho guide corpus is the ONLY source that states a formula
         # outright; before it existed the bot had nothing to answer this from.
@@ -639,6 +639,12 @@ def build_cases() -> list:
         # The codex has no effects for a crucible - what it "gives" are the gear
         # passives it rolls, only in community knowledge (a Discord cheat sheet).
         # Live 2026-10-07 this was answered "gives no effects" from the codex alone.
+        # Anguished Crucible: its bonuses are an aussiescodex TABLE (type "Regular
+        # Anguish 2.0"), which the lookup could not find by the item's name; it took
+        # three follow-ups live (2026-10-07) and invented "active only in Anguish".
+        Case("anguished-crucible", 2, "what does the anguished crucible give?",
+             Expect(final_any_of=[["accuracy", "crit", "ward", "two-handed", "dexterity", "foresight"]],
+                    final_none_of=["only during anguish", "only active during"])),
         Case("crucible-passives", 2, "які ефекти дає Тигель Освяченого?",
              Expect(final_any_of=[["two-handed", "дворуч", "swash", "мана", "mana", "спритн", "dexterity"]],
                     final_none_of=["не дає жодних", "no effects"])),

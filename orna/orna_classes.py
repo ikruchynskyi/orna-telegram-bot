@@ -62,6 +62,7 @@ from __future__ import annotations
 import paths
 import difflib
 import json
+import re
 import logging
 from typing import Optional
 
@@ -264,12 +265,16 @@ def search(query: str, limit: int = 6) -> str:
     named = find_class(q)
     hits = [named["name"]] if named else []
     if not hits:
+        # A class whose bonus stat or passive is NAMED in the query ("which class
+        # gives life siphon"). A whole name, never a single word: live 2026-10-07
+        # "Anguished Effect bonuses" listed Deity Ara, Grand Summoner Hydrus and
+        # Assassin, because "effect" is inside "apex effect".
         for pool_name in ("spec_stats", "classes"):
             for key in (data.get(pool_name) or {}):
                 entry = find_class(key) or {}
-                haystack = " ".join([key] + list(entry.get("bonus_stats") or {})
-                                    + list(entry.get("passives") or [])).lower()
-                if any(w in haystack for w in q.split() if len(w) > 2):
+                names = list(entry.get("bonus_stats") or {}) + list(entry.get("passives") or [])
+                names = [str(n).replace("_", " ").lower() for n in names]
+                if any(len(n) >= 4 and re.search(r"\b" + re.escape(n) + r"\b", q.replace("_", " ")) for n in names):
                     hits.append(key)
     out = []
     for name_ in list(dict.fromkeys(hits))[:limit]:   # dedupe, keep order
@@ -352,6 +357,8 @@ def _demo() -> None:
     by_bonus = search("weapon_power")
     assert "Duelist" in by_bonus, by_bonus[:200]
     assert search("zzz no such thing") == ""
+    # a generic word inside a bonus name ("effect" in "apex effect") must not pull in classes
+    assert search("Anguished Effect bonuses") == "" and search("what effects causes anguished crucible") == ""
 
     # The DISPLAYED kind is the GAME term, not aussies' inverted pool name: a
     # tier-10 name is a CLASS, Ranger/Sequencer are SPECIALIZATIONS. Pinned

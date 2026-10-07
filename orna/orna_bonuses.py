@@ -237,6 +237,23 @@ def refetch_now() -> dict:
     return {"amities": len(data["amities"]), "crucibles": len(data["crucibles"])}
 
 
+# The crucible ITEM a player or the codex names -> the crucible TYPE the table
+# uses. Live 2026-10-07: "what effects does the anguished crucible give" found
+# nothing - the rows say "Regular Anguish 2.0", and "anguished" is not in it.
+_CRUCIBLE_TYPES = {"anguished": "regular anguish 2.0", "darkrift": "darkrift riftfall",
+                   "yelmogus": "yelbeghen wyrmhunt", "yelbeghen": "yelbeghen wyrmhunt",
+                   "yggdrasil": "yggdrasil crucible"}
+
+
+def _named_crucible(q: str) -> tuple:
+    """(item name, table type) of the crucible `q` names, or ("", "")."""
+    if "crucible" in q:
+        for word, kind in _CRUCIBLE_TYPES.items():
+            if word in q:
+                return f"{word.title()} Crucible", kind
+    return "", ""
+
+
 def search(query: str, limit: int = 40) -> str:
     """Matching lines, grouped under their section header, or "" if nothing
     matches. Exact substring first, then a word-overlap fallback - the same
@@ -247,6 +264,12 @@ def search(query: str, limit: int = 40) -> str:
     if not q:
         return ""
     data = all_bonuses()
+    item, crucible = _named_crucible(q)
+    if crucible:   # a named crucible: every bonus it can roll, with ranges and slots
+        rows = [l for l in data.get("crucibles") or [] if crucible in l.lower()]
+        if rows:
+            return f"[crucibles - aussiescodex: every bonus the {item} can roll, with its range and gear slots]\n" \
+                + "\n".join(rows)
     words = {w for w in re.findall(r"[^\W_]+", q) if len(w) > 2}
     out = []
     for section in ("amities", "crucibles"):
@@ -264,6 +287,15 @@ def search(query: str, limit: int = 40) -> str:
         if hits:
             out.append(f"[{section} - aussiescodex]\n" + "\n".join(hits[:limit]))
     return "\n\n".join(out)
+
+
+def _demo_crucible_names() -> None:
+    assert _named_crucible("what effects does the anguished crucible give") == ("Anguished Crucible", "regular anguish 2.0")
+    assert _named_crucible("anguished gear") == ("", "")          # "crucible" must be named
+    rows = search("Anguished Crucible")
+    if rows:   # needs the fetched table
+        assert rows.startswith("[crucibles - aussiescodex: every bonus the Anguished Crucible") and \
+            rows.count("Regular Anguish 2.0") > 10, rows[:200]
 
 
 def _demo() -> None:
@@ -322,6 +354,7 @@ def _demo() -> None:
     assert cards[0] == {"kind": "bonus", "name": "% Crit Dmg", "range": "5\u201340%",
                         "desc": "Critical hits will be % more effective"}, cards
     assert cards[1]["kind"] == "malus" and cards[1]["range"] == "", cards
+    _demo_crucible_names()
     print("orna_bonuses: all checks passed")
 
 

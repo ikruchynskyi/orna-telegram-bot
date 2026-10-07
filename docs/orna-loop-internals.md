@@ -1147,3 +1147,36 @@ Now:
 - `_without_russian` checks the result, wherever it came from (translation,
   local fallback or the raw draft), and has cloud gemma rewrite it up to 2
   times. If it is still not clean, the log says "SENT WITH ...".
+
+**PLAN and REVIEW on every request; REVIEW sees the evidence (2026-10-07).**
+The recurring failure in live tests was agentic, not a missing fact. The
+model took the first literal reading of a short question ("what effects
+causes anguished crucible" -> the codex `effects` field) and stopped at the
+first evidence: "causes no status effects", with the crucible's 26-row
+bonus table in its own context. Prompt rules (10, 11) did not stop it.
+- **PLAN runs for every request,** not only "complex" ones; short
+  questions were exactly the ones read literally. It now asks for the
+  user's INTENT first, every meaning if there is more than one ("what
+  gives X"), and which source holds that kind of answer. It runs on
+  gemma4:31b, measured fastest with the same intent (3.9s vs 9.8s on
+  nemotron).
+- **REVIEW runs for every answer that is not a posted card.** It adds
+  checks for intent, completeness ("such as A, B, etc." is not complete
+  when the full list is in the evidence) and "nothing" claims built on
+  codex silence.
+- **REVIEW sees the evidence.** It used to get `_working_state`, which cuts
+  every tool result to 220 characters. Seeing only first lines, it
+  rewrote a correct "sold in the Circle of Anguish Guild Shop" into "the
+  evidence does not specify". `_review_evidence` now passes the full
+  results: 4k chars each, 30k in total, newest first.
+- **Removed:** a regex guard on "has nothing" answers - a patch for one
+  symptom, which REVIEW now covers in general.
+- **Lookup bugs:**
+  - orna_bonuses could not find the crucible table by the item's name
+    (rows say "Regular Anguish 2.0").
+  - orna_classes matched any single word ("effect" in "apex effect").
+- **today()** posts its card only when the request is about today's
+  shops. An exploratory lookup posted the whole shop table into the chat
+  and, as a posted card, switched REVIEW off.
+
+End to end, tiers 1-3, N=2: 34/34, ~36s per request.

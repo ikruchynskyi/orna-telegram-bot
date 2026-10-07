@@ -456,13 +456,23 @@ async def _sheet_or_none():
         return None          # the text builders report the failure themselves
 
 
-async def _run_today_tool(message, uk: bool = True) -> str:
+# A request about today's guild shops - the only one today()'s card answers.
+_TODAY_ASKED_RE = re.compile(r"today|сьогодні|сегодня|shop|магазин|resource|ресурс|матеріал|material", re.I)
+
+
+async def _run_today_tool(message, uk: bool = True, request: str = "") -> str:
     # The model gets the DATA, not "sent it": live 2026-10-05 it could not tell
     # whether Red Draconite was in today's list and called today() twice.
     values = await _sheet_or_none()
-    text = await _today_text(uk, values)
-    await message.reply_text(text, parse_mode="HTML")
-    return "Today's guild-shop materials (posted to the chat):\n" + _plain(await _today_text(False, values))
+    data = _plain(await _today_text(False, values))
+    # Posted only when the request is ABOUT today's shops. Live 2026-10-07 "what
+    # gives anguished crucible" checked today() as one possible source and the
+    # whole day's shop table landed in the chat - a lookup must not spam (same
+    # rule as events()). `request` "" (no session) keeps the old behaviour.
+    if request and not _TODAY_ASKED_RE.search(request):
+        return "NOT POSTED - today's guild-shop materials, for you to read:\n" + data
+    await message.reply_text(await _today_text(uk, values), parse_mode="HTML")
+    return "Today's guild-shop materials (posted to the chat):\n" + data
 
 
 async def _run_next_tool(message, material: str, uk: bool = True) -> str:
@@ -2412,15 +2422,25 @@ async def _entity_knowledge(observation: str, sources: Optional[list] = None) ->
         logger.warning("orna: entity knowledge failed for %r", name, exc_info=True)
         return ""
     named = [h for h in hits if name.lower() in h["text"].lower()][:_ENTITY_HITS]
+    # A crucible's bonuses are a TABLE (aussiescodex), not prose in the index.
+    table = ""
+    if "crucible" in name.lower():
+        try:
+            table = await asyncio.to_thread(orna_bonuses.search, name)
+        except Exception:
+            logger.warning("orna: crucible table lookup failed for %r", name, exc_info=True)
+        if table and sources is not None:
+            _add_source(sources, "Crucibles (aussiescodex)", orna_bonuses.CRUCIBLES_URL)
     if not named:
-        return ""
+        return f"\n\nBONUSES this crucible can roll:\n{table}" if table else ""
     body = _truncate_lines("\n\n".join(f"[{_SOURCE_NOTES[h['ns']][0]}] {h['text']}" for h in named),
                            _ENTITY_CHARS, _KN_TRIM)
     if sources is not None:
         for h in named:
             _add_source(sources, h.get("title", ""), h.get("url", ""))
     images = _IMAGE_LINE_RE.findall(body)
-    return (f"\n\nCOMMUNITY KNOWLEDGE about {name} (the codex shows what it IS; this says what players know it "
+    return ((f"\n\nBONUSES this crucible can roll:\n{table}" if table else "")
+            + f"\n\nCOMMUNITY KNOWLEDGE about {name} (the codex shows what it IS; this says what players know it "
             "gives, does or is used for - use it before you answer that it has nothing):\n" + body
             + ("\n\nIMAGES in these results - if one is the source of your answer, send it with "
                'finish(images=["<id>"]):\n' + "\n".join(f"  #{i}: {d[:100]}" for i, d in images[:4])
@@ -3268,7 +3288,9 @@ _GENERAL_RULES = (
     "9. Do not repeat a tool call with the same input. Use the earlier result. Ask a maximum of once.\n"
     "10. A codex entry shows what a thing IS. What it gives, does or is used for is often only in community "
     "knowledge. Do not answer \"none\" or \"no effect\" from the codex alone: check knowledge_search first. Think "
-    "what the user wants to know: the \"effects\" of a crucible are the gear bonuses it can roll."
+    "what the user wants to know: the \"effects\" of a crucible are the gear bonuses it can roll.\n"
+    "11. If a question can mean two things, answer both, briefly. \"What gives X\" can mean what X gives, or "
+    "where X comes from. Do not choose one meaning and ignore the other."
 )
 
 
@@ -3279,7 +3301,8 @@ _GENERAL_RULES = (
 # docs/orna-loop-internals.md, not here: the model reads this on every step.
 _TOOLS_TEXT = (
     "- today(): No input. Shows the materials in the guild shops today (Material Forecast sheet). POSTS the list.\n"
-    "  WHERE TO GET A MATERIAL: check all three sources - monster drops (search_codex or open_entry, section "
+    "  WHERE TO GET A CRAFTING MATERIAL (a codex material, not an item like a crucible or a scroll): check all "
+    "three sources - monster drops (search_codex or open_entry, section "
     "\"Dropped by\"), the guild shops (next), and this week's monuments (monuments).\n"
     "- next(action_input=<material name, English>): Shows when and where a named crafting material is next in "
     "the guild shops. Use it when the user gives no quantity. If the name is not a shop material, use "
@@ -4235,6 +4258,42 @@ def _working_state(messages: list) -> str:
             "to a base stat); (4) call a tool ONLY for data none of them contain - otherwise finish.")
 
 
+# REVIEW judges the draft against the EVIDENCE, so it needs the tool results
+# themselves. It used to get _working_state, which cuts each result to 220
+# chars - a navigation index for the agent, who has the full text above it.
+# Live 2026-10-07 the reviewer, seeing only first lines, rewrote a correct
+# "sold in the Circle of Anguish Guild Shop" into "the evidence does not
+# specify where it is obtained".
+_REVIEW_RESULT_CHARS = 4000
+_REVIEW_EVIDENCE_CHARS = 30000
+
+
+def _review_evidence(messages: list) -> str:
+    """The user's turns and the FULL tool results (each capped, newest first
+    when the total is over budget)."""
+    turns, results = [], []
+    for m in messages:
+        content = str(m.get("content") or "")
+        if m.get("role") != "user":
+            continue
+        tag, hit = _TAG_RE.match(content), _TOOL_RESULT_RE.match(content)
+        if tag:
+            turns.append(f"- {tag.group(1)}: {content[tag.end():][:600]}")
+        elif hit:
+            results.append(f"[RESULT #{hit.group(1)} - {hit.group(2)}]\n"
+                           + _truncate_lines(content[hit.end():].strip(), _REVIEW_RESULT_CHARS, _KN_TRIM))
+    kept, used = [], 0
+    for r in reversed(results):                    # newest first, then restore order
+        if kept and used + len(r) > _REVIEW_EVIDENCE_CHARS:
+            break
+        kept.append(r)
+        used += len(r)
+    dropped = len(results) - len(kept)
+    return ("User turns:\n" + ("\n".join(turns) or "- (none)") + "\n\nTool results:\n"
+            + ("\n\n".join(reversed(kept)) or "(none)")
+            + (f"\n\n[{dropped} older result(s) not shown]" if dropped else ""))
+
+
 _EMPTY_FINISH_NOTE = (
     "Your finish() has an EMPTY action_input, but no tool posted an answer to the user. The user sees only "
     "your finish() text. Write the answer in action_input now, from the tool results above. If they do not "
@@ -4461,7 +4520,11 @@ async def _maybe_plan(sid: str, user_text: str) -> None:
     call; any PLAN-call failure just leaves use_plan_review set with an
     empty plan note, never blocks the request that follows."""
     session = _ORNA_SESSIONS.get(sid)
-    if session is None or not _looks_complex_request(user_text):
+    # Every request, not only "complex" ones (2026-10-07): the costly failures
+    # were short questions read literally ("what effects causes anguished
+    # crucible" -> the codex effects field -> "none"), which the length/keyword
+    # test never sent here.
+    if session is None:
         return
     session.use_plan_review = True
     session.original_request = user_text
@@ -4483,7 +4546,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
         sources = []
     try:
         if action == "today":
-            return await _run_listing(session, message, lambda m: _run_today_tool(m, _uk(session)))
+            return await _run_listing(session, message, lambda m: _run_today_tool(
+                m, _uk(session), getattr(session, "original_request", "") or ""))
         if action == "next":
             return await _run_listing(session, message, lambda m: _run_next_tool(m, action_input, _uk(session)))
         if action == "need":
@@ -4790,6 +4854,13 @@ async def _plan_primer(user_text: str) -> str:
                            "\n[… primer trimmed …]")
 
 
+# PLAN runs on every request now, so it must be fast. Measured 2026-10-07 on
+# "what gives anguished crucible?" (same prompt): gemma4:31b 3.9s, glm-5.3-flash
+# 4.9s, deepseek-v4.1-flash 7.4s, kimi-k3 9.6s, nemotron-3-super 9.8s - and all
+# five named both meanings of the question.
+PLAN_MODEL = "gemma4:31b"
+
+
 async def _call_plan_model(user_text: str) -> list[str]:
     """The PLAN phase: ONE separate model call, before any tool runs, with
     nothing to do but plan - list the constraints the request states and the
@@ -4801,25 +4872,34 @@ async def _call_plan_model(user_text: str) -> list[str]:
     primer = await _plan_primer(user_text)
     prompt = (
         f"A user asked (about the mobile game Orna): {user_text!r}\n\n"
-        "Before any tool call is made, write a short PLAN for answering this with the tools below - do NOT "
-        "answer the question itself here, only plan.\n\n"
+        "Before any tool call, write a short PLAN. Do NOT answer the question here.\n"
+        "First decide what the user most likely wants to know. Do not take the words literally: the "
+        "\"effects\" of a crucible are the bonuses it can roll; \"what gives X\" can mean what X gives or where X "
+        "comes from. If the question can mean more than one thing, write each meaning.\n"
+        "Then choose the sources that can hold that answer. The codex shows what a thing IS (stats, tier, "
+        "drops). What a thing gives, does or is used for is often only in community knowledge "
+        "(knowledge_search).\n\n"
         + ("GAME BACKGROUND (community reference passages that matched the request - use them to understand "
            "the mechanics involved and so choose the RIGHT tools and lookups; they are not the answer, every "
            "fact in the final answer still has to come from a tool call):\n" + primer + "\n\n" if primer else "")
         + f"{_TOOLS_TEXT}\n"
-        'Reply with strict JSON only: {"constraints": ["<every explicit constraint stated - items, quality, '
+        'Reply with strict JSON only: {"intent": "<what the user most likely wants to know; every meaning if '
+        'there is more than one>", "constraints": ["<every explicit constraint stated - items, quality, '
         'level, class, spec, Ascension Level, PVE/PVP, slots, quantities, language, ...>"], '
         '"plan": ["<step 1: which tool, and why>", "<step 2: ...>", ...]}'
     )
     try:
         result = await chat_json_with_fallback(
-            ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
+            PLAN_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
             api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
         )
     except (OllamaError, UnsupportedMultimodal):
         logger.warning("orna: PLAN call failed, continuing without a plan", exc_info=True)
         return []
     lines = []
+    intent = result.get("intent")
+    if isinstance(intent, str) and intent.strip():
+        lines.append("What the user wants: " + intent.strip())
     constraints = result.get("constraints")
     if isinstance(constraints, list) and constraints:
         lines.append("Constraints to satisfy: " + "; ".join(str(c) for c in constraints if str(c).strip()))
@@ -4843,22 +4923,30 @@ async def _call_review_model(original_request: str, transcript: str, draft_answe
     MUST NEVER cost the answer: any failure here degrades to "approve" with
     the model's own draft, same reliability contract as the confidence gate."""
     prompt = (
-        "REVIEW the DRAFT answer below against the EVIDENCE already gathered for this request, before it is "
-        "sent to the user. Checklist: (1) does it answer every explicit constraint in the original request; "
-        "(2) does every number/claim trace to the evidence, not memory; (3) does it avoid repeating stats/"
-        "effects/tags that a codex card ALREADY posted to the chat on its own"
-        + (f" ({card_note})" if card_note else " - no card was posted this time, so stating codex facts here is "
-                                                "fine") + "; (4) is anything the evidence warned about (a "
-        "refusal, a partial list, an assumption) missing from the draft. If the draft is fine, approve it. If "
-        "it is wrong only in WORDING - e.g. it repeats numbers already visible in a posted card, or is needlessly "
-        "long - rewrite it short and correct, adding NO new claims beyond what the evidence already supports. If "
-        "it is substantively wrong or incomplete (missing a constraint, an unverified number), send it back with "
-        "concrete feedback naming what tool call would fix it.\n\n"
+        "REVIEW the DRAFT answer below against the EVIDENCE gathered for this request, before it is sent to "
+        "the user. Check each point:\n"
+        "1. INTENT: Does it answer what the user most likely wants to know, not a literal reading of the words? "
+        "(The \"effects\" of a crucible are the bonuses it can roll. \"What gives X\" can mean what X gives or "
+        "where X comes from - if both are possible, the answer covers both.)\n"
+        "2. COMPLETE: If the evidence lists what was asked for (items, bonuses, rows, values), does the answer "
+        "give them? \"Such as A, B, etc.\" is not complete when the full list is in the evidence.\n"
+        "3. NOTHING-CLAIMS: A claim that something has no effect, no bonus or no source must come from a source "
+        "that would show it. The codex not listing something is NOT that evidence - community knowledge often "
+        "has it.\n"
+        "4. CONSTRAINTS: Does it meet every explicit constraint of the request?\n"
+        "5. EVIDENCE: Does every number and claim come from the evidence, not memory?\n"
+        "6. WARNINGS: Does it keep what the evidence warned about (a refusal, a PARTIAL list, an assumption)?\n"
+        "7. NO REPEAT: It must not repeat stats, effects or tags that a codex card already posted"
+        + (f" ({card_note})" if card_note else " - no card was posted this time, so codex facts are fine here")
+        + ".\n"
+        "Then decide. Approve a correct draft. If only the WORDING is wrong, rewrite it correctly - add no claim "
+        "that the evidence does not support; you may add facts FROM the evidence to make it complete. If it "
+        "needs a tool call (point 1, 3 or 4 not met by the evidence), send it back and name the tool call.\n\n"
         f"ORIGINAL REQUEST: {original_request!r}\n\n"
         f"EVIDENCE GATHERED SO FAR:\n{transcript}\n\n"
         f"DRAFT ANSWER: {draft_answer!r}\n\n"
         'Reply with strict JSON only: {"verdict": "approve"|"revise"|"redo", '
-        '"answer": "<only for revise - the corrected short answer, in English>", '
+        '"answer": "<only for revise - the corrected answer, in English>", '
         '"feedback": "<only for redo - what is missing/wrong and which tool would fix it>"}'
     )
     try:
@@ -4957,6 +5045,7 @@ async def _advance_inner(sid: str, message) -> None:
                 continue
             draft_answer = action_input or "Не вдалося сформувати відповідь."
 
+
             # A count answered with zero tool calls goes back once - see
             # _forced_evidence_note. Placed before REVIEW because REVIEW is
             # gated to complex requests and "how many items are in the codex"
@@ -4987,14 +5076,16 @@ async def _advance_inner(sid: str, message) -> None:
             # monument table" (a tautology), a full answer cut to "Demeter", and
             # a CORRECT "Demeter - 8 floors" revised into "impossible to
             # determine which monument gives the most".
-            if session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS and not session.posted_note:
+            fixed_reply = any(f.strip()[:40] in draft_answer for f in (_capabilities_text(), _REMINDER_NUDGE))
+            if (session.use_plan_review and session.review_rounds < MAX_REVIEW_ROUNDS and not session.posted_note
+                    and not fixed_reply):
                 opened_preview = [e for e in session.viewed_entries if e.get("opened")]
                 candidates_preview = opened_preview or session.viewed_entries
                 card_note = ("a codex card for this will auto-post above your answer" if
                              session.allow_ask and 0 < len(candidates_preview) <= _AUTO_CARD_MAX_ENTRIES else "")
                 card_note = "; ".join(x for x in (card_note, session.posted_note) if x)
                 session.review_rounds += 1
-                verdict = await _call_review_model(session.original_request, _working_state(session.messages),
+                verdict = await _call_review_model(session.original_request, _review_evidence(session.messages),
                                                    draft_answer, card_note)
                 kind = verdict.get("verdict")
                 if kind == "redo" and str(verdict.get("feedback") or "").strip():
@@ -6401,6 +6492,24 @@ def _demo() -> None:
         assert _not_ukrainian("Зараз: що є") == [] and _not_ukrainian("сейчас ы") == ["сейчас", "ы"]
     finally:
         globals().update(chat_json=_real[0], chat_json_with_fallback=_real[1], OLLAMA_API_KEY=_real[2])
+
+    # --- today(): posts its card only when the request is about today's shops ---
+    class _TodaySpy:
+        def __init__(self): self.sent = []
+        async def reply_text(self, text, **kw): self.sent.append(text)
+    _real_sheet, _real_today = _sheet_or_none, _today_text
+    async def _fake_sheet(): return None
+    async def _fake_today(uk, values): return "Sparring: Adamantine"
+    globals().update(_sheet_or_none=_fake_sheet, _today_text=_fake_today)
+    try:
+        spy = _TodaySpy()
+        quiet = asyncio.run(_run_today_tool(spy, False, "what gives anguished crucible?"))
+        assert not spy.sent and quiet.startswith("NOT POSTED") and "Adamantine" in quiet, (spy.sent, quiet)
+        spy = _TodaySpy()
+        asyncio.run(_run_today_tool(spy, True, "що сьогодні в магазинах гільдій?"))
+        assert spy.sent, "a request about today's shops gets the card"
+    finally:
+        globals().update(_sheet_or_none=_real_sheet, _today_text=_real_today)
 
     # --- PLAN primer: capped, and empty for nonsense ---
     primer = asyncio.run(_plan_primer("best heretic build for raids and how ward works"))
