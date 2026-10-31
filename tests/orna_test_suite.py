@@ -803,6 +803,28 @@ def build_cases() -> list:
         Case("ukrainian-lock", 3, "які класи можуть використовувати Judge Trifecta Falx?",
              Expect(cyrillic="required", final_any_of=[["thief", "злод", "розбій"]],
                     tools_any=["search_codex", "open_entry", "query"])),
+
+        # ------------- from real /orna questions (usage_stats user_log, 2026-10) -------------
+        # A name that is also the tail of another item's ("Forest Goat's Hood"): the exact one is meant.
+        Case("goats-hood", 1, "Goat's Hood",
+             Expect(any_of=[["Goat's Hood"]], final_none_of=["Forest Goat"],
+                    tools_any=["search_codex", "open_entry"])),
+        # Battle Dungeon floors (orna_mechanics' chart); 12 was the removed Exploration table's tier 11.
+        Case("dungeon-floors", 2, "how many floors does a tier 11 dungeon have, and a tier 7 one?",
+             Expect(final_all_of=["25", "13"], final_none_of=["12 floors"])),
+        Case("proof-crimson", 2, "How to get Proof of Crimson?",
+             Expect(final_any_of=[["Crimson Festival"]])),
+        Case("luck-mechanic-uk", 2, "як працює механіка удачі?",
+             Expect(cyrillic="required", final_any_of=[["удач", "luck"]],
+                    tools_any=["knowledge_search", "research", "class_guide"])),
+        Case("new-codex-weapons", 2, "яка нова зброя додалась в кодекс?",
+             Expect(cyrillic="required", tools_any=["releases", "sql", "query", "web_search"])),
+        # Stale knowledge: the Spelunking Guild is Battle Dungeon focused since 2026-07-29. Exp = tier per run
+        # over the floor chart: tier 7 (7/13) beats every other tier per floor.
+        Case("spelunking-tier", 3,
+             "I want to grind the Spelunking Guild. A run gives guild exp equal to the dungeon tier (tier 1 gives 1, "
+             "tier 11 gives 11), but floor counts differ. Which tier gives the most exp per floor?",
+             Expect(final_any_of=[["tier 7", "tier7", "t7", "★7", "7 (13"]], final_none_of=["12 floors"])),
     ]
 
 
