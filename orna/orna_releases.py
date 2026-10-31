@@ -170,6 +170,26 @@ def search(query: str, limit: int = 6) -> list:
     return hits
 
 
+_STOP = {"what", "which", "when", "where", "does", "how", "the", "and", "for", "with", "that", "this", "from",
+         "orna", "give", "gives", "get", "tier", "item", "items", "best", "most", "more", "much", "many", "are", "can"}
+
+
+def search_strict(query: str, limit: int = 3) -> list:
+    """Release notes whose bullet holds the whole query or at least two of its distinct significant words,
+    newest first - the cross-check knowledge_search attaches to every answer. Stricter than search(): one
+    common word ("dungeon") matches dozens of bullets and would bury the guides in noise."""
+    q = query.strip().lower()
+    words = {w for w in re.findall(r"[^\W_]+", q) if len(w) > 3 and w not in _STOP}
+    hits = []
+    for note in all_notes():
+        items = [i for i in note["items"] if q in i.lower() or len({w for w in words if w in i.lower()}) >= 2]
+        if items:
+            hits.append({**note, "items": items})
+        if len(hits) >= limit:
+            break
+    return hits
+
+
 def format_notes(notes: list, max_items: int = 8) -> str:
     """Notes as plain text for the model to read - see telegram_orna's
     releases tool, which hands this back as an observation rather than
@@ -188,6 +208,16 @@ def format_notes(notes: list, max_items: int = 8) -> str:
 def _demo() -> None:
     """Parses a captured copy of the real page - no network - so a markup
     change upstream fails here loudly. Run `python3 -m orna.orna_releases`."""
+    global all_notes
+    real = all_notes
+    all_notes = lambda: [{"date": "2026-07-29", "title": "v3.26.1", "kind": "App update",
+                          "items": ["Spelunking Guild rework: the guild is now Battle Dungeon focused",
+                                    "Fixed a dungeon map icon"]}]
+    try:  # two distinct words, or the whole query; one common word is not enough
+        assert [n["items"] for n in search_strict("which spelunking guild tier is best")] == [["Spelunking Guild rework: the guild is now Battle Dungeon focused"]]
+        assert search_strict("dungeon floors") == [] and search_strict("ward capacity") == []
+    finally:
+        all_notes = real
     sample = """
     <article class="release-note" id="release-1.334.0">
       <header><div class="release-meta">

@@ -2533,6 +2533,21 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
         if sources is not None:
             for h, _t in shown:
                 _add_source(sources, h.get("title", ""), h.get("url", ""))
+    # The official patch notes, checked on every search: the guides and posts above carry no date, and
+    # a removed or reworked feature reads as current there (2026-10-31: the Spelunking Guild answered from
+    # the 2023 Exploration Dungeon notes; patch 3.26.1 had made it Battle Dungeon focused in July).
+    try:
+        notes = await asyncio.to_thread(orna_releases.search_strict, query, 3)
+    except Exception as e:
+        logger.warning("orna: patch-note check failed for %r (%s)", query[:60], e)
+        notes = []
+    if notes:
+        blocks.append("OFFICIAL PATCH NOTES that mention this, newest first. They are dated and newer than the "
+                      "sources above: where they disagree, the patch note wins - say so in the answer:\n"
+                      + orna_releases.format_notes(notes, max_items=4))
+        if sources is not None:
+            for note in notes:
+                _add_source(sources, f"Patch notes {note['date']}", orna_releases.RELEASES_URL)
     return "\n\n".join(blocks)
 
 def _monument_line(group: list) -> str:
