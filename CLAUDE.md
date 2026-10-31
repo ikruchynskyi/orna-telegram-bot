@@ -142,7 +142,8 @@ Data sources (each = reader module + cache or committed file + scraper):
 
 ## LLM conventions
 
-- All calls go through `ollama_client.chat_json` (`think: True` always - `False` breaks gpt-oss).
+- All calls go through `ollama_client.chat_json` (`think: True`, except the local leg: `LOCAL_THINK`, off for
+  qwen to cut its step time, always on for gpt-oss - `False` breaks it).
 - Ollama Cloud caps concurrent requests per account: `OLLAMA_CLOUD_CONCURRENCY` (process-wide), 429 is
   retried then `OllamaBusy` (local for that call, never parks the cloud). Batch jobs share the cap.
 - **Prompt text is written ~80% of the way to ASD-STE100** (Simplified Technical English): one

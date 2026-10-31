@@ -82,7 +82,8 @@ _BUSY_RETRY_DELAYS = (2, 5, 10)
 # by session, and the balance can be topped up.
 # The local model is the last resort: it answers the JSON straight away (LOCAL_THINK=0 by default) since
 # its thinking before every step made a local /orna step ~58s (a full run 464s against a 600s ceiling).
-LOCAL_THINK = os.environ.get("OLLAMA_LOCAL_THINK", "0") == "1"
+# Except gpt-oss, which must think (CLAUDE.md: think False breaks it): it gets thinking whatever the setting.
+LOCAL_THINK = os.environ.get("OLLAMA_LOCAL_THINK", "0") == "1" or os.environ.get("OLLAMA_MODEL", "").startswith("gpt-oss")
 LOCAL_KEEP_ALIVE = os.environ.get("OLLAMA_LOCAL_KEEP_ALIVE", "30m")
 # Its time goes into READING the prompt (qwen3.8:27b-mlx: 12-130s a step on 40-77k characters, mostly tool
 # results: one knowledge_search adds ~17k), so every message after the system prompt is cut to this for it.
