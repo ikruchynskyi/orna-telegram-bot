@@ -191,8 +191,14 @@ STEP_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=20.0, pool=10.
 # call should give up fast so the fallback happens quickly, but local IS the
 # fallback - there is nothing after it, so cutting it off mid-generation just
 # throws the step away. gpt-oss:20b runs ~49 tok/s here and a long accumulated
-# tool history can take well over 45s to answer.
-LOCAL_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=20.0, pool=10.0)
+# tool history can take well over 45s to answer. 300s since 2026-10-31: qwen3.8:27b-mlx
+# took over 120s on a first step with a long prompt, and the request gave up.
+LOCAL_MODEL_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=20.0, pool=10.0)
+# When the cloud answers a step in prose (nemotron-3-super writes the finished answer
+# as Markdown), it gets this and its own reply back once before local is tried.
+_JSON_NUDGE = ('That reply was not the JSON object the instructions ask for. Reply again with ONLY that JSON '
+               'object. If it was your final answer, send it as {"thought": "...", "action": "finish", '
+               '"action_input": "<that answer>", "confidence": <0-100>}.')
 # Hard wall-clock ceiling on one /orna request, regardless of what's
 # happening inside it - MAX_STEPS bounds the number of turns, but each
 # turn's own timeouts (chat_json_with_fallback: up to 90s cloud + up to
@@ -4812,7 +4818,7 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
                 return await chat_json_with_fallback(
                     ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, _with_state(session.messages),
                     api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
-                    tools=_STEP_TOOLS,
+                    tools=_STEP_TOOLS, json_nudge=_JSON_NUDGE,
                 )
             # Only past the runaway guard (or MAX_CLOUD_CALLS=0, i.e. the
             # harness's FORCE_LOCAL): local is all there is.

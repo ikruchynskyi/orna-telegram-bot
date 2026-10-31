@@ -156,6 +156,20 @@ class OllamaUnavailable(OllamaError):
     service is reachable, so only this subclass parks it."""
 
 
+class OllamaNotJson(OllamaError):
+    """A reply ARRIVED but holds no JSON object at all: the model wrote prose.
+    Carries the full text, so the caller can hand it back and ask for the
+    object (chat_json_with_fallback's json_nudge) instead of discarding it.
+    Live 2026-10-25..31: nemotron-3-super answered /orna steps 29 times with
+    a finished answer in Markdown; each went to the local model, which then
+    timed out at 120s twice and the request gave up (5 of the 6 give-ups ever
+    logged)."""
+
+    def __init__(self, message: str, content: str):
+        super().__init__(message)
+        self.content = content
+
+
 class UnsupportedMultimodal(Exception):
     """Raised when Ollama rejects a request because the model has no
     vision support (a clean 400 "does not support multimodal requests") -
@@ -177,7 +191,7 @@ def _extract_json(content: str) -> dict:
     except json.JSONDecodeError:
         start = content.find("{")
         if start == -1:
-            raise OllamaError(f"Ollama returned non-JSON content: {content[:200]!r}")
+            raise OllamaNotJson(f"Ollama returned non-JSON content: {content[:200]!r}", content)
         try:
             obj, _ = json.JSONDecoder().raw_decode(content, start)
         except json.JSONDecodeError as e:
@@ -340,7 +354,8 @@ def drop_images(messages: list[dict]) -> bool:
 async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model: str, messages: list[dict],
                                    api_key: Optional[str] = None, cloud_host: str = OLLAMA_CLOUD_HOST,
                                    timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None,
-                                   local_timeout: Optional[httpx.Timeout] = None) -> dict:
+                                   local_timeout: Optional[httpx.Timeout] = None,
+                                   json_nudge: str = "Reply again with ONLY the JSON object the instructions ask for.") -> dict:
     """Try Ollama Cloud first, falling back to a local Ollama model/host if
     the cloud call fails for any reason (out of credits, network, flaky
     wifi, ...). Either way, if a vision-carrying message hits a model with
@@ -404,6 +419,18 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
                            e, CLOUD_COOLDOWN_SECONDS)
         elif isinstance(e, (OllamaBusy, OllamaSlow)):
             logger.warning("ollama_client: Ollama Cloud busy or slow (%s), local for this call only", e)
+        elif isinstance(e, OllamaNotJson) and json_nudge:
+            # Prose instead of the object: the cloud model is up and usually has the
+            # right content, so ask it once more for the object - seconds, where the
+            # local fallback takes minutes (and timed out, live).
+            logger.warning("ollama_client: cloud replied in prose (%s), asking it again for the JSON", e)
+            retry = [*messages, {"role": "assistant", "content": e.content[:6000]}, {"role": "user", "content": json_nudge}]
+            try:
+                result = await chat_json(cloud_host, cloud_model, retry, cloud_headers, timeout=timeout, tools=tools)
+                _cloud_down_until = 0.0
+                return result
+            except OllamaError as e2:
+                logger.warning("ollama_client: cloud retry unusable too (%s), falling back to local this turn", e2)
         else:
             logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
 
@@ -432,10 +459,15 @@ def _demo_cloud_limits() -> None:
     real_client, saved = httpx.AsyncClient, (_cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS)
     replies: list = []
 
+    hosts: list = []
+
     def handler(req):
+        hosts.append(req.url.host)
         r = replies.pop(0)
         if r == "timeout":
             raise httpx.ReadTimeout("", request=req)
+        if r == "prose":
+            return httpx.Response(200, json={"message": {"content": "**The answer** is 42."}})
         return httpx.Response(r, json={"message": {"content": '{"ok": 1}'}})
 
     httpx.AsyncClient = lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
@@ -460,6 +492,15 @@ def _demo_cloud_limits() -> None:
         replies[:] = ["timeout", 200]
         out = _aio.run(chat_json_with_fallback("m", "http://local", "lm", [{"role": "user", "content": "x"}]))
         assert out == {"ok": 1} and not replies and _cloud_down_until == 0.0, (out, _cloud_down_until)
+        # prose from the cloud: asked again there (with the prose and the nudge), not sent to local
+        hosts.clear()
+        replies[:] = ["prose", 200]
+        out = _aio.run(chat_json_with_fallback("m", "http://local", "lm", [{"role": "user", "content": "x"}]))
+        assert out == {"ok": 1} and hosts == ["ollama.com", "ollama.com"], hosts
+        replies[:] = ["prose", "prose", 200]           # prose twice: then local
+        hosts.clear()
+        out = _aio.run(chat_json_with_fallback("m", "http://local", "lm", [{"role": "user", "content": "x"}]))
+        assert out == {"ok": 1} and hosts == ["ollama.com", "ollama.com", "local"], hosts
         _cloud_slots = threading.BoundedSemaphore(1)
         _cloud_slots.acquire()                          # every slot taken
         try:
