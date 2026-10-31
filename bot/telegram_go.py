@@ -140,7 +140,13 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
 # treated as italic delimiters. Both alternatives use [^\n] (not . under re.S)
 # so an unpaired * / _ can't swallow across lines into the next list item.
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)([^\n]+?)(?<!\*)\*(?!\*)|(?<![\w])_(?!_)([^\n]+?)(?<!_)_(?![\w])")
-_BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+", re.M)
+_BULLET_RE = re.compile(r"^([ \t]*)[-*][ \t]+", re.M)
+# a nested item ("   - sub", "  1. sub"): its indent kept as spaces Telegram shows, so the nesting reads
+_RULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$\n?", re.M)  # "---": Telegram has no rule; a blank line does it
+# A table wider than this (in characters, monospace) doesn't fit a phone: its rows become lines instead.
+_TABLE_MAX_WIDTH = 38
+# Telegram refuses a message over 4096 characters; long answers go out as several, split at paragraphs.
+_MAX_MESSAGE = 4000
 # After html.escape, so ">" is "&gt;". A run of "> " lines becomes ONE quote;
 # a long one is Telegram's collapsible quote, so detail does not flood a chat.
 _QUOTE_RE = re.compile(r"(?:^&gt;[ \t]?.*(?:\n|$))+", re.M)
@@ -188,6 +194,16 @@ def _stash_markdown_tables(text: str, keep) -> str:
                 for k, c in enumerate(row):
                     if k < len(widths):
                         widths[k] = max(widths[k], len(c))
+            if sum(widths) + 3 * (len(widths) - 1) > _TABLE_MAX_WIDTH:
+                # too wide for a phone: a line per row, its first cell bold, the rest "column: value"
+                for row in body:
+                    first = row[0] if row else ""
+                    rest = "; ".join(f"{header[k]}: {c}" if k < len(header) and header[k] else c
+                                     for k, c in enumerate(row[1:], 1) if c and c not in ("-", "—"))
+                    out.append(keep(f"• <b>{html.escape(header[0] + ' ' if header[0] and first.replace('.', '').isdigit() else '')}"
+                                    f"{html.escape(first)}</b>{' — ' + html.escape(rest) if rest else ''}"))
+                i = j
+                continue
             table_lines = [" | ".join(c.ljust(widths[k]) for k, c in enumerate(header))]
             table_lines.append("-+-".join("-" * w for w in widths))
             for row in body:
@@ -236,7 +252,9 @@ def _markdown_to_html(text: str) -> str:
     # leading "*"s paired up as italic delimiters and consumed before they're
     # ever recognized as bullets. Converting "* "/"- " to "• " first leaves
     # only genuine inline *emphasis* for the italic pass.
-    text = _BULLET_RE.sub("• ", text)
+    text = re.sub(r"\n{3,}", "\n\n", _RULE_RE.sub("", text))  # at most one blank line in a row
+    text = _BULLET_RE.sub(lambda m: "• " if len(m.group(1).expandtabs(4)) < 2 else "    ◦ ", text)
+    text = re.sub(r"^[ \t]{2,}(\d+[.)])[ \t]+", r"    \1 ", text, flags=re.M)  # a nested numbered item
     text = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", text)
     text = _STRIKE_RE.sub(r"<s>\1</s>", text)
     text = _SPOILER_RE.sub(r"<tg-spoiler>\1</tg-spoiler>", text)
@@ -247,17 +265,47 @@ def _markdown_to_html(text: str) -> str:
     return text
 
 
+def split_markdown(text: str, limit: int = _MAX_MESSAGE) -> list[str]:
+    """Markdown cut into pieces whose HTML fits one Telegram message: at blank lines, else at line breaks,
+    else hard. Tags never straddle pieces since each piece is converted on its own. A code block or table
+    stays whole unless it alone is too long."""
+    pieces, cur = [], ""
+    for para in re.split(r"(?<=\n)\n+", text):
+        cand = f"{cur}\n{para}" if cur else para
+        if len(_markdown_to_html(cand)) <= limit:
+            cur = cand
+            continue
+        if cur:
+            pieces.append(cur)
+        cur = para
+        while len(_markdown_to_html(cur)) > limit:  # one paragraph too long: by lines, then hard
+            lines, head = cur.split("\n"), ""
+            while lines and len(_markdown_to_html(f"{head}\n{lines[0]}" if head else lines[0])) <= limit:
+                head = f"{head}\n{lines.pop(0)}" if head else lines.pop(0)
+            if not head:
+                head, lines = cur[: limit // 2], [cur[limit // 2:]]
+            pieces.append(head)
+            cur = "\n".join(lines)
+    if cur.strip():
+        pieces.append(cur)
+    return pieces or [text]
+
+
 async def _reply_markdown(message, text: str, **kwargs):
-    """reply_text with _markdown_to_html applied, falling back to the
-    original plain text (no parse_mode) if Telegram rejects the converted
-    HTML as malformed - a converter edge case should degrade back to the
-    original bug (literal ** in the message) rather than the message
-    failing to send at all."""
-    try:
-        return await message.reply_text(_markdown_to_html(text), parse_mode="HTML", **kwargs)
-    except TelegramError:
-        logger.warning("go: HTML-formatted reply rejected, falling back to plain text", exc_info=True)
-        return await message.reply_text(text, **kwargs)
+    """reply_text with _markdown_to_html applied, as several messages when it's longer than Telegram takes
+    (the buttons go on the last). Falls back to plain text if Telegram rejects the converted HTML as
+    malformed - a converter edge case should degrade back to literal ** rather than the message failing
+    to send at all. Live 2026-10-29/30: all three rejections were "Message is too long", which sent the
+    raw Markdown; now that case is split instead."""
+    parts, sent = split_markdown(text), None
+    for n, part in enumerate(parts):
+        kw = kwargs if n == len(parts) - 1 else {k: v for k, v in kwargs.items() if k != "reply_markup"}
+        try:
+            sent = await message.reply_text(_markdown_to_html(part), parse_mode="HTML", **kw)
+        except TelegramError:
+            logger.warning("go: HTML-formatted reply rejected, falling back to plain text", exc_info=True)
+            sent = await message.reply_text(part[:4096], **kw)
+    return sent
 
 _TOOLS_BASE = (
     "- search(query): web search, returns a short answer plus a few "
@@ -1303,6 +1351,18 @@ def _demo() -> None:
     assert _markdown_to_html("~~old~~ new ||secret||") == "<s>old</s> new <tg-spoiler>secret</tg-spoiler>"
     assert _markdown_to_html("[Orna](https://playorna.com)") == '<a href="https://playorna.com">Orna</a>'
     assert _markdown_to_html("<3 & you") == "&lt;3 &amp; you"  # literal HTML-special chars survive as text, not tags
+
+    # "---" rules go; nested items keep their indent
+    assert _markdown_to_html("a\n\n---\n\nb") == "a\n\nb"
+    assert _markdown_to_html("- one\n   - sub\n1. first\n   2. sub") == "• one\n    ◦ sub\n1. first\n    2. sub"
+    # a table too wide for a phone: a line per row
+    wide = "| Тір | Поверхів | Примітка |\n|---|---|---|\n| 2 | 5 | |\n| 10 | 12 | найдовші, з босом на останньому |"
+    assert _markdown_to_html(wide) == "• <b>Тір 2</b> — Поверхів: 5\n• <b>Тір 10</b> — Поверхів: 12; Примітка: найдовші, з босом на останньому", _markdown_to_html(wide)
+    # a long answer: pieces that each fit a message, nothing lost
+    long = "\n\n".join(f"**Part {i}**\n" + "word " * 150 for i in range(12))
+    parts = split_markdown(long)
+    assert len(parts) > 1 and all(len(_markdown_to_html(p)) <= _MAX_MESSAGE for p in parts)
+    assert "".join(parts).replace("\n", "") == long.replace("\n", "")
 
     table = "| Longname | B |\n|---|----|\n| 1 | 22 |"
     got = _markdown_to_html(table)
