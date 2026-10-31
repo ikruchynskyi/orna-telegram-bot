@@ -1,96 +1,166 @@
 {
-  "saved": "2026-09-25 17:44:12",
-  "n": 3,
+  "saved": "2026-10-31 13:23:17",
+  "n": 2,
   "cases": [
     {
       "id": "falx-facts",
       "tier": 1,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "feathers-slots",
       "tier": 1,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "goats-hood",
+      "tier": 1,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "helmet-slot",
       "tier": 1,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "robe-classes",
       "tier": 1,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "anguished-crucible",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "crucible-passives",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "dungeon-floors",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "eos-floor",
       "tier": 2,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "godforged-orn",
       "tier": 2,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 1,
+      "rate": 0.5
+    },
+    {
+      "id": "image-knowledge",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "luck-mechanic-uk",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "new-codex-weapons",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "proof-crimson",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "questline",
+      "tier": 2,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "top-magic",
       "tier": 2,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "trifecta-classes",
       "tier": 2,
-      "runs": 3,
+      "runs": 2,
       "passes": 2,
-      "rate": 0.6666666666666666
+      "rate": 1.0
     },
     {
       "id": "ward-formula",
       "tier": 2,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "heretic-build",
       "tier": 3,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "sirus-strategy",
       "tier": 3,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
+      "rate": 1.0
+    },
+    {
+      "id": "spelunking-tier",
+      "tier": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     },
     {
       "id": "stacking-total",
       "tier": 3,
-      "runs": 3,
-      "passes": 3,
-      "rate": 1.0
+      "runs": 2,
+      "passes": 1,
+      "rate": 0.5
     },
     {
       "id": "ukrainian-lock",
       "tier": 3,
-      "runs": 3,
-      "passes": 3,
+      "runs": 2,
+      "passes": 2,
       "rate": 1.0
     }
   ]
