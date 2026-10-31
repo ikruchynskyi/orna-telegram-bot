@@ -33,11 +33,16 @@ _FOLLOW_ON = re.compile(r"^(They|This|These|It|Their|Its)\b")
 # (Deepshard itself is an item, still in quests - "Heinzelmann and the Deepgolems" - so it isn't matched)
 _GONE = re.compile(r"exploration (\(deep\) )?dungeons?|\"exploration\" mode|deep kiln|aside from the deepshards", re.I)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
+# Wrong, not removed: playerecho's "Approx. floors" column (★4 12, ★7 18, ★10 25) disagrees with the Ornabook's
+# floor chart (10, 13, 22), which orna_mechanics carries. The column goes; the level ranges and themed
+# dungeons in the same rows stay.
+_WRONG_COLUMN = "Approx. floors"
 
 
 def scrub(text: str) -> str:
     out: list[str] = []
     skip_section = skip_sub = False
+    drop_col = None  # index of _WRONG_COLUMN in the table being read
     for line in text.split("\n"):
         if line == REMOVED_NOTE:
             continue  # added again below its heading
@@ -55,6 +60,13 @@ def scrub(text: str) -> str:
                 line = "## Battle Dungeons >" + line[len("## Exploration Dungeons >"):]
         if skip_section or skip_sub:
             continue
+        cells = line.split(" | ")
+        if _WRONG_COLUMN in cells:
+            drop_col = cells.index(_WRONG_COLUMN)
+        elif drop_col is not None and len(cells) <= drop_col:
+            drop_col = None  # the table ended
+        if drop_col is not None:
+            line = " | ".join(c for k, c in enumerate(cells) if k != drop_col)
         for old, new in _REWRITES:
             line = line.replace(old, new)
         if _GONE.search(line):
@@ -82,6 +94,8 @@ def _demo() -> None:
     got = scrub(book)
     rest = got.replace(REMOVED_NOTE, "")
     assert REMOVED_NOTE in got and "Mining is" not in rest and "Deep Kiln" not in rest and "Exploration Dungeon" not in rest, got
+    table = scrub("Tier | Level | Approx. floors | Themed dungeon\n★4 | 75-99 | 12 | Great Desert Tomb\n★5 is next.")
+    assert table == "Tier | Level | Themed dungeon\n★4 | 75-99 | Great Desert Tomb\n★5 is next.", table
     assert scrub(got) == got   # idempotent: the note isn't scrubbed away or doubled on the next run
     assert "## Battle Dungeons > Goblin Fortresses [Fort]\nGoblin Fortresses are available starting Tier 3." in got, got
     assert "Any combination except for Endless/Boss is valid." in got
