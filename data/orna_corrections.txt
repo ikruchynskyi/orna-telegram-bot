@@ -1,0 +1,52 @@
+# Corrections: what official patch notes (or an admin) say the guides get wrong. Written by
+# scrapers/patch_audit.py and /correct - edit by hand freely, keep the section format.
+
+=== New Guild: The King's Guard (patch 2026-10-22) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-10-22 (App update v3.27.3 (App update)): New Guild: The King's Guard
+Out of date - Discord Orna Legends chat (2026-10-19) (discord_live) said: Our new guild, the King's Guard will be rolling out this week.
+Now: The King's Guard guild has been released as of 2026-10-22.
+Out of date - Discord Orna Legends chat (2026-10-19) (discord_live) said: we will be removing base-game Riftbreaks (Rat Outbreak, Sunstroke, etc) from this version, with Hunting Sites being the replacement.
+Now: Base-game Riftbreaks have been removed and replaced by Hunting Sites.
+
+=== Haunted Houses have been moved to the Dungeon map layer (patch 2026-10-22) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-10-22 (App update v3.27.3 (App update)): Haunted Houses have been moved to the Dungeon map layer
+Out of date - Discord Orna: The GPS RPG chat (2026-10-14) (discord_live) said: haunted houses still getting buried on the buildings layer
+Now: Haunted Houses have been moved to the Dungeon map layer
+
+=== The Aglostrike skells now do mixed Arcane/Physical element damage (patch 2026-10-20) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-10-20 (Server version 1.339 (Server update)): The Aglostrike skells now do mixed Arcane/Physical element damage
+Out of date - Skills / Spells (Ornapedia) (knowledge) said: Aglostrike and Aglostrike II have the Arcane element
+Now: Aglostrike and Aglostrike II do mixed Arcane/Physical element damage
+
+=== Medusa follower: updated AoE focused Bestial Bond (patch 2026-09-28) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-09-28 (Server version 1.335 (Server update)): Medusa follower: updated AoE focused Bestial Bond
+Out of date - Pets / Followers (Ornapedia) (knowledge) said: Medusa's bestial bond is listed as "Fire Res"
+Now: Medusa's bestial bond has been updated to be AoE focused
+
+=== Notable bug fixes: Fixed a battle freeze issue when collateral damage defeats a  (patch 2026-09-28) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-09-28 (App update v3.26.4 (App update)): Notable bug fixes: Fixed a battle freeze issue when collateral damage defeats a summon
+Out of date - r/OrnaRPG: [Orna] fighting a Summoner Raid Boss is slow/lagg (qa) said: This bug [battle freeze] seems to happen when ennemy summons are getting hit by a collateral hit.
+Now: The battle freeze issue when collateral damage defeats a summon has been fixed.
+
+=== The Darkrift Crucible is now an additional guaranteed drop when completing the D (patch 2026-09-14) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-09-14 (Server version 1.334 (Server update)): The Darkrift Crucible is now an additional guaranteed drop when completing the Darkrift Dungeon
+Out of date - Orna: The GPS RPG #guides-and-tools (discord) said: These bonuses are only accessible through using 'Darkrift Crucibles' from the 'Riftfall' event.
+Now: Darkrift Crucibles are also a guaranteed drop when completing the Darkrift Dungeon.
+
+=== (Hero of Aethric) The view distance stat has been reworked as "Interation Distan (patch 2026-07-29) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-07-29 (App update v3.26.1 (App update)): (Hero of Aethric) The view distance stat has been reworked as "Interation Distance"
+Out of date - Orna & Heroes of Aethric Tips and Tricks: 100+ Beginner, Gea (echo) said: View distance boosts stack multiplicatively [and references to a 'view distance multiplier' and 'view-distance weapon' in a guide for both Orna and Hero of Aethric]
+Now: In Hero of Aethric, the view distance stat has been reworked as 'Interation Distance'.
+
+=== Reduced the length of the Tap-the-Wisp Memory Hunt minigame (patch 2026-07-29) ===
+url: https://playorna.com/releases/
+Official patch note, 2026-07-29 (App update v3.26.1 (App update)): Reduced the length of the Tap-the-Wisp Memory Hunt minigame
+Out of date - Orna Legends #seers-guild-and-amities (pinned) (discord) said: Wisp - count 16 wisp hits, then tap the X after the 16th.
+Now: The length of the Tap-the-Wisp minigame has been reduced, so it no longer requires 16 wisp hits.

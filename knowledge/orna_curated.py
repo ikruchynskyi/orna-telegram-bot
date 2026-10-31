@@ -48,14 +48,18 @@ def load(name: str) -> list:
     return out
 
 
-def add(name: str, title: str, body: str, url: str = "") -> str:
-    """Add or replace (same title) one entry; atomic write. -> its key."""
-    entries = [e for e in load(name) if key(e[0]) != key(title)] + [(title.strip(), body.strip(), url.strip())]
+def save(name: str, entries: list) -> None:
+    """Write all entries [(title, body, url)]; atomic."""
     text = HEADER[name] + "".join(f"\n=== {t} ===\nurl: {u}\n{b}\n" for t, b, u in entries)
     path = FILES[name]
     tmp = path.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def add(name: str, title: str, body: str, url: str = "") -> str:
+    """Add or replace (same title) one entry. -> its key."""
+    save(name, [e for e in load(name) if key(e[0]) != key(title)] + [(title.strip(), body.strip(), url.strip())])
     return key(title)
 
 

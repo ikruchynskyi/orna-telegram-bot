@@ -97,6 +97,13 @@ Data sources (each = reader module + cache or committed file + scraper):
   repeat cache returns the full text); `_working_state` is appended to every step.
 - Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the
   undated corpora. Removed game content is scrubbed from the corpora by `scrapers/removed_content.py`.
+- Self-written knowledge (`knowledge/orna_curated.py`): `corrections` (outranks everything; from
+  `python3 -m scrapers.patch_audit` - patch notes vs the corpora, human review in `data/patch_audit_report.md`,
+  rejections in the cache's `_rejected` - and admin `/correct`) and `verified` (admin `/verify`).
+- Feedback (`bot/orna_feedback.py`): every answer logged; reactions are votes (groups: only if the bot is
+  admin); `/feedback`, `/verify`, `/correct`.
+- Reddit refresh: `python3 -m scrapers.reddit_delta [--dry-run]` - new items only, novelty-judged, appended,
+  tail upserted. Needs REDDIT_CLIENT_ID/SECRET or a logged-in Reddit in `data/state/reddit_chrome`.
 - Continuity: a reply to a message an /orna conversation sent continues it (`_ConversationRecorder`,
   `_ReplyToOrnaFilter`); sessions live 60 min; `/me` profiles (`data/state/orna_profiles.json`) ride along.
 - `_confidence_gate` clamps self-reported confidence by actual evidence.
