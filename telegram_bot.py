@@ -28,7 +28,7 @@ from bot.telegram_amity import build_amity_choice_handler, build_amity_handler, 
 from bot.telegram_remind import (build_remind_handler, build_tz_callback_handler,
                              build_tz_edit_callback_handler, build_tz_input_handler,
                              reschedule_pending)
-from bot.telegram_orna import (build_clarify_handler, build_chosen_inline_result_handler,
+from bot.telegram_orna import (build_clarify_handler, build_me_handler, build_orna_reply_handler, build_chosen_inline_result_handler,
                           build_inline_query_handler, build_orna_callback_handler, build_orna_handler,
                           build_update_codex_handler)
 from bot.telegram_orna import _next_text, _today_text
@@ -695,6 +695,10 @@ def main():
     # /clarify <text>: a follow-up (or a typed answer to a question) in the
     # user's own /orna conversation - explicit, so group chatter is never caught.
     app.add_handler(build_clarify_handler())
+    # a reply to one of the bot's /orna messages continues that conversation - before the assess/resource
+    # conversations, whose free-text handlers would otherwise take it (its filter matches only those replies)
+    app.add_handler(build_orna_reply_handler())
+    app.add_handler(build_me_handler())
     # /amity, and the uploader's typed "Red 4" after an uncaptioned amity
     # screenshot - same narrow-filter-before-the-conversations rule.
     app.add_handler(build_amity_handler())

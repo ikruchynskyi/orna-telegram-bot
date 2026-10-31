@@ -50,6 +50,8 @@ import io
 import json
 import logging
 import os
+
+import paths
 import re
 import time
 import uuid
@@ -228,7 +230,7 @@ LOOP_TIMEOUT_SECONDS = 600
 # /orna call - same tradeoff telegram_go._SESSIONS makes. No persistence,
 # no real LRU; add if session volume ever outgrows one process's memory
 # between bot restarts.
-SESSION_TTL_SECONDS = 15 * 60
+SESSION_TTL_SECONDS = 60 * 60  # 15 min until 2026-10-31: a follow-up an hour later had lost the conversation
 MAX_SESSIONS = 50
 
 # callback_data can't carry a full url/query list (64-byte cap), so each
@@ -371,7 +373,8 @@ def _capabilities_text() -> str:
         "• /orna найкращий орн-бонус по слотах для мага — оптимальний білд по слотах\n"
         "• /orna що по білду summoner/thief/deity/gilgamesh/beowulf/swash/heretic — гайди спільноти по класах\n"
         "• /clarify <текст> — уточнити або продовжити останню відповідь /orna "
-        "(розмова живе 15 хв після відповіді; новий /orna починає нову)\n"
+        "(або просто відповідайте на повідомлення бота; розмова живе годину; новий /orna починає нову)\n"
+        "• /me <про себе> — ваш клас, тір, AL тощо: бот враховує це в кожному /orna (/me clear — стерти)\n"
         "• /res_today, /res_next <ресурс> — ресурси сьогодні / коли з'явиться ресурс\n"
         "• Скриншот предмета — якість і прокачка; скриншот «NEEDED OFFERINGS» — чого бракує\n"
         "• Скриншот «Memory completed» / «Спомин завершено» з підписом кольору відьми й номера "
@@ -4809,6 +4812,8 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
         # after a `next` card inherited it, so the follow-up's real answer was
         # dropped as "the card answers it" (and the hint edit hit "not modified").
         session.posted_note, session.last_post, session.pushed_for_leak = "", None, False
+    if with_status:  # inline mode's sink has no messages to reply to
+        message = _ConversationRecorder(message, sid)
     try:
         await asyncio.wait_for(_advance_inner(sid, message), timeout=LOOP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -4830,8 +4835,30 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
             await status.clear()
 
 
+# Context compaction, like a harness trimming old tool output: the last _KEEP_FULL_RESULTS tool results go
+# to the model whole; an older one longer than _OLD_RESULT_CHARS is cut to that, with a note. Nothing is
+# lost - repeating the same call returns the full text from session.seen_calls without running the tool.
+# The session keeps everything (REVIEW reads the full evidence).
+_KEEP_FULL_RESULTS = 6
+_OLD_RESULT_CHARS = 1500
+
+
+def _compact(messages: list) -> list:
+    idx = [i for i, m in enumerate(messages)
+           if m.get("role") == "user" and _TOOL_RESULT_RE.match(str(m.get("content") or ""))]
+    old = set(idx[:-_KEEP_FULL_RESULTS])
+    out = []
+    for i, m in enumerate(messages):
+        c = str(m.get("content") or "")
+        if i in old and len(c) > _OLD_RESULT_CHARS:
+            m = {**m, "content": c[:_OLD_RESULT_CHARS] + f"\n[... older result cut here: {len(c) - _OLD_RESULT_CHARS} "
+                 "more characters. Repeat the same call to see all of it again.]"}
+        out.append(m)
+    return out
+
+
 def _with_state(messages: list) -> list:
-    return messages + [{"role": "user", "content": _working_state(messages)}]
+    return _compact(messages) + [{"role": "user", "content": _working_state(messages)}]
 
 
 async def _call_step_model(session: "OrnaSession", step_number: int):
@@ -4935,6 +4962,9 @@ async def _plan_primer(user_text: str) -> str:
 # 4.9s, deepseek-v4.1-flash 7.4s, kimi-k3 9.6s, nemotron-3-super 9.8s - and all
 # five named both meanings of the question.
 PLAN_MODEL = "gemma4:31b"
+# REVIEW grades the step model's draft, so it runs on a DIFFERENT model: the same nemotron reviewing its own
+# answer shares its blind spots. gemma4 already makes the plan; ORNA_REVIEW_MODEL overrides.
+REVIEW_MODEL = os.environ.get("ORNA_REVIEW_MODEL", "gemma4:31b")
 
 
 async def _call_plan_model(user_text: str) -> list[str]:
@@ -5027,7 +5057,7 @@ async def _call_review_model(original_request: str, transcript: str, draft_answe
     )
     try:
         return await chat_json_with_fallback(
-            ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
+            REVIEW_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, [{"role": "user", "content": prompt}],
             api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
         )
     except (OllamaError, UnsupportedMultimodal):
@@ -5436,6 +5466,117 @@ async def _advance_inner(sid: str, message) -> None:
 # handlers
 # -----------------------------------------------------------------------------
 
+# ---- conversation continuity: a reply to the bot's /orna message continues that conversation ----
+# Every message an /orna conversation sends is recorded here; a reply to one of them is a follow-up (like
+# /clarify) - only those, so a reply to an amity or reminder message is never taken for one.
+_BOT_MESSAGES: dict = {}  # (chat_id, message_id) -> sid
+_BOT_MESSAGES_MAX = 3000
+
+
+class _ConversationRecorder:
+    """The user's message as the loop sees it: every reply it sends is recorded in _BOT_MESSAGES."""
+
+    def __init__(self, message, sid: str):
+        self._message, self._sid = message, sid
+
+    def _keep(self, sent):
+        for m in (sent if isinstance(sent, (list, tuple)) else [sent]):
+            if getattr(m, "message_id", None) is not None and getattr(m, "chat_id", None) is not None:
+                _BOT_MESSAGES[(m.chat_id, m.message_id)] = self._sid
+        while len(_BOT_MESSAGES) > _BOT_MESSAGES_MAX:
+            _BOT_MESSAGES.pop(next(iter(_BOT_MESSAGES)))
+        return sent
+
+    def __getattr__(self, name):
+        attr = getattr(self._message, name)
+        if name.startswith("reply_") and callable(attr):
+            async def send(*a, **k):
+                return self._keep(await attr(*a, **k))
+            return send
+        return attr
+
+
+class _ReplyToOrnaFilter(filters.MessageFilter):
+    """A text reply (not a command) to a message an /orna conversation sent."""
+
+    def filter(self, message) -> bool:
+        r = getattr(message, "reply_to_message", None)
+        return bool(r and message.text and not message.text.startswith("/")
+                    and (message.chat_id, r.message_id) in _BOT_MESSAGES)
+
+
+async def handle_orna_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The user replied to one of the bot's /orna messages: their own live conversation goes on (as with
+    /clarify); someone else's, or an expired one, starts a new request with the replied-to text as context."""
+    message = update.effective_message
+    said = (message.text or "").strip()[:500]
+    sid = _BOT_MESSAGES.get((message.chat_id, message.reply_to_message.message_id))
+    session = _ORNA_SESSIONS.get(sid or "")
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    usage_stats.record_command_for(update, "orna_reply", said)
+    if session is not None and session.user_id == user_id:
+        context.args = said.split()
+        return await handle_clarify(update, context)
+    quoted = (message.reply_to_message.text or message.reply_to_message.caption or "")[:600]
+    await _start_orna(message, f"{said}\n\n(Context - the answer I am replying to: {quoted})" if quoted else said)
+
+
+def build_orna_reply_handler() -> MessageHandler:
+    return MessageHandler(filters.TEXT & ~filters.COMMAND & _ReplyToOrnaFilter(), handle_orna_reply)
+
+
+# ---- /me: what the user tells the bot about their character, added to each of their /orna requests ----
+_PROFILES_PATH = paths.STATE / "orna_profiles.json"
+_PROFILE_MAX = 300
+
+
+def _profiles() -> dict:
+    try:
+        return json.loads(_PROFILES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def user_profile(user_id) -> str:
+    return _profiles().get(str(user_id), "") if user_id is not None else ""
+
+
+def _set_profile(user_id, text: str) -> None:
+    data = _profiles()
+    if text:
+        data[str(user_id)] = text[:_PROFILE_MAX]
+    else:
+        data.pop(str(user_id), None)
+    tmp = _PROFILES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, _PROFILES_PATH)
+
+
+async def handle_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/me <text>: save it; /me: show it; /me clear: delete it."""
+    message = update.effective_message
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    if message is None or user_id is None:
+        return
+    text = " ".join(context.args or []).strip()
+    usage_stats.record_command_for(update, "me", text)
+    if text.lower() in ("clear", "стерти", "очистити"):
+        _set_profile(user_id, "")
+        await message.reply_text("Стерто. /orna більше нічого про вас не знає.")
+    elif text:
+        _set_profile(user_id, text)
+        await message.reply_text(f"Запам'ятав: «{text[:_PROFILE_MAX]}». Враховую це в кожному вашому /orna. "
+                                 "/me clear — стерти.")
+    else:
+        saved = user_profile(user_id)
+        await message.reply_text(f"Про вас: «{saved}». /me clear — стерти." if saved else
+                                 "Нічого не збережено. Напишіть, напр.: /me Heretic, T10, AL 120, граю з ward")
+
+
+def build_me_handler() -> CommandHandler:
+    return CommandHandler("me", handle_me)
+
+
 async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
@@ -5450,8 +5591,17 @@ async def handle_orna(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "/orna what gives immunity to stunned, /orna коли наступний івент"
         )
         return
+    await _start_orna(message, text)
 
+
+async def _start_orna(message, text: str) -> None:
+    """A new /orna conversation for this message's user: the request, plus their /me profile."""
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    profile = user_profile(user_id)
     messages, user_lang = await build_loop_messages(text)
+    if profile:  # their own words, kept as written (a class name is a proper noun)
+        messages.insert(2, {"role": "user", "content": f"{_SYSTEM_NOTE} What the user told the bot about their "
+                            f"character (/me) - use it where it matters, never ask for it again: {profile}"})
     sid = _new_orna_session(messages, MAX_STEPS)
     _ORNA_SESSIONS[sid].user_lang = user_lang
     user_id = getattr(getattr(message, "from_user", None), "id", None)
@@ -5642,7 +5792,7 @@ async def handle_clarify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = getattr(getattr(message, "from_user", None), "id", None)
     sid, session = _user_session(user_id)
     if session is None:
-        await message.reply_text("Немає активної розмови (вона живе 15 хв після відповіді) — почніть з /orna <запит>.")
+        await message.reply_text("Немає активної розмови (вона живе годину після відповіді) — почніть з /orna <запит>.")
         return
     if not said:
         await message.reply_text("Використання: /clarify <уточнення>, наприклад /clarify а для шолома?")
@@ -6327,6 +6477,40 @@ def _demo() -> None:
     # its description when a neighbouring tool's span was cut out (2026-10-05),
     # and nothing noticed: the model still saw the bare name in _STEP_TOOLS,
     # called it with no arguments, and answered with nothing to show.
+    # continuity: a reply to a message the conversation sent is a follow-up; nothing else is
+    class _Sent:
+        def __init__(self, cid, mid):
+            self.chat_id, self.message_id = cid, mid
+
+    class _UserMsg:
+        chat_id = -5
+
+        async def reply_text(self, *a, **k):
+            return _Sent(-5, 77)
+
+    asyncio.run(_ConversationRecorder(_UserMsg(), "sidX").reply_text("answer"))
+    assert _BOT_MESSAGES.get((-5, 77)) == "sidX"
+    _reply = lambda mid, text: type("M", (), {"chat_id": -5, "text": text, "reply_to_message": _Sent(-5, mid)})()
+    assert _ReplyToOrnaFilter().filter(_reply(77, "а для шолома?"))
+    assert not _ReplyToOrnaFilter().filter(_reply(78, "hi")) and not _ReplyToOrnaFilter().filter(_reply(77, "/amity"))
+    _BOT_MESSAGES.pop((-5, 77))
+    # /me: saved, read back, cleared - in a temp file
+    global _PROFILES_PATH
+    import tempfile as _tf
+    _real_profiles = _PROFILES_PATH
+    with _tf.TemporaryDirectory() as _d:
+        _PROFILES_PATH = paths.Path(_d) / "p.json" if hasattr(paths, "Path") else __import__("pathlib").Path(_d) / "p.json"
+        _set_profile(9, "Heretic T10, AL 120")
+        assert user_profile(9) == "Heretic T10, AL 120" and user_profile(8) == ""
+        _set_profile(9, "")
+        assert user_profile(9) == ""
+    _PROFILES_PATH = _real_profiles
+    # compaction: the last results whole, an older long one cut with a note; the session list untouched
+    _msgs = [{"role": "system", "content": "s"}] + [{"role": "user", "content": _tool_result(i, "sql", "q", {}, "x" * 3000)}
+                                                   for i in range(1, 9)]
+    _sent = _compact(_msgs)
+    assert [len(m["content"]) < 2000 for m in _sent[1:]] == [True, True] + [False] * 6, [len(m["content"]) for m in _sent]
+    assert "Repeat the same call" in _sent[1]["content"] and len(_msgs[1]["content"]) > 3000
     _described = set(re.findall(r"- (\w+)\(", _orna_system_prompt("x")))
     _undescribed = [a for a in _ACTIONS if a not in _described]
     assert not _undescribed, f"actions with no description in the prompt: {_undescribed}"
