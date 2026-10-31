@@ -222,7 +222,9 @@ async def notify_admins_of_error(bot, error: object, update: object = None, cont
 # Protect codes from translation
 # ---------------------------------------------------------------------------
 
-_FENCE_RE = re.compile(r"```.*?```", re.S)
+# A fenced block: its fences stay as they are, its TEXT is translated like the rest (it used to be held
+# whole, so a block of event rules stayed English); only a block that is one token (a lone code) is held.
+_FENCE_RE = re.compile(r"(```[^\n`]*\n?)(.*?)(\n?```)", re.S)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _URL_RE = re.compile(r"https?://[^\s<>()\]]+")
 _CODE_WORD_RE = re.compile(r"\b(?:redeem|promo|coupon|gift ?codes?|codes?)\b", re.I)
@@ -251,7 +253,12 @@ def protect(text: str) -> tuple:
         tokens.append((kind, value))
         return f"<k{len(tokens) - 1}/>"
 
-    text = _FENCE_RE.sub(lambda m: hold("span", m.group(0)), text)
+    def fence(m: re.Match) -> str:
+        if len(m.group(2).split()) <= 1:
+            return hold("span", m.group(0))
+        return hold("fence", m.group(1)) + m.group(2) + hold("fence", m.group(3))
+
+    text = _FENCE_RE.sub(fence, text)
     text = _INLINE_CODE_RE.sub(lambda m: hold("span", m.group(0)), text)
     text = _URL_RE.sub(lambda m: hold("url", m.group(0)), text)
     text = _MIXED_RE.sub(lambda m: hold("code", m.group(0)), text)
@@ -292,7 +299,9 @@ def restore(text: str, tokens: list) -> str:
         return f"`{value}`" if kind == "code" else value
 
     out = _PLACEHOLDER_RE.sub(put, text)
-    lost = [tokens[i] for i in range(len(tokens)) if i not in used]
+    # inside a fenced block a code needs no `backticks` (the block is already code; they'd show literally)
+    out = re.sub(r"```[^\n`]*\n.*?```", lambda m: re.sub(r"`([^`\n]+)`", r"\1", m.group(0)), out, flags=re.S)
+    lost = [tokens[i] for i in range(len(tokens)) if i not in used and tokens[i][0] != "fence"]  # a lost fence costs formatting only
     codes = [v for k, v in lost if k in ("code", "span")]
     urls = [v for k, v in lost if k == "url"]
     if codes:
@@ -674,6 +683,13 @@ def _demo() -> None:
     m, t = protect("Type `ABC` at https://playorna.com/redeem now")
     assert [k for k, _ in t] == ["span", "url"] and "playorna" not in m, (m, t)
     # NOT over-protected: a capitalised heading outside a code sentence translates
+    # a fenced block's text is translated, its fences and any code in it are not; a one-token block is held
+    m, t = protect("Rules:\n```\nDefeat the boss before Sunday.\nUse code WINTER2026 once.\n```")
+    assert "Defeat the boss before Sunday." in m and ("fence", "```\n") in t and codes_in(t) == ["WINTER2026"], (m, t)
+    assert restore(m.replace("Defeat the boss before Sunday.", "Перемогти боса до неділі."), t) == \
+        "Rules:\n```\nПеремогти боса до неділі.\nUse code WINTER2026 once.\n```"
+    m, t = protect("Code:\n```\nORNAVERSARY\n```")
+    assert "ORNAVERSARY" not in m, m
     m, t = protect("NEW EVENT: Ragnarok returns this weekend!")
     assert t == [] and m == "NEW EVENT: Ragnarok returns this weekend!", (m, t)
 
