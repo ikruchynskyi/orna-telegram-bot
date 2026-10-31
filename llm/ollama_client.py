@@ -282,7 +282,15 @@ def _from_tool_calls(message: dict) -> Optional[dict]:
     argument (a `query`'s conditions/category/sort_by arrive flat), so it gets
     nested under "args" where the loop reads it from."""
     calls = message.get("tool_calls") or []
-    fn = (calls[0].get("function") or {}) if calls else {}
+    steps = [s for s in (_one_tool_call(c) for c in calls) if s is not None]
+    if len(steps) > 1:  # several native calls in one reply: one "parallel" step (telegram_orna runs them together)
+        return {"action": "parallel", "thought": steps[0].get("thought", ""),
+                "calls": [{k: v for k, v in st.items() if k != "thought"} for st in steps]}
+    return steps[0] if steps else None
+
+
+def _one_tool_call(call: dict) -> Optional[dict]:
+    fn = call.get("function") or {}
     args = fn.get("arguments")
     if not isinstance(args, dict):
         return None
@@ -290,7 +298,7 @@ def _from_tool_calls(message: dict) -> Optional[dict]:
         return dict(args)
     rest = dict(args)
     obj = {"action": fn["name"]}
-    for key in ("thought", "action_input", "options", "args"):
+    for key in ("thought", "action_input", "options", "args", "calls"):
         if key in rest:
             obj[key] = rest.pop(key)
     if rest:

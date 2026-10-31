@@ -148,7 +148,13 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
-            "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish")
+            "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish",
+            "parallel")
+# What "parallel" may run together: read-only lookups that post nothing to the chat (a posting tool or a
+# browser search run concurrently would interleave messages / Chrome sessions). Up to _PARALLEL_MAX per step.
+_PARALLEL_OK = ("search_codex", "query", "sql", "open_entry", "knowledge_search", "web_search", "releases",
+                "class_guide", "research", "calculate")
+_PARALLEL_MAX = 4
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
 # ollama_client._from_tool_calls), but because NOT declaring them made the
@@ -179,6 +185,8 @@ _STEP_TOOLS = [{"type": "function", "function": {
         # finish() only: 0-100, how sure the answer is. Gated at
         # _CONFIDENCE_FLOOR and clamped by _evidence_ceiling.
         "confidence": {"type": "integer"},
+        # parallel only: the independent calls to run in this one step
+        "calls": {"type": "array", "items": {"type": "object"}},
     }},
 }} for name in _ACTIONS]
 # Shorter than ollama_client.DEFAULT_TIMEOUT's 90s read timeout (which
@@ -3497,6 +3505,8 @@ _TOOLS_TEXT = (
     "  A line \"[image #<id>: ...]\" is a chart or screenshot: the lines after it are its text. To show "
     "that picture to the user, put its id in finish()'s \"images\".\n"
     "  Try it BEFORE web_search for all that it can contain. Nothing relevant: use web_search.\n"
+    "- parallel(calls=[<up to 4 independent lookups>]): run several lookups in ONE step - see PARALLEL "
+    "under OUTPUT.\n"
     "- releases(action_input=<item, class or mechanic name, English - or empty for the latest notes>): The "
     "official patch notes of the last few months. The codex and the community sources show what IS, not what "
     "CHANGED, and the community sources can be weeks late after a balance patch. Use it when the answer depends "
@@ -4306,7 +4316,9 @@ def _working_state(messages: list) -> str:
             + "\nIn \"thought\", before choosing an action: (1) say what the latest user line asks; (2) name the "
             "result numbers (#n) or earlier answer that already contain the data and quote the exact values; "
             "(3) do any arithmetic on THOSE values (e.g. \"+20%\" applies to the number you already reported, not "
-            "to a base stat); (4) call a tool ONLY for data none of them contain - otherwise finish.")
+            "to a base stat); (4) call a tool ONLY for data none of them contain - otherwise finish; (5) if you need "
+            "SEVERAL lookups that do not depend on each other (one per slot, per item, per source), send them ALL in "
+            "this step: {\"action\":\"parallel\",\"calls\":[...]}.")
 
 
 # REVIEW judges the draft against the EVIDENCE, so it needs the tool results
@@ -4470,7 +4482,14 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f'{{"thought":"<brief reasoning>","action":{actions},"action_input":"<string, not used for query/today>",'
         '"args":{"...for the tools that take args..."},"options":["<opt1>","<opt2>"],"confidence":<0-100>,'
         '"images":["<image id>"]}. '
-        "\"options\" is only for ask. \"confidence\" and \"images\" are only for finish. Send the JSON object as normal message "
+        "\"options\" is only for ask. \"confidence\" and \"images\" are only for finish.\n"
+        "PARALLEL - when you need several lookups that do not depend on each other (one query per gear slot, "
+        "two items to open, a codex search and a knowledge search), send them in ONE step: "
+        '{"thought":"...","action":"parallel","calls":[{"action":"query","args":{...}},{"action":"open_entry",'
+        '"action_input":"..."}]}. Up to ' + f"{_PARALLEL_MAX} calls of: {', '.join(_PARALLEL_OK)}. "
+        "Each call returns its own numbered TOOL RESULT. Use one call per step only when a call needs an "
+        "earlier result.\n"
+        "Send the JSON object as normal message "
         "content. A native tool call with one of the action names is also understood, but never mix the two."
     )
 
@@ -4713,6 +4732,7 @@ _ACTION_LABELS = {
     "class_guide": "📚 Читаю гайд…",
     "knowledge_search": "📚 Шукаю в базі знань…",
     "releases": "🆕 Перевіряю патч-ноти…",
+    "parallel": "⏳ Шукаю кілька речей одразу…",
     "web_search": "🌐 Шукаю в інтернеті…",
     "community_search": "💬 Шукаю в Reddit і Discord…",
     "research": "🔗 Збираю дані з кодексу…",
@@ -5044,6 +5064,29 @@ def _normalize_options(raw) -> list:
     return out
 
 
+async def _one_call(session: "OrnaSession", sid: str, message, call: dict) -> tuple:
+    """One call of a parallel step: the same repeat cache and tool dispatch a single step gets.
+    -> ((action, action_input, args), observation)."""
+    action = str(call.get("action") or "")
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    action_input = str(call.get("action_input") or args.get("action_input") or "").strip()
+    logger.info("orna: parallel sid=%s action=%s input=%r args=%s", sid, action, action_input[:120],
+                {k: str(v)[:80] for k, v in args.items()})
+    sig = json.dumps([action, action_input, args], sort_keys=True, ensure_ascii=False)
+    if sig in session.seen_calls:
+        observation = (f"You already made this exact call earlier and it returned: {session.seen_calls[sig]} - "
+                       "it was NOT run again. Use that result.")
+    else:
+        try:
+            observation = await _run_tool(message, action, action_input, args, session.sources, session)
+        except Exception as e:  # one failed call must not sink the others
+            logger.warning("orna: parallel call %s failed", action, exc_info=True)
+            observation = f"{action} failed: {e}"
+        session.seen_calls[sig] = observation
+    logger.info("orna: result sid=%s action=%s\n  %s", sid, action, observation[:1500].replace("\n", "\n  "))
+    return (action, action_input, args), observation
+
+
 async def _advance_inner(sid: str, message) -> None:
     session = _ORNA_SESSIONS.get(sid)
     if session is None:
@@ -5341,6 +5384,27 @@ async def _advance_inner(sid: str, message) -> None:
                                             model=TRANSLATION_MODEL)
             await _reply_markdown(message, ask_text + "\n\n" + _clarify_hint(session), reply_markup=keyboard)
             return
+
+        if action == "parallel":
+            calls = [c for c in (step.get("calls") or []) if isinstance(c, dict)][:_PARALLEL_MAX]
+            bad = sorted({str(c.get("action")) for c in calls if c.get("action") not in _PARALLEL_OK})
+            session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
+            if not calls or bad:
+                session.messages.append({"role": "user", "content": (
+                    f"{_SYSTEM_NOTE} parallel needs 1-{_PARALLEL_MAX} calls, each one of: {', '.join(_PARALLEL_OK)}"
+                    + (f" - not {', '.join(bad)}: call those alone." if bad else "."))})
+                continue
+            if session.status is not None:
+                first = str(calls[0].get("action"))
+                await session.status.update(f"{_ACTION_LABELS.get(first, '⏳ Працюю…')} (+{len(calls) - 1})"
+                                            if len(calls) > 1 else _ACTION_LABELS.get(first, "⏳ Працюю…"))
+            results = await asyncio.gather(*(_one_call(session, sid, message, c) for c in calls))
+            for (act, inp, cargs), observation in results:
+                n_result = sum(1 for m in session.messages
+                               if m.get("role") == "user" and _TOOL_RESULT_RE.match(str(m.get("content") or ""))) + 1
+                session.messages.append({"role": "user", "content": _tool_result(n_result, act, inp, cargs, observation)})
+            session.needs_input = any(o.startswith(_NEEDS_INPUT) for _c, o in results)
+            continue
 
         if session.status is not None:
             _label = _ACTION_LABELS.get(action, "⏳ Працюю…")
