@@ -867,10 +867,13 @@ async def run_case_once(case: Case) -> tuple:
         if msg.get("role") != "assistant":
             continue
         try:
-            action = json.loads(msg["content"]).get("action")
+            step = json.loads(msg["content"])
+            action = step.get("action")
         except Exception:
             continue
-        if action and action not in ("finish", "ask"):   # the loop now records these too
+        if action == "parallel":   # the calls it ran are the tools that were used
+            tools += [str(c.get("action")) for c in (step.get("calls") or []) if isinstance(c, dict)]
+        elif action and action not in ("finish", "ask"):   # the loop now records these too
             tools.append(action)
 
     # A picture sent WITH the answer (finish(images=...)) comes after the text and

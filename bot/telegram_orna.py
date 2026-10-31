@@ -150,10 +150,11 @@ _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
             "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish",
             "parallel")
-# What "parallel" may run together: read-only lookups that post nothing to the chat (a posting tool or a
-# browser search run concurrently would interleave messages / Chrome sessions). Up to _PARALLEL_MAX per step.
+# What "parallel" may run together: read-only lookups, plus assess (one card per item, order irrelevant -
+# the model put "assess the two items" in a parallel step 4 times when it was refused). Not the browser
+# search (Chrome sessions) or tools that post one combined deliverable. Up to _PARALLEL_MAX per step.
 _PARALLEL_OK = ("search_codex", "query", "sql", "open_entry", "knowledge_search", "web_search", "releases",
-                "class_guide", "research", "calculate")
+                "class_guide", "research", "calculate", "assess")
 _PARALLEL_MAX = 4
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
