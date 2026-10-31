@@ -4732,6 +4732,11 @@ async def _close_out(session: "OrnaSession", message, limit_hit: str, fallback: 
         logger.warning("orna: forced closing answer failed (%s)", limit_hit, exc_info=True)
         final = ""
     try:
+        if final and session.user_lang != _LOOP_LANGUAGE:  # the same output gate finish() has
+            from bot.telegram_announce import game_names
+            same = _detect_lang(final) == session.user_lang
+            final = await _translate(final, session.user_lang, source=session.user_lang if same else _LOOP_LANGUAGE,
+                                     pin=game_names(final), model=TRANSLATION_MODEL)
         await _reply_markdown(message, final or fallback)
     except Exception:
         logger.warning("orna: failed to send closing answer", exc_info=True)
