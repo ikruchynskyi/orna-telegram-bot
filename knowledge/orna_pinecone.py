@@ -46,7 +46,8 @@ BATCH = 96              # upsert_records' per-request record limit
 BATCH_CHARS = 50_000
 TIMEOUT = 15.0
 
-NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline", "discord_live")
+NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline", "discord_live",
+              "corrections", "verified")
 
 _host: Optional[str] = None
 
@@ -132,6 +133,9 @@ def _units(namespace: str) -> list:
     if namespace == "discord":
         from knowledge import orna_discord_search
         return orna_discord_search.units()
+    if namespace in ("corrections", "verified"):
+        from knowledge import orna_curated
+        return orna_curated.units(namespace)
     if namespace == "discord_live":
         from knowledge import orna_discord_search
         return orna_discord_search.live_units()
@@ -232,7 +236,7 @@ def _demo() -> None:
     assert all(c.startswith("[T]\nh") for c in chunks)          # header repeats on every chunk
     for ns in NAMESPACES:                                        # every corpus parses to records
         recs = records(ns)
-        assert recs or ns.startswith("discord"), ns   # gitignored Discord data, absent on a fresh checkout
+        assert recs or ns.startswith("discord") or ns in ("corrections", "verified"), ns   # gitignored Discord data; curated sources start empty
         assert len({r["_id"] for r in recs}) == len(recs), f"{ns}: duplicate ids"
     print("orna_pinecone: _demo ok")
 

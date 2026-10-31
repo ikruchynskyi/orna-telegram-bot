@@ -60,7 +60,28 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600
 HTTP_TIMEOUT = 20.0
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; orna-telegram-bot/1.0)"}
 
+# The page lists only the newest notes (2026-07-29 onward on 2026-10-31, no older pages): every note ever
+# fetched is kept in this committed file, so the history grows instead of sliding out of the window.
+HISTORY_PATH = paths.DATA / "orna_patch_history.json"
+
 _cache: Optional[list] = None
+
+
+def _merge_history(notes: list) -> list:
+    """The fetched notes merged into the kept history (same date + title = same note, the fresh copy wins),
+    newest first; written back when it grew."""
+    try:
+        kept = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kept = []
+    by = {(n["date"], n["title"]): n for n in kept}
+    by.update({(n["date"], n["title"]): n for n in notes})
+    merged = sorted(by.values(), key=lambda n: n["date"], reverse=True)
+    if len(merged) != len(kept) or merged != kept:
+        tmp = HISTORY_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(HISTORY_PATH)
+    return merged
 
 
 def _parse(html: str) -> list:
@@ -127,7 +148,7 @@ def all_notes() -> list:
     call it via asyncio.to_thread from a handler."""
     global _cache
     if _cache is None:
-        _cache = _fetch()
+        _cache = _merge_history(_fetch())
     return _cache
 
 

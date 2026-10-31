@@ -2350,7 +2350,8 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
 
 # Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
 # more of them; the rest are whole sections/threads/comments.
-_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4, "discord_live": 4}
+_VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4, "discord_live": 4,
+                 "corrections": 4, "verified": 3}
 # Keep only hits within this of the query's BEST score across all corpora.
 # Measured 2026-10-06: without it every query filled the 40k cap, and the cap
 # drops blocks from the END - so "are summons followers" lost its best hit (a
@@ -2393,6 +2394,10 @@ _KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question
 # Each corpus's tag and what the model must know to weigh it. Only the tags
 # present in a result are explained, once, above the hits.
 _SOURCE_NOTES = {
+    "corrections": ("correction", "what an official patch note or an admin says the guides now get wrong - newer than "
+                    "every other source: where they disagree, the correction wins; say so in the answer"),
+    "verified": ("verified-answer", "an earlier /orna answer an admin approved after players voted on it - reuse its "
+                 "facts when the question matches, and still check any number that matters"),
     "knowledge": ("sheet", "player-maintained Google Sheets - table rows; the line under a [title] is its column header"),
     "mechanics": ("mechanics", "community-verified 2026 reference on how each system works; for an exact current "
                   "number prefer the codex / releases()"),
@@ -4737,7 +4742,10 @@ async def _close_out(session: "OrnaSession", message, limit_hit: str, fallback: 
             same = _detect_lang(final) == session.user_lang
             final = await _translate(final, session.user_lang, source=session.user_lang if same else _LOOP_LANGUAGE,
                                      pin=game_names(final), model=TRANSLATION_MODEL)
-        await _reply_markdown(message, final or fallback)
+        sent = await _reply_markdown(message, final or fallback)
+        if final:
+            from bot import orna_feedback
+            orna_feedback.record_answer(sent, session.original_request, final)
     except Exception:
         logger.warning("orna: failed to send closing answer", exc_info=True)
 
@@ -5378,7 +5386,9 @@ async def _advance_inner(sid: str, message) -> None:
                 return
             if listing_only and session.allow_ask:
                 answer += "\n\n" + _clarify_hint(session)
-            await _reply_markdown(message, answer, reply_markup=markup)
+            sent = await _reply_markdown(message, answer, reply_markup=markup)
+            from bot import orna_feedback  # players vote on it with reactions (orna_feedback)
+            orna_feedback.record_answer(sent, session.original_request, answer)
             if session.allow_ask:       # inline mode has no chat to send a picture to
                 await _send_answer_images(message, step, args)
             return

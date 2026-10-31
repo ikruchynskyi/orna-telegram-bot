@@ -1,0 +1,220 @@
+[
+ {
+  "version": "3.27.4",
+  "title": "App update v3.27.4",
+  "url": "https://playorna.com/releases/3.27.4/",
+  "date": "2026-10-30",
+  "kind": "App update",
+  "items": [
+   "New features: Added the quick equipment menu to the Hunting Site screen",
+   "New features: Updated November assets"
+  ]
+ },
+ {
+  "version": "3.27.3",
+  "title": "App update v3.27.3",
+  "url": "https://playorna.com/releases/3.27.3/",
+  "date": "2026-10-22",
+  "kind": "App update",
+  "items": [
+   "New features: New Guild: The King's Guard",
+   "New features: \"Gleaming\" monsters can now be found out in the world, providing additional rewards from the King's Guard guild",
+   "Changes: Replaced the \"Riftbreaks\" feature with a new \"Hunting Sites\" feature. Deepen your allegiance to the King's Guard by finding daily Hunting Sites throughout the world",
+   "Changes: Haunted Houses have been moved to the Dungeon map layer",
+   "Changes: Bug fixes and translations updates"
+  ]
+ },
+ {
+  "version": "1.340.0",
+  "title": "Server version 1.340",
+  "url": "https://playorna.com/releases/1.340.0/",
+  "date": "2026-10-20",
+  "kind": "Server update",
+  "items": [
+   "Changes: (Orna) Increased the amount of Hunting Sites found in the world",
+   "Changes: Hunting Sites will no longer produce hordes for low tier players",
+   "Changes: Increased the proof cost of the Writ of the Royal Hunt",
+   "Changes: Removed materials from the King's Guard guild shop",
+   "Changes: Lowered the Ornate chest proof cost for lower tier players",
+   "Changes: Remove the Valhallen/Elysian chest type as there is not enough gear in that category to properly support it",
+   "Changes: Ornate chests now have a weekly limit, based on player tier",
+   "Changes: \"1 Level\" chests now have a weekly limit, based on player tier",
+   "Changes: Added Summoning Scrolls and Skeleton Keys to the King's Guard guild shop",
+   "Changes: Misc King's Guard bug fixes"
+  ]
+ },
+ {
+  "version": "1.339.0",
+  "title": "Server version 1.339",
+  "url": "https://playorna.com/releases/1.339.0/",
+  "date": "2026-10-20",
+  "kind": "Server update",
+  "items": [
+   "Changes: Bladeless: Increased Chained Chance from 20% to 30%",
+   "Changes: The Aglostrike skells now do mixed Arcane/Physical element damage",
+   "Changes: Arisen Pumpkinless follower Bestial Bond 1: Increased Chained Chance from 20% to 40%",
+   "Changes: Arisen Pumpkinless follower Bestial Bond 2: Replaced Chained Damage chance with Two-Handed power"
+  ]
+ },
+ {
+  "version": "1.338.0",
+  "title": "Server version 1.338",
+  "url": "https://playorna.com/releases/1.338.0/",
+  "date": "2026-10-08",
+  "kind": "Server update",
+  "items": [
+   "Changes: Event Allegiance XP per level now caps at level 100, meaning every level after 100 does not require additional XP",
+   "Changes: Damage limits in Blades of Finesse are now enforced per actor (and their follower/summons), rather than per target. This will allow focus fire in team PvP"
+  ]
+ },
+ {
+  "version": "1.337.0",
+  "title": "Server version 1.337",
+  "url": "https://playorna.com/releases/1.337.0/",
+  "date": "2026-10-05",
+  "kind": "Server update",
+  "items": [
+   "New features: Haunted Houses now show a '!' on the map when they are off cooldown",
+   "Changes: Bladeless: added 20% Chain Damage Chance",
+   "Changes: Arisen Pumpkinless follower: replaced Aglostrike II with Aglostrike III",
+   "Changes: Arisen Pumpkinless follower: Bestial Bond Level 2 Chain Damage Chance increased from 10% to 20%",
+   "Changes: Arisen Pumpkinless follower: Bestial Bond Level 3 now adds 20% Bonded Magic",
+   "Changes: Event levels: every level from event level 100 onward now costs the same amount of experience"
+  ]
+ },
+ {
+  "version": "1.336.0",
+  "title": "Server version 1.336",
+  "url": "https://playorna.com/releases/1.336.0/",
+  "date": "2026-10-02",
+  "kind": "Server update",
+  "items": [
+   "Changes: Beheaded Charmer's Lute: Disperse Status Chance -> Ally Effect Chance",
+   "Changes: Increased the amount of Haunted Houses in the world",
+   "Changes: Improved the rewards of trick or treating loot bag opening"
+  ]
+ },
+ {
+  "version": "1.335.0",
+  "title": "Server version 1.335",
+  "url": "https://playorna.com/releases/1.335.0/",
+  "date": "2026-09-28",
+  "kind": "Server update",
+  "items": [
+   "Changes: Updated Crimson Festival",
+   "Changes: Medusa follower: updated AoE focused Bestial Bond",
+   "Changes: Medusa follower: Replaced Arrowstorm with Arrowstorm II",
+   "Changes: Medusa follower: Removed Full Bend II, Magic Arrow IV, Magic Chakram, added Stonefire",
+   "Changes: \"Gear Up\" Community Contest winners added to this game: Unspeakable Tentacle, Bloodied Staff, Tower Door Shield, Sarbacane"
+  ]
+ },
+ {
+  "version": "3.26.4",
+  "title": "App update v3.26.4",
+  "url": "https://playorna.com/releases/3.26.4/",
+  "date": "2026-09-28",
+  "kind": "App update",
+  "items": [
+   "Changes: Support for an updated Hallowed event",
+   "Changes: Improved the display of locked items",
+   "Changes: Improved the display when multiple Crucibles could be used on an item",
+   "Changes: Follower lists are now paginated",
+   "Changes: Misc bug fixes & updated translations",
+   "Notable bug fixes: Fixed a battle freeze issue when collateral damage defeats a summon",
+   "Notable bug fixes: Fixed an issue where popup rewards were invisible after switched characters"
+  ]
+ },
+ {
+  "version": "1.334.0",
+  "title": "Server version 1.334",
+  "url": "https://playorna.com/releases/1.334.0/",
+  "date": "2026-09-14",
+  "kind": "Server update",
+  "items": [
+   "Changes: Revamped website",
+   "Changes: The Darkrift Crucible is now an additional guaranteed drop when completing the Darkrift Dungeon",
+   "Changes: Added 5% Ward Power bonus to each piece of the Judge Trifecta warrior gear",
+   "Changes: Increased dexterity of each piece of the Judge Trifecta thief gear",
+   "Changes: Added 7% Avidity bonus to the Judge Trifecta Falx",
+   "Changes: Shade of Achlys, the Red Dagger Summon: removed Drain II, added Osmostrike III",
+   "Changes: Fixed an issue with the Zeta Riftlock not affecting raid rewards correctly"
+  ]
+ },
+ {
+  "version": "1.333.0",
+  "title": "Server version 1.333",
+  "url": "https://playorna.com/releases/1.333.0/",
+  "date": "2026-09-01",
+  "kind": "Server update",
+  "items": [
+   "Changes: Support for an updated September event",
+   "Changes: Bug fixes and translation updates"
+  ]
+ },
+ {
+  "version": "3.26.2",
+  "title": "App update v3.26.2",
+  "url": "https://playorna.com/releases/3.26.2/",
+  "date": "2026-09-01",
+  "kind": "App update",
+  "items": [
+   "Changes: Updated Riftfall assets",
+   "Changes: Updated Dragon Roost sprite",
+   "Changes: (Hero of Aethric) Improved the potency of the interation range bonus",
+   "Changes: Standardized event type headings: Main Event, Guest Event, Mini Event, Booster Event, and Special Event",
+   "Changes: Translation updates",
+   "Notable bug fixes: Fixed an issue where summons could become invisible after when Charon Ritual procs on the same turn as other summons being defeated",
+   "Notable bug fixes: Fullscreen popups now appear one at a time instead of stacking on top of each other when you enter the game",
+   "Notable bug fixes: Other misc bug fixes"
+  ]
+ },
+ {
+  "version": "1.332.0",
+  "title": "Server version 1.332",
+  "url": "https://playorna.com/releases/1.332.0/",
+  "date": "2026-08-07",
+  "kind": "Server update",
+  "items": [
+   "Changes: Peluda and Velue can now be found in Towers of Olympia",
+   "Changes: Wyrmquill Ballista: increased Attack, decreased Magic, Added Dmg ↑, added +10% Dragon Damage",
+   "Changes: Poison Quillstorm: decreased mana cost to 80",
+   "Changes: Yelmogus Greatsword: Removed Frenzy Bonus, added Crit Damage Bonus and Multi-target Damage Conus"
+  ]
+ },
+ {
+  "version": "1.331.0",
+  "title": "Server version 1.331",
+  "url": "https://playorna.com/releases/1.331.0/",
+  "date": "2026-07-29",
+  "kind": "Server update",
+  "items": [
+   "Changes: Support for the reworked Spelunking Guild",
+   "Changes: Exploration dungeons are now disabled. Goblin Fortresses and Mystic caves are now back to being Battle Dungeons",
+   "Changes: Medea is now back to being found in Mystic Caves only",
+   "Changes: Support for an updated Wyrmhunt event",
+   "Changes: Added the Guild Proof bonus to the Proof of Undying Allegiance item",
+   "Changes: Capped the amount of materials earned from Memory Hunts when multiple Memory Hunt bonuses Events are stacked",
+   "Changes: Exploration Dungeon quests in Archpaths have been converted to normal Battle Dungeons",
+   "Changes: Increased the materials gained when completing World Raids",
+   "Changes: Increased the materials gained when completing Dungeons",
+   "Changes: Increased the materials gained when completing floors in Towers of Olympia",
+   "Changes: (Hero of Aethric) The view distance stat has been reworked as \"Interation Distance\""
+  ]
+ },
+ {
+  "version": "3.26.1",
+  "title": "App update v3.26.1",
+  "url": "https://playorna.com/releases/3.26.1/",
+  "date": "2026-07-29",
+  "kind": "App update",
+  "items": [
+   "New features: Added a \"Current events only\" filter to forfeiting in the Monumental Guild",
+   "Changes: Spelunking Guild rework: The Spelunking Guild is now Battle Dungeon focused, providing a number of ways to enhance your Battle Dungeon experience",
+   "Changes: Explorations Dungeons have been disabled",
+   "Changes: Items can now be unnamed by leaving the rename field blank",
+   "Changes: (Hero of Aethric) The view distance stat has been reworked as \"Interation Distance\"",
+   "Changes: Reorganized the player profile screen",
+   "Changes: Reduced the length of the Tap-the-Wisp Memory Hunt minigame"
+  ]
+ }
+]

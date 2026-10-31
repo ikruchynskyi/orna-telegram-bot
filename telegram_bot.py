@@ -699,6 +699,9 @@ def main():
     # conversations, whose free-text handlers would otherwise take it (its filter matches only those replies)
     app.add_handler(build_orna_reply_handler())
     app.add_handler(build_me_handler())
+    from bot import orna_feedback
+    for h in orna_feedback.handlers():   # reactions as votes on /orna answers; /feedback /verify /correct
+        app.add_handler(h)
     # /amity, and the uploader's typed "Red 4" after an uncaptioned amity
     # screenshot - same narrow-filter-before-the-conversations rule.
     app.add_handler(build_amity_handler())
@@ -722,10 +725,10 @@ def main():
     # Explicit allowed_updates so inline_query/chosen_inline_result are always
     # polled (the default set includes them, but a previously-set restrictive
     # value persists server-side otherwise). Lists exactly the update types the
-    # bot handles - no chat_member/reaction noise.
+    # bot handles - no chat_member noise. message_reaction: votes on /orna answers (orna_feedback).
     app.run_polling(allowed_updates=[
         "message", "edited_message", "callback_query", "inline_query", "chosen_inline_result",
-        "my_chat_member", "channel_post",
+        "my_chat_member", "channel_post", "message_reaction",
     ])
 
 
