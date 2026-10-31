@@ -67,7 +67,7 @@ from telegram.ext import (
     InlineQueryHandler, MessageHandler, filters,
 )
 
-from llm.ollama_client import (OLLAMA_CLOUD_HOST, OllamaBusy, OllamaError, OllamaSlow, UnsupportedMultimodal,
+from llm.ollama_client import (LOCAL_THINK, last_leg, shrink_for_local, OLLAMA_CLOUD_HOST, OllamaBusy, OllamaError, OllamaSlow, UnsupportedMultimodal,
                                chat_json, chat_json_with_fallback)
 from orna.orna_aussies import build_url as build_aussies_url
 from orna.orna_aussies import decode as decode_effect_code
@@ -120,6 +120,9 @@ _RESULTS_PER_PAGE = 8
 # (+ maybe a refined retry) + finish. 16 gives real headroom for that
 # chain plus a genuinely multi-part request on top of it.
 MAX_STEPS = 35
+# The local model reads a ~40k-character prompt on every step (12-130s each on qwen3.8:27b-mlx), so a request
+# it serves gets this many steps, then answers with what it gathered (_close_out) - inside LOOP_TIMEOUT_SECONDS.
+LOCAL_MAX_STEPS = int(os.environ.get("ORNA_LOCAL_MAX_STEPS", "5"))
 # EVERY step tries Ollama Cloud first and falls back to local, per explicit
 # ask 2026-09-24. This replaced a context-weight scheme (CLOUD_CONTEXT_CHARS,
 # now gone) that kept the "cheap" routing/lookup steps on the free local model
@@ -4463,6 +4466,7 @@ class OrnaSession:
     created: float = field(default_factory=time.monotonic)
     ask_options: list = field(default_factory=list)
     cloud_calls: int = 0  # cloud attempts made this request (bounded by MAX_CLOUD_CALLS)
+    local_steps: int = 0  # steps the local model answered (bounded by LOCAL_MAX_STEPS)
     # Every tool call already made this request, signature -> its observation.
     # The prompt tells the model not to repeat a call with the same input; it
     # does anyway (live 2026-09-24, the 11-item orn-bonus request: 4 of 16
@@ -4815,15 +4819,18 @@ async def _call_step_model(session: "OrnaSession", step_number: int):
         try:
             if session.cloud_calls < MAX_CLOUD_CALLS:
                 session.cloud_calls += 1
-                return await chat_json_with_fallback(
+                step = await chat_json_with_fallback(
                     ORNA_CLOUD_MODEL, LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, _with_state(session.messages),
                     api_key=OLLAMA_API_KEY, timeout=STEP_MODEL_TIMEOUT, local_timeout=LOCAL_MODEL_TIMEOUT,
                     tools=_STEP_TOOLS, json_nudge=_JSON_NUDGE,
                 )
+                session.local_steps += last_leg.get() == "local"
+                return step
             # Only past the runaway guard (or MAX_CLOUD_CALLS=0, i.e. the
             # harness's FORCE_LOCAL): local is all there is.
-            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, _with_state(session.messages),
-                                   timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS)
+            session.local_steps += 1
+            return await chat_json(LOCAL_OLLAMA_HOST, LOCAL_OLLAMA_MODEL, shrink_for_local(_with_state(session.messages)),
+                                   timeout=LOCAL_MODEL_TIMEOUT, tools=_STEP_TOOLS, think=LOCAL_THINK)
         except (OllamaError, UnsupportedMultimodal) as e:
             if attempt == 0:
                 # Light log here on purpose (no exc_info) - this is an
@@ -5027,6 +5034,11 @@ async def _advance_inner(sid: str, message) -> None:
         return
 
     while session.steps_left > 0:
+        if session.local_steps >= LOCAL_MAX_STEPS:
+            usage_stats.record_tool_call("_local_step_budget")
+            await _close_out(session, message, "the step budget for the local model is used up",
+                             "Не вдалося сформувати відповідь за відведену кількість кроків — спробуйте уточнити запит.")
+            return
         session.steps_left -= 1
         step_number = MAX_STEPS - session.steps_left
         if session.status is not None:

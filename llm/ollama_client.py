@@ -28,9 +28,11 @@ telegram_bot.py's error handler for the other half of this fix.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -71,6 +73,43 @@ CLOUD_CONCURRENCY = int(os.environ.get("OLLAMA_CLOUD_CONCURRENCY", "3"))
 _cloud_slots = threading.BoundedSemaphore(CLOUD_CONCURRENCY)
 _SLOT_WAIT_SECONDS = 30
 _BUSY_RETRY_DELAYS = (2, 5, 10)
+
+# The cloud chain: the caller's model (a free-quota one: nemotron-3-super, gemma4:31b), then these paid ones
+# in order (OLLAMA_CLOUD_FALLBACK_MODELS, comma-separated: deepseek-v4.1-flash), then the local model. A model
+# moves aside only when its quota or the balance is used up (OllamaQuota) - a slow or garbled reply goes
+# straight to local as before, so a hiccup never spends the balance. A used-up model is skipped for
+# QUOTA_RECHECK_SECONDS, then probed again (one quick 429 when it's still out): free quotas reset hourly or
+# by session, and the balance can be topped up.
+# The local model is the last resort: it answers the JSON straight away (LOCAL_THINK=0 by default) since
+# its thinking before every step made a local /orna step ~58s (a full run 464s against a 600s ceiling).
+LOCAL_THINK = os.environ.get("OLLAMA_LOCAL_THINK", "0") == "1"
+LOCAL_KEEP_ALIVE = os.environ.get("OLLAMA_LOCAL_KEEP_ALIVE", "30m")
+# Its time goes into READING the prompt (qwen3.8:27b-mlx: 12-130s a step on 40-77k characters, mostly tool
+# results: one knowledge_search adds ~17k), so every message after the system prompt is cut to this for it.
+LOCAL_MAX_MSG_CHARS = int(os.environ.get("OLLAMA_LOCAL_MAX_MSG_CHARS", "4000"))
+
+
+# Which leg answered the caller's last chat_json_with_fallback call ("cloud" or "local"), per task: the
+# /orna loop counts its local steps with it (telegram_orna LOCAL_MAX_STEPS).
+last_leg: contextvars.ContextVar[str] = contextvars.ContextVar("last_leg", default="")
+
+
+def shrink_for_local(messages: list[dict], limit: int = LOCAL_MAX_MSG_CHARS) -> list[dict]:
+    """The messages with each one after the first (the system prompt, kept whole) cut to `limit`
+    characters, head kept, a note where it was cut. A copy: the session's own list is untouched."""
+    out = []
+    for i, m in enumerate(messages):
+        c = m.get("content")
+        if i and isinstance(c, str) and len(c) > limit:
+            m = {**m, "content": c[:limit] + f"\n[... {len(c) - limit} more characters cut for the local model]"}
+        out.append(m)
+    return out
+CLOUD_FALLBACK_MODELS = [m.strip() for m in os.environ.get("OLLAMA_CLOUD_FALLBACK_MODELS", "").split(",") if m.strip()]
+QUOTA_RECHECK_SECONDS = 1800
+_quota_out_until: dict[str, float] = {}
+# Ollama Cloud's "you've reached your session/hourly/weekly usage limit, please upgrade" is a 429; an empty
+# balance isn't documented: a 402, or any of these words, counts as used up too.
+_QUOTA_RE = re.compile(r"usage limit|quota|insufficient|balance|credits?\b|payment|billing|subscription|upgrade", re.I)
 _cloud_down_until = 0.0
 _cloud_model_override: Optional[str] = None
 
@@ -154,6 +193,12 @@ class OllamaUnavailable(OllamaError):
     i.e. one bad ANSWER took cloud away from every request for five minutes.
     A model writing something unparseable says nothing about whether the
     service is reachable, so only this subclass parks it."""
+
+
+class OllamaQuota(OllamaError):
+    """This model's free quota, or the account's paid balance, is used up (a 429 that says
+    "usage limit", a 402, ...). The service is up: the next model in the cloud chain is tried,
+    and this one is skipped for QUOTA_RECHECK_SECONDS. Never retried like a busy 429."""
 
 
 class OllamaNotJson(OllamaError):
@@ -271,7 +316,7 @@ _SAMPLING_OPTIONS = _sampling_options()
 
 
 async def chat_json(host: str, model: str, messages: list[dict], headers: Optional[dict] = None,
-                     timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None) -> dict:
+                     timeout: httpx.Timeout = DEFAULT_TIMEOUT, tools: Optional[list] = None, think: bool = True) -> dict:
     """POST /api/chat with think:True + format=json, return the parsed
     JSON object (a single HTTP attempt - no retry/fallback here, see
     chat_json_with_fallback for that). Raises OllamaError on any HTTP
@@ -283,7 +328,9 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
     here even though this function never dispatches a tool call itself - see
     _from_tool_calls for why (a harmony-format model emits a native call
     regardless, and with nothing declared Ollama 500s on some of them)."""
-    payload = {"model": model, "messages": messages, "stream": False, "format": "json", "think": True}
+    payload = {"model": model, "messages": messages, "stream": False, "format": "json", "think": think}
+    if host != OLLAMA_CLOUD_HOST:
+        payload["keep_alive"] = LOCAL_KEEP_ALIVE  # a reload of the 27B model costs ~20s on the next call
     if tools:
         payload["tools"] = tools
     # Opt-in reproducibility for the test suite (orna_test_suite.py). Ollama
@@ -306,6 +353,8 @@ async def chat_json(host: str, model: str, messages: list[dict], headers: Option
         async with httpx.AsyncClient(timeout=timeout) as client:
             for delay in (*_BUSY_RETRY_DELAYS, None):
                 resp = await client.post(f"{host}/api/chat", json=payload, headers=headers or {})
+                if resp.status_code == 402 or (resp.status_code in (403, 429) and _QUOTA_RE.search(resp.text)):
+                    raise OllamaQuota(f"{model}: {resp.status_code} {resp.text[:200]}")
                 if resp.status_code != 429:
                     break
                 if delay is None:
@@ -381,60 +430,61 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
     # genuinely slower and is the last resort - cutting it off produces nothing
     # at all. Defaults to one deadline for both, which is what /go passes.
     global _cloud_down_until
-    cloud_model = get_cloud_model(cloud_model)
     local_timeout = local_timeout or timeout
     cloud_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     if cloud_is_parked():
         # Cloud failed recently - don't pay its timeout again yet.
         return await _local_leg(local_host, local_model, messages, local_timeout, tools)
-    try:
-        result = await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
-        _cloud_down_until = 0.0
-        return result
-    except UnsupportedMultimodal:
-        logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", cloud_model)
-        if not drop_images(messages):
-            raise
+    first = get_cloud_model(cloud_model)
+    for model in [first, *(m for m in CLOUD_FALLBACK_MODELS if m != first)]:
+        if time.monotonic() < _quota_out_until.get(model, 0):
+            continue  # used up a moment ago: the next one
         try:
-            result = await chat_json(cloud_host, cloud_model, messages, cloud_headers, timeout=timeout, tools=tools)
-            _cloud_down_until = 0.0
-            return result
+            return await _cloud_leg(cloud_host, model, messages, cloud_headers, timeout, tools, json_nudge)
+        except OllamaQuota as e:
+            _quota_out_until[model] = time.monotonic() + QUOTA_RECHECK_SECONDS
+            logger.warning("ollama_client: %s is used up (%s), next in the chain; rechecked in %ds", model, e, QUOTA_RECHECK_SECONDS)
+            continue
         except OllamaError as e:
-            # The post-image-drop retry can still fail for an ordinary
-            # transient reason (rate limit, network). Fall through to the
-            # local fallback below instead of letting it escape - previously
-            # this retry was a bare await inside the multimodal handler, so
-            # its OllamaError bypassed local entirely.
-            logger.warning("ollama_client: cloud retry after image-drop failed (%s), falling back to local", e)
+            # Park the cloud leg only for a genuine availability failure. A reply
+            # that arrived but wasn't usable JSON is a CONTENT problem - still
+            # worth falling back over, never worth taking cloud away from every
+            # other request for five minutes.
             if isinstance(e, OllamaUnavailable):
                 _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
-    except OllamaError as e:
-        # Park the cloud leg only for a genuine availability failure. A reply
-        # that arrived but wasn't usable JSON is a CONTENT problem - still
-        # worth falling back over, never worth taking cloud away from every
-        # other request for five minutes.
-        if isinstance(e, OllamaUnavailable):
-            _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
-            logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
-                           e, CLOUD_COOLDOWN_SECONDS)
-        elif isinstance(e, (OllamaBusy, OllamaSlow)):
-            logger.warning("ollama_client: Ollama Cloud busy or slow (%s), local for this call only", e)
-        elif isinstance(e, OllamaNotJson) and json_nudge:
-            # Prose instead of the object: the cloud model is up and usually has the
-            # right content, so ask it once more for the object - seconds, where the
-            # local fallback takes minutes (and timed out, live).
-            logger.warning("ollama_client: cloud replied in prose (%s), asking it again for the JSON", e)
-            retry = [*messages, {"role": "assistant", "content": e.content[:6000]}, {"role": "user", "content": json_nudge}]
-            try:
-                result = await chat_json(cloud_host, cloud_model, retry, cloud_headers, timeout=timeout, tools=tools)
-                _cloud_down_until = 0.0
-                return result
-            except OllamaError as e2:
-                logger.warning("ollama_client: cloud retry unusable too (%s), falling back to local this turn", e2)
-        else:
-            logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
-
+                logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
+                               e, CLOUD_COOLDOWN_SECONDS)
+            elif isinstance(e, (OllamaBusy, OllamaSlow)):
+                logger.warning("ollama_client: Ollama Cloud busy or slow (%s), local for this call only", e)
+            else:
+                logger.warning("ollama_client: cloud reply unusable (%s), falling back to local this turn", e)
+            break  # not a quota: local, never the next (paid) model
     return await _local_leg(local_host, local_model, messages, local_timeout, tools)
+
+
+async def _cloud_leg(cloud_host: str, model: str, messages: list[dict], headers: dict, timeout: httpx.Timeout,
+                     tools: Optional[list], json_nudge: str) -> dict:
+    """One cloud model: its call, a retry without images for a model with no vision, and one retry with
+    the json_nudge when it answered in prose. Raises OllamaError (OllamaQuota: try the next model)."""
+    global _cloud_down_until
+    try:
+        result = await chat_json(cloud_host, model, messages, headers, timeout=timeout, tools=tools)
+    except UnsupportedMultimodal:
+        logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", model)
+        if not drop_images(messages):
+            raise
+        result = await chat_json(cloud_host, model, messages, headers, timeout=timeout, tools=tools)
+    except OllamaNotJson as e:
+        if not json_nudge:
+            raise
+        # Prose instead of the object: the cloud model is up and usually has the right content, so ask it
+        # once more for the object - seconds, where the local fallback takes minutes (and timed out, live).
+        logger.warning("ollama_client: %s replied in prose (%s), asking it again for the JSON", model, e)
+        retry = [*messages, {"role": "assistant", "content": e.content[:6000]}, {"role": "user", "content": json_nudge}]
+        result = await chat_json(cloud_host, model, retry, headers, timeout=timeout, tools=tools)
+    _cloud_down_until = 0.0
+    last_leg.set("cloud")
+    return result
 
 
 async def _local_leg(local_host: str, local_model: str, messages: list[dict],
@@ -442,12 +492,14 @@ async def _local_leg(local_host: str, local_model: str, messages: list[dict],
     """The local half of chat_json_with_fallback, with its own
     drop-image-and-retry-once. Separate so the parked-cloud path can reach
     it without going through the cloud attempt first."""
+    messages = shrink_for_local(messages)
+    last_leg.set("local")
     try:
-        return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
+        return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools, think=LOCAL_THINK)
     except UnsupportedMultimodal:
         logger.warning("ollama_client: %s has no vision support, dropping attached image(s)", local_model)
         if drop_images(messages):
-            return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools)
+            return await chat_json(local_host, local_model, messages, timeout=local_timeout, tools=tools, think=LOCAL_THINK)
         raise
 
 
@@ -461,9 +513,16 @@ def _demo_cloud_limits() -> None:
 
     hosts: list = []
 
+    models: list = []
+
     def handler(req):
         hosts.append(req.url.host)
+        models.append(json.loads(req.content)["model"])
         r = replies.pop(0)
+        if r == "quota":
+            return httpx.Response(429, json={"error": "you've reached your hourly usage limit, please wait or upgrade to continue"})
+        if r == "broke":
+            return httpx.Response(402, json={"error": "insufficient balance"})
         if r == "timeout":
             raise httpx.ReadTimeout("", request=req)
         if r == "prose":
@@ -501,6 +560,23 @@ def _demo_cloud_limits() -> None:
         hosts.clear()
         out = _aio.run(chat_json_with_fallback("m", "http://local", "lm", [{"role": "user", "content": "x"}]))
         assert out == {"ok": 1} and hosts == ["ollama.com", "ollama.com", "local"], hosts
+        # the chain: free model used up -> the paid one; then the free one is skipped until rechecked
+        global CLOUD_FALLBACK_MODELS
+        saved_chain, CLOUD_FALLBACK_MODELS = CLOUD_FALLBACK_MODELS, ["paid"]
+        try:
+            ask = lambda: _aio.run(chat_json_with_fallback("free", "http://local", "lm", [{"role": "user", "content": "x"}]))
+            models.clear(); replies[:] = ["quota", 200]
+            assert ask() == {"ok": 1} and models == ["free", "paid"], models       # no busy-style retries on a quota
+            models.clear(); replies[:] = [200]
+            assert ask() == {"ok": 1} and models == ["paid"], models               # the free one sits out
+            models.clear(); replies[:] = ["broke", 200]
+            assert ask() == {"ok": 1} and models == ["paid", "lm"], models         # balance gone too: local
+            _quota_out_until.clear()
+            models.clear(); replies[:] = ["timeout", 200]
+            assert ask() == {"ok": 1} and models == ["free", "lm"], models         # slow is not used up: never the paid one
+        finally:
+            CLOUD_FALLBACK_MODELS = saved_chain
+            _quota_out_until.clear()
         _cloud_slots = threading.BoundedSemaphore(1)
         _cloud_slots.acquire()                          # every slot taken
         try:

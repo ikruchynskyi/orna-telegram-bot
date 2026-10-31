@@ -28,6 +28,8 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
             (usage_stats, "_since", usage_stats._since),
             (ollama_client, "_cloud_model_override", None),
             (ollama_client, "_cloud_down_until", 0.0),
+            (ollama_client, "_quota_out_until", {}),       # a used-up model must not leak between tests
+            (ollama_client, "CLOUD_FALLBACK_MODELS", []),  # just the caller's model unless a test says otherwise
         ):
             p = patch.object(module, name, value)
             p.start()
@@ -44,6 +46,7 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
         for status in (402, 403):
             with self.subTest(status=status):
                 requests = []
+                ollama_client._quota_out_until.clear()
                 ollama_client.set_cloud_model("chosen:cloud")
 
                 def handle(request):
@@ -60,7 +63,9 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
                     result = await ollama_client.chat_json_with_fallback(
                         "env:cloud", "http://localhost:11434", "env:local", [])
                     self.assertEqual(result["action"], "finish")
-                    self.assertTrue(ollama_client.cloud_is_parked())
+                    # used up = that MODEL sits out (the next in the chain is tried); the cloud isn't parked
+                    self.assertIn("chosen:cloud", ollama_client._quota_out_until)
+                    self.assertFalse(ollama_client.cloud_is_parked())
                     await ollama_client.chat_json_with_fallback(
                         "env:cloud", "http://localhost:11434", "env:local", [])
                 self.assertEqual(requests, [
