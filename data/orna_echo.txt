@@ -2411,7 +2411,6 @@ Day | Quest | Reward
 2 | Defeat Bosses (10) | Dragon Remains ⁠ (10)
 3 | Defeat enemies with a critical hit (5) | Super EXP Potion ⁠ (1)
 4 | Complete dungeons (2) | Sprite pack: Giants & Titans I
-5 | Complete exploration dungeons (1) | Astralseed ⁠ (10)
 6 | Upgrade equipment (25) | Galar’s Hammer ⁠ (2)
 7 | Catch fish (20) | Jewel of Destruction ⁠ (1)
 8 | Forfeit items to the Monumental Guild (40) | Svargan Fishing Line ⁠ (3)

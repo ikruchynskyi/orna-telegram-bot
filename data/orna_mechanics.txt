@@ -322,3 +322,29 @@ Olympian). Materials come from dismantling gear and are consumed by upgrades.
 Several bonuses stack MULTIPLICATIVELY, not additively: Weapon Proficiency +5%
 (Mage/Thief offensive stats), Origin Town +10% to core stats, and a Party bonus
 +10% to core stats. Combined that is 1.05 × 1.10 × 1.10 ≈ +27%, not +25%.
+
+=== Dungeons: Battle Dungeons only (Exploration Dungeons removed 2026-07-29) ===
+Exploration (Deep) Dungeons - the mining, top-down kind added in late 2023 - were
+removed on 2026-07-29 (server 1.331, app 3.26.1, playorna.com/releases): Goblin
+Fortresses and Mystic Caves are Battle Dungeons again, and the Spelunking Guild
+was reworked to be Battle Dungeon focused (dungeon divers earn Proofs of
+Spelunking from dungeons and exchange them at the guild). Wiki pages and older
+posts that describe Exploration Dungeons, mining, the Deep Kiln, or an
+Exploration floor table (tier 11 = 12 floors) are out of date.
+A Battle Dungeon's floor count depends on its tier (Ornabook's floor chart,
+from Knight411's chart; each count checked against its boss floors):
+Tier | Floors | Boss floors
+1 | 5 | 5
+2 | 9 | 9
+3 | 10 | 10
+4 | 10 | 10
+5 | 13 | 3, 7, 13
+6 | 13 | 2, 6, 13
+7 | 13 | 3, 6, 13
+8 | 20 | 4, 10, 20
+9 | 20 | 4, 10, 20
+10 | 22 | 5, 11, 16, 22 (22 can roll a Godforge aura)
+11 | 25 | 5, 11, 16, 25 (16 and 25: Arisen Superbosses)
+"Approximate floors" tables elsewhere (★4 12, ★7 18, ★9 22, ★10 25) disagree
+with this chart; use the chart. For anything paid per run (guild progress,
+end-of-dungeon rewards), reward per floor is what to compare across tiers.

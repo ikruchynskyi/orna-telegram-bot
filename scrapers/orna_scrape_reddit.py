@@ -248,6 +248,9 @@ def build_text(client_id: str = "", client_secret: str = "", progress=None,
     return header + "\n\n".join(sections) + "\n"
 
 
+from scrapers.removed_content import scrub  # what's gone from the game (Exploration Dungeons) stays out
+
+
 def main() -> None:
     # --from-dir <path>: build from JSON pages already saved locally, no
     # credentials and no network. See _items_from_dir.
@@ -255,7 +258,7 @@ def main() -> None:
         directory = Path(sys.argv[sys.argv.index("--from-dir") + 1]).expanduser()
         if not directory.is_dir():
             sys.exit(f"{directory} is not a directory")
-        text = build_text(progress=print, from_dir=directory)
+        text = scrub(build_text(progress=print, from_dir=directory))
         OUTPUT_PATH.write_text(text, encoding="utf-8")
         print(f"Wrote {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size} bytes)")
         return
@@ -272,7 +275,7 @@ def main() -> None:
             "logged-in browser and build from that instead - no credentials needed:\n"
             "  python3 -m scrapers.orna_scrape_reddit --from-dir ~/reddit_json"
         )
-    text = build_text(client_id, client_secret, progress=print)
+    text = scrub(build_text(client_id, client_secret, progress=print))
     OUTPUT_PATH.write_text(text, encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size} bytes)")
 

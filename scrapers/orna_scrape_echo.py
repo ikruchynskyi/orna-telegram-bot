@@ -242,7 +242,8 @@ if __name__ == "__main__":
     _demo()
     urls = article_urls()
     print(f"{len(urls)} article(s) from the sitemap", file=sys.stderr)
-    text = build_text(urls)
+    from scrapers.removed_content import scrub  # what's gone from the game (Exploration Dungeons) stays out
+    text = scrub(build_text(urls))
     with open(OUT_PATH, "w", encoding="utf-8") as fh:
         fh.write(text)
     sections = text.count("\n=== ") + text.startswith("=== ")

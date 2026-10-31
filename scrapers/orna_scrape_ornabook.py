@@ -377,7 +377,8 @@ if __name__ == "__main__":
     if "--demo" in sys.argv:
         _demo()
     else:
-        corpus = build_text()
+        from scrapers.removed_content import scrub  # what's gone from the game (Exploration Dungeons) stays out
+        corpus = scrub(build_text())
         tmp = OUT_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(corpus)

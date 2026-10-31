@@ -1343,13 +1343,10 @@ This update brings 3 of our last few planned Guilds: The **Seer's Guild**, The *
 
 \-------------------------------------------------
 
-\* Exploration (Deep) Dungeons
 
-\-- Both Goblin Fortress and Mystic Cave dungeons are now completed in "Exploration" mode, allowing players to choose their battles, mine for progress, and earn rewards underground
 
 \* New Guild: The Spelunking Guild
 
-\-- This Guild rewards players for interacting with Exploration Dungeons
 
 \* New Guild: The Monumental Guild
 
@@ -1416,13 +1413,10 @@ Release notes below. This rollout should take approximately 48 hours, available 
 
 \-------------------------------------------------------
 
-\* Exploration (Deep) Dungeons
 
-\-- Both Goblin Fortress and Mystic Cave dungeons are now completed in "Exploration" mode, allowing players to choose their battles, mine for progress, and earn rewards underground
 
 \* New Guild: The Spelunking Guild
 
-\-- This Guild rewards players for interacting with Exploration Dungeons
 
 \* New Guild: The Monumental Guild
 

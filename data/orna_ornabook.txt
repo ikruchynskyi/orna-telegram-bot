@@ -237,10 +237,10 @@ Todo
 Todo
 
 === Dungeons (https://book.cadelabs.ovh/Dungeons.html) ===
+Note: Exploration Dungeons were removed from Orna on 2026-07-29 (server 1.331, app 3.26.1). Goblin Fortresses and Mystic Caves are Battle Dungeons again; there is no mining or Deepshards in dungeons; the Spelunking Guild is Battle Dungeon focused.
 Dungeons
 [Dungeon]
 Dungeons are an activity in which a player explores a monster filled dungeon. One needs to be Tier 3 in order to access them. Dungeons have a certain number of floors which depends on the Tier of the player opening it. Further floors may only be accessed once the previous floor has been completed. At the end of a dungeon, players obtain additional rewards such as materials or other items (oftentimes referred to as EoD/EoG rewards, for End-of-Dungeon/Gauntlet rewards).
-There exists 2 kinds of dungeons: Battle Dungeons and Exploration Dungeons.
 
 === Dungeons - Battle Dungeons (https://book.cadelabs.ovh/Dungeons.html#battle-dungeons) ===
 Battle Dungeons are the original dungeons that were introduced into the game. They feature a fight per floor, which the player must win in order to access the next one. Once the fight has ended, the next one can be immediately started, making Battle Dungeons an efficient way of fighting numerous enemies.
@@ -250,86 +250,6 @@ The Battle Dungeon ends when the player has successfully defeated all floors or 
 Bosses defeated in a Battle Dungeon only reward 1/4 of their base Gold, Orn and Exp rewards. There is no known reduction for item drops.
 TODO(ethiraric, 23/06/2024)
 Horde dungeons debuff? Needs testing in both Themed and regular dungeons.
-
-=== Dungeons - Exploration Dungeons (https://book.cadelabs.ovh/Dungeons.html#exploration-dungeons) ===
-## Overview
-Exploration Dungeons were released with 3.9.3 on November 29th 2023. They are made available through Mystic Caves and Goblin Fortresses , which are since no longer available as Battle Dungeons.
-With Exploration Dungeons, players enter a top-down 2D view of the floor where they can freely move from room to room. Rooms may contain different entities such as monsters, bosses, mineable resource nodes, (Kingdom) Orns / Gold, Kingdom Florens and Materials.
-Contrary to Battle Dungeons, the objective for each floor is not always to defeat enemies. It is one of:
-- Defeat X monster(s)
-- Defeat X boss(es)
-- Find the exit (hidden behind a mineable decoration)
-- Reveal and activate the 4 floor switches (hidden behind mineable decorations) then proceed to the exit
-Exploration Dungeons have much fewer floors than Battle Dungeons, but each takes much longer to be completed.
-Exploration Dungeons also reward 5 End-of-Dungeon rewards and have no fight rewards reduction for bosses as Battle Dungeons do.
-## Overview > Mining
-Mining is the activity exclusive to Exploration Dungeons. This can either be done by manually tapping the resource nodes or the pickaxe to the bottom-left of the UI. If the pickaxe is held down, the character will walk from one resource node to the other and automatically mine them. If the pickaxe is repeteadly tapped, the mine animation will be interrupted but still completed, meaning it is very slightly faster than holding down. Once there is no longer any resource node in the room, the pickaxe will be greyed out.
-If using the pickaxe, it may happen that the character stucks itself looping over 2 tiles. If that happens, the pickaxe must be released until the character stops on a tile and then re-tapped. Also, there may be resource nodes in out-of-reach places for the character. While they are in the room, the pickaxe will not go grey, but the character will not move when tapping it. The resource nodes must be mined by tapping on them directly.
-When mining, the character gathers remnants of resource nodes, which can later be exchanged for Deep Shards. The process is explained here . Mining is also sometimes required to progress further into the dungeon, to uncover the exit or the floor switches.
-## Overview > Fighting
-Monsters and bosses roam the floors of the dungeons. They may appear in any room which is not in the bottom-most row. They can be fought by tapping them (short or long, as on the overworld). This starts the battle as it would in the overworld.
-Unlike with Battle Dungeons, no status effect carries from one fight to the other. The character also starts each fight with full health and mana. Being defeated in an Exploration Dungeon does not end the run as it would with Battle Dungeons. Instead, the fight is stopped and the game returns to the floor view, where the player can re-try the fight as many times as they want (starting with full HP/MP), until the Dungeon timer expires.
-The last floor of a dungeon always has 2 rooms only: the starting room and a single boss in the room immediately up, which must be defeated to complete the Dungeon. When defeating it, the rewards screen will show up both the fight reward and Dungeon completion rewards.
-## Overview > Gathering pickups
-Any room in any floor has a chance of containing one or more pickups. They can be collected by tapping once on them.
-These pickups may contain:
-- Kingdom Gold
-- Kingdom Orns
-- Kingdom Florens (~80-120)
-- Gold
-- Orns
-- A random material (10-20)
-Prior to tapping on them, there is no way of knowing if a gold/orn pickup is personal Gold/Orns or Kingdom Gold/Orns.
-TODO(ethiraric, 23/06/2024)
-Add numbers
-## UI
-[image not captured: Screenshot of a Mystic Cave exploration, with elements of the UI highlighted with numbers]
-- Quick-access buttons (Codex, Quests, Map, Items). The Map button displays a layout of the floor as seen in Floor Layout .
-- The resources collected. Here, they are from top to bottom the 10:1, 5:1 and 2:1 resources respectively. The green bar shows the progress to the next Deep Shard (80%, 20%, 50% respectively).
-- The floor quest. Completing it will reveal the portal to the next floor.
-- Active buffs.
-- The portal to the next floor. On floors with the 4 switches quest, there is no portal but a dedicated room with the path to the next floor.
-- A monster (Lost Memory).
-- A resource node.
-- A mined resource node.
-- A boss (Enlightened Prince). Like on the overworld, bosses appear larger than monsters.
-- An Orns or Kingdom Orns pickup.
-- The Deep Kiln in the starting room, to smelt resources into Deep Shards.
-- Path to the previous floor in the starting room.
-- The directional pad to move from room to room and the pickaxe to direct the character to move and mine a resource node. Direction to which the player can go have white arrows, while those to which they cannot have greyed arrows.
-TODO(ethiraric, 25/06/2024)
-Are resources always in that order?
-## Floor layout
-The layout of a floor can be seen as a grid of size at least 1x3 and at most 4x5. Not all cells have to have a room.
-Players start in one room on the bottom row of the floor. Rooms on the bottom row often but not always branch up. They may also branch sideways.
-Once we go up from a room in the bottom row (if there is a path), there will be other rooms until we reach the top-most row of the floor. If there is a free space to the left or right of the room, there is a low chance that a room can be hidden there. It is sometimes needed to find it if the exit or a floor switch is located there.
-Most floors will have a W shaped pattern, with a bottom row of rooms all having upwards rooms.
-Here are some examples of layouts:
-[image not captured: A large 3x4 map]
-[image not captured: A small 1x2 boss map]
-[image not captured: A small 2x3 map in a C shape]
-The color of the squares indicate what the room contains:
-- White: Nothing noteworthy.
-- Blue: The starting room.
-- Yellow: A room containing a portal or one or more floor switches.
-- Green: The room where the player is.
-- Purple: In the "Find 4 floor switches" floors, this is where the path to the next floor is.
-If the player (green) is on a colored room, the room will be shown half of that color and half green.
-## Mining for Deep Shards
-The count of which resources were mined is stored and shown at the bottom-right of the UI. There are, for each Exploration Dungeons, 3 different kinds of resources. They can be smelt at the Deep Kiln, located in the starting room of each floor. Since resources are kept when progressing the dungeon, they can be all smelt on the last floor. However, if they are not smelt when the dungeon expires, they are lost and the player gets no Deep Shard from the exploration. Similarly, if there are leftovers resources that cannot be smelt into 1 Deep Shard, those are lost when the dungeon expires.
-The ratio of resource-to-shards is not 1:1 and depends on the kind of resource. It can be 10:1, 5:1 or 2:1.
-## Cooldown and party-play
-Exploration Dungeons interact uniquely with party-play. There is no dedicated button to open the exploration to the party as there is to invite the party in a Battle Dungeon. Instead, the exploration is open to everyone in the party. Once opened and until the cooldown is over, players in the party can freely join the exploration. Rewards for party-play exploration are however not duplicated for each member in the exploration (fights, mining, ...). For instance, players are unable to pick up a resource that was already picked up by another player. This creates a "race" between players where the progress of one hinders the progress of others.
-Since everyone in a party can join an exploration, the cooldown of an Exploration Dungeon is not tied to the player, but to the party leader. This implies the following:
-- Opening an Exploration Dungeon at a Wayvessel spot prevents other players from opening the dungeon themselves. If the player opening has no Unfelled Concord , they would lock the entire party (including players joining after the dungeon has been opened) from opening the dungeon again for 6 hours.
-- The same Exploration Dungeon can be run multiple times within a 1-hour timeframe if using different party leaders (which may be alts).
-The latter point can be used to farm Orns, End-of-Dungeon items (at high quality) and Deep Shards effectively. The method has been explained by Knight411 in the Orna Legends Discord server. It summarizes to the following:
-- Equip your best Orn gear and max your Anguish
-- Get physically close to a [Fort] Goblin Fortress ( [Wayvessel] Wayvessels do not work)
-- Run the dungeon and kill every Elite Kobold Lord , Elite Orc Lord and Kobold Lord that you can. These are the fights that reward with the most Orns.
-- Don't forget to visit the Deep Kiln!
-- Join an alt party where your alt is the party leader. The party leader has changed, your dungeon is off cooldown. Rinse and repeat.
-You'll need to cycle through multiple alts, so that you don't re-use the same alt within a dungeon cooldown timeframe.
 
 === Dungeons - Finding dungeons (https://book.cadelabs.ovh/Dungeons.html#finding-dungeons) ===
 The main source of dungeons is the world map, where they can be found as buildings. They do not move, nor do they disappear. They may appear randomly, as can any other building. They cannot be built by players. They appear on the "Show dungeons" or "Show dungeons & towers" layer of the map.
@@ -403,19 +323,16 @@ During the Balor Invades event
 Valleys of the Gods are available starting Tier 10. They contain only arisen monsters. They reward additional Gold, Orns and End-of-Dungeon items upon completion.
 They have boss floors which, even if the dungeon was run non-horde mode, will contain multiple enemies.
 Although expensive ( [Skeleton Keys] 20), they are the best option for Godforging items.
-## Exploration Dungeons
-Exploration Dungeons' are mainly attractive due to their Deepshards, which can be exchanged for Shrine of Luck and Shrine of Wisdom, and their End of Dungeon Rewards .
-## Exploration Dungeons > Goblin Fortresses [Fort]
+## Battle Dungeons > Goblin Fortresses [Fort]
 Goblin Fortresses are available starting Tier 3. They contain only monsters in the Orc Horde and Goblin Horde families.
 They can be a great source of Orns, with the Elite Kobold Lord, Kobold Lord and the Elite Orc Lord.
 Goblin Fortresses are home to these theme-restricted monsters (not restricted to a particular event)
 - Hobgoblin Lord
 - Elite Kobold Lord, Kobold Lord, Elite Kobold, Elite Kobold Mage
 - Elite Orc Lord, Elite Orc, Elite Orc Brute
-## Exploration Dungeons > Mystic Caves [Mystic Cave]
+## Battle Dungeons > Mystic Caves [Mystic Cave]
 Mystic Caves are available starting Tier 3. They contain only monsters in the Magical and Ancient families.
 They house some enemies which may be difficult to encounter in the world such as the Elemental Cores. Codexers might want to visit them to complete their entries.
-Aside from the Deepshards and End-of-Dugeon Rewards, they are not very popular.
 Mystic Caves are home to these theme-restricted monsters (not restricted to a particular event)
 - Lost Memories
 ## Theme dungeons infographics
@@ -435,7 +352,7 @@ Alongside themes, other difficulty modifiers can be applied to the dungeons for 
 These modifiers are split into 2 categories:
 - Modes (Normal, Horde, Endless), one of which exactly must be selected at a time
 - Options (Hard, Boss, Include event content) which are all independent
-Any combination except for Endless/Boss is valid. Themed dungeon cannot be run as Endless nor Boss. Additionally, Exploration Dungeons cannot be run Horde or Endless.
+Any combination except for Endless/Boss is valid. Themed dungeon cannot be run as Endless nor Boss.
 ## Normal mode
 This is the default setting for a dungeon. On each floor you will face 1 monster only, except for boss floors for some themed dungeons which may have 1 or 2 additional monsters.
 ## Horde mode
@@ -501,21 +418,6 @@ Floor Tier Dungeon Tier | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
 8 | — | — | — | — | — | — | — | 10 | 7 | 4 | 4
 9 | — | — | — | — | — | — | — | — | 10 | 9 | 9
 10 | — | — | — | — | — | — | — | — | — | 5 | 8
-## Exploration Dungeons
-In Exploration Dungeons, there is no monster tier assigned to floors with relation to the depth. Enemies of any tier may appear at any floor during exploration, but they are scaled up to the player's tier.. The following table lists the number of floors in the Dungeon at each tier.
-Tier | Floor Count
-1 | N/A
-2 | 5
-3 | 5
-4 | 5
-5 | 6
-6 | 7
-7 | 8
-8 | 9
-9 | 10
-10 | 11
-11 | 12
-
 === Dungeons - End of Dungeon rewards (https://book.cadelabs.ovh/Dungeons.html#end-of-dungeon-rewards) ===
 Successfully defeating the last floor of a dungeon rewards with a currently unknown amount of Exp, Gold and Orns. An additional selection of randomly selected materials is awarded to the player.
 Finally, the game rolls in the End-of-Dugeon (EoD) item pool for rewards. This pool includes all quest (including event ones) rewards. It also includes a blank space, meaning that there is a chance to not gain an item for each roll. This blank space is notably used when new items are added to the pool to avoid chipping the drop chance of already existing items.
@@ -526,7 +428,7 @@ The process is as follows (repeated for each EoD roll):
 - If, however, the player has not completed the quest, the item is not awarded and the player does not receive the quest item.
 Warning
 This means that the odds of receiving a specific item do not depend on how many quests were completed. Holding off from completing quests does not improve the odds of a particular item from a completed quest to appear. It's quite the opposite: it sometimes prevents you from receiving a reward at the end of your dungeon!
-The quality of the item follows the same rules as other items. The only way of increasing the quality is to run Hard dungeons , Exploration Dungeons or Monuments, all of which guarantee that the items will be of Superior or higher quality. No other factor plays in how the game selects the quality. If the Dungeon was not an Exploration Dungeon or Monument nor run as Hard, the items may be of any quality (including Poor and Broken).
+The quality of the item follows the same rules as other items. The only way of increasing the quality is to run Hard dungeons or Monuments, all of which guarantee that the items will be of Superior or higher quality. No other factor plays in how the game selects the quality.
 The number of item rolls given depends on the dungeon that was run.
 Dungeon | # of rolls | Superior+
 Regular Battle Dungeon | 2 | If Hard mode
@@ -536,9 +438,7 @@ Chaos Portal | 4 | If Hard mode
 Battlegrounds | 4 | If Hard mode
 Underworld Portal | 4 | If Hard mode
 Valley of the Gods | 4 | If Hard mode
-Exploration Dungeon | 5 | Yes
 Monument | 2 | Yes
-The increased number of items awarded by Exploration Dungeons as well as their increased quality make Exploration Dungeons a very lucrative farm for End-of-Dungeon items. They have low [Skeleton Keys] key cost (especially compared to Hard Dungeons) meaning the EoD item per key ratio is very high. Bands of Gods of high quality can be most easily farmed in Exploration Dungeons.
 Any dungeon can reward with any item whose quest has been completed, no matter the tier. There are reports of players receiving a T9 Band of Gods from low-tier Dungeons.
 
 === Raids (https://book.cadelabs.ovh/Raids.html) ===
@@ -600,7 +500,7 @@ Can they spawn raids of a tier higher than you?
 - From your Citadel (up to 3 Summoning Scrolls at once)
 - From the Runeshop Daily Gift
 - As a reward in the Archpath
-- From a Guild Shop (except Circle of Anguish) Blade of Finesse: 50 [Proof Sparring] Proofs of Sparring Conqueror: 15 [Proof Crownship] Proofs of Crownship Fishing: 500 [Coral] Corals Monumental: 30 [Proof Monument] Proofs of Monument Oracle Temple: 50 [Proof Remembrance] Proofs of Remembrance Spelunking: 250 [Deepshard] Refined Deepshards Titanfelled: 5000 [Tower Shard] Tower Shards Traveler: 8 [Proof Distance] Proofs of Distance
+- From a Guild Shop (except Circle of Anguish) Blade of Finesse: 50 [Proof Sparring] Proofs of Sparring Conqueror: 15 [Proof Crownship] Proofs of Crownship Fishing: 500 [Coral] Corals Monumental: 30 [Proof Monument] Proofs of Monument Oracle Temple: 50 [Proof Remembrance] Proofs of Remembrance Titanfelled: 5000 [Tower Shard] Tower Shards Traveler: 8 [Proof Distance] Proofs of Distance
 ## World Raids > Farming
 If targetting only [Summoning Scroll] Summoning Scrolls, the fastest way would be running [Underworld Portal] Underworld Portals or [Chaos Portal] Chaos Portals. Otherwise, running regular dungeons, the preferred tiers are T9, then T10, then T8 and finally T7.
 The introduction of guilds has given rise to more ways of farming Summoning Scrolls passively while taking on other activities. The most notable ones are the Titanfelled and Monumental guilds. Both these guilds allow for farming their currency to buy Summoning Scrolls while granting a chance at earning them while farming the currency.
@@ -912,7 +812,7 @@ Anguish 2.0 is the second iteration of Orna's Anguish Guild. It spent multiple m
 The Circle of Anguish is a Passive Guild that aims at giving players an end-game challenge and combatting the power creep the Ascension mechanism introduced. Pledging allegiance to the Circle of Anguish allows players to buff enemies and inflict themselves with negative battle modifiers in order to diversify and increase their battle rewards.
 The Circle of Anguish has 4 different "Paths", each with its dedicated Proof currency and affecting a distinct subset of activities in Orna:
 - The Path of Despair: Affects encounters found in the overworld (both Monsters and Bosses) and Fishing encounters.
-- The Path of Melancholy: Affects encounters found in both Battle and Exploration Dungeons.
+- The Path of Melancholy: Affects encounters found in Battle Dungeons.
 - The Path of Agony: Affects World Raids and Super Raids .
 - The Path of Torment: Affects Towers of Olympia (including their Titan Boss at the top) and Monuments.
 Each of these Paths is controlled independently: their levels, rewards, modifiers, ... can be adjusted for one content without affecting the other content. This also means that increasing a Path's maximum level has no influence on other Path's levels
@@ -1000,7 +900,7 @@ The Circle of Anguish has 4 different Proofs, one for each Path:
 - [Proof Torment] Proof of Torment (Towers and Monuments)
 Proofs are awarded when completing content for their given Path. The odds of receiving a Proof is displayed at the Circle of Anguish Guild.
 - [Proof Despair] Path of Despair: A Proof may drop upon killing a Monster, Boss or Fishing Encounter of the player's Tier on the overworld.
-- [Proof Melancholy] Path of Melancholy: A Proof may drop upon killing a Monster or Boss of the player's Tier in a Battle Dungeon or an Exploration Dungeon.
+- [Proof Melancholy] Path of Melancholy: A Proof may drop upon killing a Monster or Boss of the player's Tier in a Battle Dungeon.
 - [Proof Agony] Path of Agony: A Proof is guaranteed to drop upon winning a battle against a Raid. More Proofs may drop in the Raid Rewards screen. These Proofs are not locked behind any Tier restriction (e.g.: a T10 player can get Proofs from a T6 Raid).
 - [Proof Torment] Path of Torment: A Proof may drop upon killing a Monster or Boss of the player's Tier in a Tower or a Monument.
 In Horde content, the Proof drop rolls for each eligible enemy. In the last floor of a Horde Battle Dungeon, it is possible to drop up to 5 [Proof Melancholy] Proofs of Melancholy.
