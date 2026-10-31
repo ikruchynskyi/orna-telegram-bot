@@ -30,6 +30,7 @@ class ModelUsageTests(unittest.IsolatedAsyncioTestCase):
             (ollama_client, "_cloud_down_until", 0.0),
             (ollama_client, "_quota_out_until", {}),       # a used-up model must not leak between tests
             (ollama_client, "CLOUD_FALLBACK_MODELS", []),  # just the caller's model unless a test says otherwise
+            (ollama_client, "CLOUD_RESCUE_MODEL", ""),     # no second free model unless a test says otherwise
         ):
             p = patch.object(module, name, value)
             p.start()

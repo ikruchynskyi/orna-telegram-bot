@@ -4838,6 +4838,10 @@ async def _advance(sid: str, message, with_status: bool = True) -> None:
         # after a `next` card inherited it, so the follow-up's real answer was
         # dropped as "the card answers it" (and the hint edit hit "not modified").
         session.posted_note, session.last_post, session.pushed_for_leak = "", None, False
+        # The step-model budgets are per TURN. Kept across a conversation's turns, the local count reached
+        # LOCAL_MAX_STEPS on turn 4 at step 4 (2026-10-31) and _close_out answered in English; the cloud
+        # count would send every step of a long conversation local after 20 calls.
+        session.cloud_calls = session.local_steps = 0
     if with_status:  # inline mode's sink has no messages to reply to
         message = _ConversationRecorder(message, sid)
     try:

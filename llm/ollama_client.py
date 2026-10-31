@@ -105,6 +105,11 @@ def shrink_for_local(messages: list[dict], limit: int = LOCAL_MAX_MSG_CHARS) -> 
             m = {**m, "content": c[:limit] + f"\n[... {len(c) - limit} more characters cut for the local model]"}
         out.append(m)
     return out
+# A second FREE cloud model, tried once when the caller's model is up but its reply is unusable (empty, prose
+# after the nudge) or slow - before the local model, which takes minutes a step. Never on a quota error (that's
+# CLOUD_FALLBACK_MODELS) or an outage (that parks the cloud). Live 2026-10-31: nemotron-3-super answered a
+# Ukrainian conversation's steps with empty content, each went local at ~45 s, and the request wrapped up early.
+CLOUD_RESCUE_MODEL = os.environ.get("OLLAMA_CLOUD_RESCUE_MODEL", "gemma4:31b").strip()
 CLOUD_FALLBACK_MODELS = [m.strip() for m in os.environ.get("OLLAMA_CLOUD_FALLBACK_MODELS", "").split(",") if m.strip()]
 QUOTA_RECHECK_SECONDS = 1800
 _quota_out_until: dict[str, float] = {}
@@ -463,6 +468,12 @@ async def chat_json_with_fallback(cloud_model: str, local_host: str, local_model
                 _cloud_down_until = time.monotonic() + CLOUD_COOLDOWN_SECONDS
                 logger.warning("ollama_client: Ollama Cloud unreachable (%s), skipping it for %ds",
                                e, CLOUD_COOLDOWN_SECONDS)
+            elif CLOUD_RESCUE_MODEL and CLOUD_RESCUE_MODEL != model:
+                logger.warning("ollama_client: %s busy, slow or unusable (%s), trying %s", model, e, CLOUD_RESCUE_MODEL)
+                try:
+                    return await _cloud_leg(cloud_host, CLOUD_RESCUE_MODEL, messages, cloud_headers, timeout, tools, json_nudge)
+                except OllamaError as e2:
+                    logger.warning("ollama_client: %s failed too (%s), local for this call", CLOUD_RESCUE_MODEL, e2)
             elif isinstance(e, (OllamaBusy, OllamaSlow)):
                 logger.warning("ollama_client: Ollama Cloud busy or slow (%s), local for this call only", e)
             else:
@@ -515,7 +526,8 @@ async def _local_leg(local_host: str, local_model: str, messages: list[dict],
 def _demo_cloud_limits() -> None:
     """The concurrency cap and the 429 retry, through the real chat_json
     against an in-process fake server (httpx.MockTransport)."""
-    global _cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS
+    global _cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS, CLOUD_RESCUE_MODEL
+    saved_rescue, CLOUD_RESCUE_MODEL = CLOUD_RESCUE_MODEL, ""
     import asyncio as _aio
     real_client, saved = httpx.AsyncClient, (_cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS)
     replies: list = []
@@ -586,6 +598,12 @@ def _demo_cloud_limits() -> None:
         finally:
             CLOUD_FALLBACK_MODELS = saved_chain
             _quota_out_until.clear()
+        # the rescue model: an unusable reply (prose twice) from the free model -> the second free model, not local
+        CLOUD_RESCUE_MODEL = "rescue"
+        models.clear(); replies[:] = ["prose", "prose", 200]
+        out = _aio.run(chat_json_with_fallback("free", "http://local", "lm", [{"role": "user", "content": "x"}]))
+        assert out == {"ok": 1} and models == ["free", "free", "rescue"], models
+        CLOUD_RESCUE_MODEL = ""
         _cloud_slots = threading.BoundedSemaphore(1)
         _cloud_slots.acquire()                          # every slot taken
         try:
@@ -596,6 +614,7 @@ def _demo_cloud_limits() -> None:
     finally:
         httpx.AsyncClient = real_client
         _cloud_slots, _BUSY_RETRY_DELAYS, _SLOT_WAIT_SECONDS = saved
+        CLOUD_RESCUE_MODEL = saved_rescue
 
 
 def _demo() -> None:
