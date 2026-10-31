@@ -622,7 +622,9 @@ class Expect:
 
     def grade(self, transcript: str, final: str, tools: list) -> str:
         """Empty string = pass, else the first reason it failed."""
-        hay, fin = transcript.lower(), final.lower()
+        # models write "Tier\u202f7" / "7\u00a0magic" (narrow / no-break spaces): a plain-space needle must match
+        norm = lambda t: re.sub(r"[\u00a0\u2007\u202f\u2009]", " ", t).lower()
+        hay, fin = norm(transcript), norm(final)
         for needle in self.all_of:
             if needle.lower() not in hay:
                 return f"transcript missing {needle!r}"

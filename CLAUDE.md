@@ -84,13 +84,21 @@ Data sources (each = reader module + cache or committed file + scraper):
 
 ## `/orna` loop - what you need to know to change it
 
-- One action per step, JSON `{thought, action, action_input, args}`. `_ACTIONS` is the single
+- One action per step, JSON `{thought, action, action_input, args}` - or `parallel` with up to `_PARALLEL_MAX`
+  independent `_PARALLEL_OK` calls run together (several native tool calls in one reply become one). `_ACTIONS` is the single
   list feeding both the prompt's action enum and `_STEP_TOOLS` (native tools declaration -
   required, or gpt-oss emits undeclared tool calls → Ollama 500s).
 - Budget: `MAX_STEPS`, `LOOP_TIMEOUT_SECONDS`; running out SUMMARISES via `_close_out`, never blank.
 - English inside the loop; translation gates at input (`build_loop_messages`) and output.
   Proper nouns (items, classes) are never translated.
-- Complex requests (`_looks_complex_request`) get a separate PLAN call and a REVIEW call before posting.
+- Every request gets a PLAN call (gemma4) and a REVIEW call before posting; REVIEW runs on `REVIEW_MODEL`,
+  never the step model (it graded its own drafts).
+- Context: `_compact` sends the last `_KEEP_FULL_RESULTS` tool results whole and cuts older long ones (the
+  repeat cache returns the full text); `_working_state` is appended to every step.
+- Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the
+  undated corpora. Removed game content is scrubbed from the corpora by `scrapers/removed_content.py`.
+- Continuity: a reply to a message an /orna conversation sent continues it (`_ConversationRecorder`,
+  `_ReplyToOrnaFilter`); sessions live 60 min; `/me` profiles (`data/state/orna_profiles.json`) ride along.
 - `_confidence_gate` clamps self-reported confidence by actual evidence.
 - Chat output: browse tools (`open_entry`, `search_codex`, `query`, `research`) post NOTHING,
   they record entries; `finish()` auto-posts ≤2 cards. Computed results (assess, estimate_stats,

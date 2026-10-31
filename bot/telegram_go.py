@@ -147,6 +147,9 @@ _RULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$\n?", re.M)  # "---"
 _TABLE_MAX_WIDTH = 38
 # Telegram refuses a message over 4096 characters; long answers go out as several, split at paragraphs.
 _MAX_MESSAGE = 4000
+# Citation marks a model copies from its training ("【4†L1-L4】") or from the tool-result numbering
+# ("([knowledge search #1])"): meaningless to a reader. The sources have their own button.
+_CITE_RE = re.compile(r"\s*【[^】]{0,40}】|\s*\(?\[(?:knowledge[ _]search|tool result|result|source)\s*#\d+\]\)?", re.I)
 # After html.escape, so ">" is "&gt;". A run of "> " lines becomes ONE quote;
 # a long one is Telegram's collapsible quote, so detail does not flood a chat.
 _QUOTE_RE = re.compile(r"(?:^&gt;[ \t]?.*(?:\n|$))+", re.M)
@@ -229,6 +232,7 @@ def _markdown_to_html(text: str) -> str:
     first and only then gets its tags added back in, so a literal "<"/"&"
     the model wrote never gets mistaken for one of ours.
     """
+    text = _CITE_RE.sub("", text)
     stash: list[str] = []
 
     def _keep(snippet: str) -> str:
@@ -1352,6 +1356,8 @@ def _demo() -> None:
     assert _markdown_to_html("[Orna](https://playorna.com)") == '<a href="https://playorna.com">Orna</a>'
     assert _markdown_to_html("<3 & you") == "&lt;3 &amp; you"  # literal HTML-special chars survive as text, not tags
 
+    assert _markdown_to_html("Luck is a % bonus 【4†L1-L4】【5†L1-L4】. Source ([knowledge search #1]).") == \
+        "Luck is a % bonus. Source."
     # "---" rules go; nested items keep their indent
     assert _markdown_to_html("a\n\n---\n\nb") == "a\n\nb"
     assert _markdown_to_html("- one\n   - sub\n1. first\n   2. sub") == "• one\n    ◦ sub\n1. first\n    2. sub"

@@ -3833,6 +3833,26 @@ def _forced_evidence_note(session) -> Optional[str]:
             "column names. Never report the length of a capped list as a total.")
 
 
+# A quality the user named ("godforged", "masterforged 180%", "ornate"): a bonus or stat at that quality is
+# what assess computes - a codex page shows the UNSCALED base (Lost Helmet +5% orn; godforged +57.5%).
+# Measured 2026-10-31: godforged-orn answered from the base value without assess in 1 of 2 runs, twice.
+_QUALITY_RE = re.compile(r"\b(godforged|demonforged|masterforged|ornate|famed|legendary|superior|\d{2,3}\s?%)",
+                         re.I)
+
+
+def _quality_needs_assess(session) -> Optional[str]:
+    """Sent back ONCE: the request names an item quality and no assess call was made."""
+    if getattr(session, "pushed_for_assess", False) or not _QUALITY_RE.search(session.original_request or ""):
+        return None
+    called = {json.loads(k)[0] for k in session.seen_calls}
+    if "assess" in called or "compare" in called or "build_optimize" in called or "estimate_stats" in called:
+        return None
+    session.pushed_for_assess = True
+    return ("The user named an item QUALITY, and no assess call was made. A codex value is the UNSCALED base; "
+            "at that quality it is different. Call assess for each named item at that quality (several items: "
+            "one parallel step), then finish from its numbers.")
+
+
 # Tools whose posted output IS the whole answer to a "show me" question: the
 # monuments chart, the guild-shop schedule (today/next), the tower floors.
 _LISTING_TOOLS = {"monuments", "today", "next", "towers"}
@@ -4557,6 +4577,7 @@ class OrnaSession:
     # One-shot: a count/aggregation question that tried to finish with no tool
     # call at all has been sent back once already. See _forced_evidence_note.
     pushed_for_evidence: bool = False
+    pushed_for_assess: bool = False
     # Set by a tool that POSTED its own deliverable to the chat (the monuments
     # chart). REVIEW is told, or it demands the list the user already has -
     # live 2026-10-05 that made the model paste the raw observation as its answer.
@@ -5203,7 +5224,7 @@ async def _advance_inner(sid: str, message) -> None:
                                 if session.posted_note else ""))})
                 continue
 
-            evidence_note = _forced_evidence_note(session)
+            evidence_note = _forced_evidence_note(session) or _quality_needs_assess(session)
             if evidence_note:
                 logger.info("orna: forcing evidence for aggregation ask sid=%s", sid)
                 session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
