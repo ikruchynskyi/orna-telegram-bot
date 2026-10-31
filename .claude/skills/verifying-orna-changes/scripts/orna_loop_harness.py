@@ -63,6 +63,10 @@ if not os.environ.get("SHEETS_API_KEY"):
     sys.exit("SHEETS_API_KEY is not set - run `set -a && source .env && set +a` first "
              "(it is read at import time by orna_sheets, so the module won't even load without it).")
 
+# Pinecone's free plan caps egress; opt in with PINECONE=1 (see the test suite).
+if os.environ.get("PINECONE") != "1":
+    os.environ.pop("PINECONE_API_KEY", None)
+
 from bot import telegram_orna as T  # noqa: E402  (import after sys.path/env setup)
 
 if os.environ.get("FORCE_LOCAL") == "1":

@@ -160,9 +160,11 @@ Data sources (each = reader module + cache or committed file + scraper):
 ## Verifying
 
 - `python3 tests/orna_test_suite.py` - tier 0, no LLM, must be 100%. Runs every module's `_demo()`, plus the
-  retrieval benchmark (`_RETRIEVAL_CASES`, needs Pinecone: 12/13 on 2026-10-06) - the number to watch
+  retrieval benchmark (`_RETRIEVAL_CASES`, needs `PINECONE=1`: 12/13 on 2026-10-06) - the number to watch
   when changing chunking, `MIN_SCORE`, top-k or `_SOURCE_NOTES`.
   Full gate: `TIER=0,1,2,3 N=3 python3 tests/orna_test_suite.py`.
+- Suite and harness run with Pinecone OFF (keyword index only) - free plan egress is 1 GB/month.
+  `PINECONE=1` opts in; use it only when changing retrieval, with `N=1`.
 - Pure logic you add gets an `assert`-based `_demo()` in its module.
 - End-to-end: `Q="..." N=5 python3 .claude/skills/verifying-orna-changes/scripts/orna_loop_harness.py`
   (`FORCE_LOCAL=1` for local only). Env: `set -a && source .env && set +a`.

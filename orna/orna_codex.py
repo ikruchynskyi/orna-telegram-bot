@@ -18,6 +18,7 @@ telegram_orna.py's generic browse-and-render UI.
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from dataclasses import dataclass
@@ -345,22 +346,75 @@ def _is_item_detail_href(href: str) -> bool:
     return bool(rest) and "/" not in rest
 
 
+def select_best_codex_entry(results: list, query: str) -> dict:
+    """Pick the closest codex result to `query`.
+
+    PlayOrna's search often returns prefixed variants first (e.g. 'Forest Goat's Hood'
+    before 'Goat's Hood'). Blindly taking results[0] yields the wrong item.
+    This prioritizes:
+      1. Exact match (case-insensitive)
+      2. Punctuation-normalized exact match
+      3. Highest similarity score with penalties for unexpected extra words
+    """
+    if not results:
+        return {}
+    if len(results) == 1:
+        return results[0]
+
+    q = query.strip().lower()
+
+    # 1. Exact match
+    for r in results:
+        name = (r.get("name") or "").strip().lower()
+        if name == q:
+            return r
+
+    # 2. Punctuation-stripped match (e.g. apostrophes, hyphens)
+    q_norm = re.sub(r"[^\w\s]", "", q)
+    for r in results:
+        name_norm = re.sub(r"[^\w\s]", "", (r.get("name") or "").strip().lower())
+        if name_norm == q_norm:
+            return r
+
+    # 3. Similarity score with penalty for extra words not in the query
+    q_words = set(q_norm.split())
+    def _score(r):
+        name = (r.get("name") or "").strip().lower()
+        if not name:
+            return -1.0
+        name_norm = re.sub(r"[^\w\s]", "", name)
+        ratio = difflib.SequenceMatcher(None, q, name).ratio()
+        n_words = set(name_norm.split())
+        extra = len(n_words - q_words)
+        missing = len(q_words - n_words)
+        return ratio - (0.15 * extra) - (0.2 * missing)
+
+    return max(results, key=_score)
+
+
 @lru_cache(maxsize=512)
 def search_first_url(name: str, lang: str = "en") -> Optional[str]:
-    """Search the codex; return the absolute URL of the first item hit, or None."""
+    """Search the codex; return the absolute URL of the best matching item hit, or None."""
     params = {"q": name}
     if lang and lang != "en":
         params["lang"] = lang
     html = _http_get(SEARCH_URL, params=params)
     soup = BeautifulSoup(html, "html.parser")
 
+    candidates = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if any(tok in href for tok in _SKIP_QUERY_TOKENS):
             continue
         if _is_item_detail_href(href):
-            return urljoin(CODEX_BASE, href)
-    return None
+            text = a.get_text(strip=True)
+            text = re.sub(r"★\s*\d+", "", text).strip()
+            candidates.append({"name": text, "url": urljoin(CODEX_BASE, href)})
+
+    if not candidates:
+        return None
+    best = select_best_codex_entry(candidates, name)
+    return best.get("url")
 
 
 # -----------------------------------------------------------------------------

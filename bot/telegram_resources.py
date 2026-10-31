@@ -58,6 +58,8 @@ from orna.orna_codex import fetch_material_meta
 from orna.orna_proofs import GUILD_PROOFS, base_exchange_rate, proofs_needed
 from orna.orna_sheets import GUILD_NAMES, fetch_sheet_data
 from llm.telegram_nlp import OllamaError, extract_quantities, extract_resources
+from bot.telegram_announce import (is_admin_user, is_channel_chat, is_channel_update,
+                                   is_public_chat, is_public_update, notify_admins_of_error)
 from bot.telegram_remind import request_utc_offset, schedule_reminder, utc_offset_to_fire_at
 from bot import usage_stats
 
@@ -140,22 +142,28 @@ def _next_occurrence(date_str: str, today: datetime.date) -> Optional[datetime.d
 
 async def _start_flow(message, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
     """Shared entry logic for both the free-text handler and /need."""
+    in_public = is_public_chat(getattr(message, "chat", None))
+
     try:
         sheet_values = await fetch_sheet_data()
     except Exception as e:
         logger.exception("Failed to fetch sheet data for resource request")
-        await message.reply_text(f"Не вдалося отримати дані: {e}")
+        await notify_admins_of_error(context.bot, e, context_info="Resource request sheets fetch")
+        if not in_public and is_admin_user(getattr(message, "from_user", None)):
+            await message.reply_text(f"Не вдалося отримати дані: {e}")
         return ConversationHandler.END
 
     known = [row[0] for row in sheet_values if row]
 
     try:
         resources = await extract_resources(text, known)
-    except OllamaError:
+    except OllamaError as e:
         logger.exception("Ollama unreachable while extracting resources")
-        await message.reply_text(
-            "Не вдалося обробити запит: локальна модель (Ollama) недоступна."
-        )
+        await notify_admins_of_error(context.bot, e, context_info="Ollama unreachable while extracting resources")
+        if not in_public and is_admin_user(getattr(message, "from_user", None)):
+            await message.reply_text(
+                "Не вдалося обробити запит: локальна модель (Ollama) недоступна."
+            )
         return ConversationHandler.END
 
     if not resources:
@@ -177,6 +185,9 @@ async def _start_flow(message, context: ContextTypes.DEFAULT_TYPE, text: str) ->
 
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Free-text resource matching must only run in private DMs to avoid noise and Ollama timeouts in groups/channels.
+    if is_public_update(update):
+        return ConversationHandler.END
     message = update.effective_message
     text = (message.text or "").strip()
     if not text:
@@ -206,11 +217,14 @@ async def handle_quantities(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     try:
         new_qtys = await extract_quantities(text, pending_resources)
-    except OllamaError:
+    except OllamaError as e:
         logger.exception("Ollama unreachable while extracting quantities")
-        await message.reply_text(
-            "Не вдалося обробити відповідь: локальна модель (Ollama) недоступна. Спробуйте ще раз."
-        )
+        await notify_admins_of_error(context.bot, e, update, context_info="Ollama unreachable while extracting quantities")
+        in_public = is_public_chat(getattr(message, "chat", None))
+        if not in_public and is_admin_user(getattr(message, "from_user", None)):
+            await message.reply_text(
+                "Не вдалося обробити відповідь: локальна модель (Ollama) недоступна. Спробуйте ще раз."
+            )
         return AWAITING_QUANTITIES
 
     if not new_qtys:
@@ -474,7 +488,7 @@ def _bundle_label(bundle: ReminderBundle) -> str:
 
 
 async def _finish_bundle_schedule(app, chat_id: int, message_id: int, key: str, idx: int, utc_offset: float,
-                                   notify: bool = False) -> None:
+                                   notify: bool = False, mention: str = "") -> None:
     """Actually schedule bundle `idx`'s reminder and remove its button -
     split out from handle_reminder_button so the deferred path (user
     didn't have a saved UTC offset yet, see request_utc_offset below) can
@@ -489,7 +503,7 @@ async def _finish_bundle_schedule(app, chat_id: int, message_id: int, key: str, 
         return
     bundles: List[ReminderBundle] = state["bundles"]
     bundle = bundles[idx]
-    schedule_reminder(app, chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence, utc_offset))
+    schedule_reminder(app, chat_id, _bundle_text(bundle), _bundle_fire_at(bundle.occurrence, utc_offset), mention)
     state["scheduled"].add(idx)
 
     # Remove the tapped button rather than leaving it there - there's no
@@ -508,7 +522,8 @@ async def _finish_bundle_schedule(app, chat_id: int, message_id: int, key: str, 
     except TelegramError:
         pass  # e.g. "message not modified" on a double-tap race - harmless
     if notify:
-        await app.bot.send_message(chat_id, "✅ Нагадування встановлено!")
+        await app.bot.send_message(chat_id, f"{mention + ', ' if mention else ''}✅ нагадування встановлено!",
+                                   parse_mode="HTML")
 
 
 async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -534,6 +549,7 @@ async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_T
     message_id = query.message.message_id
     tg_user = update.effective_user
     user_id = tg_user.id if tg_user else chat_id
+    mention = tg_user.mention_html() if tg_user else ""
 
     # The fire time is a specific clock time (00:05 on the occurrence
     # date) - genuinely timezone-dependent, same as /remind's own HH:MM
@@ -543,12 +559,12 @@ async def handle_reminder_button(update: Update, context: ContextTypes.DEFAULT_T
     offset = usage_stats.get_user_tz(user_id)
     if offset is None:
         async def _on_offset(offset: float) -> None:
-            await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset, notify=True)
+            await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset, notify=True, mention=mention)
 
-        await request_utc_offset(query.message, user_id, _on_offset)
+        await request_utc_offset(query.message, user_id, _on_offset, mention)
         return
 
-    await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset)
+    await _finish_bundle_schedule(app, chat_id, message_id, key, idx, offset, mention=mention)
     await query.answer("✅ Нагадування встановлено!")
 
 
@@ -566,7 +582,7 @@ async def cancel_resource_request(update: Update, context: ContextTypes.DEFAULT_
 
 async def resource_request_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(_PENDING_KEY, None)
-    if update and update.effective_message:
+    if update and update.effective_message and not is_public_update(update):
         await update.effective_message.reply_text(
             "Час очікування вичерпано. Напишіть потрібні ресурси ще раз."
         )
@@ -582,7 +598,7 @@ def build_resource_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("need", handle_need_command),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text),
+            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_free_text),
         ],
         states={
             AWAITING_QUANTITIES: [

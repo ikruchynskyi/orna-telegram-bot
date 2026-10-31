@@ -89,6 +89,10 @@ if not os.environ.get("SHEETS_API_KEY"):
 # Must be set BEFORE importing the bot: ollama_client reads them at import.
 os.environ.setdefault("ORNA_LLM_TEMPERATURE", "0")
 os.environ.setdefault("ORNA_LLM_SEED", "20260925")
+# Pinecone's free plan caps egress at 1 GB/month and a full run eats ~10% of it.
+# Off by default (retrieval falls back to the keyword index); PINECONE=1 opts in.
+if os.environ.get("PINECONE") != "1":
+    os.environ.pop("PINECONE_API_KEY", None)
 
 from orna import orna_assess                      # noqa: E402
 from knowledge import orna_echo                        # noqa: E402
@@ -363,7 +367,7 @@ _RETRIEVAL_MEDIAN_MAX = 20000
 
 def _check_retrieval_benchmark() -> None:
     if not T.orna_pinecone.enabled():
-        print("  (skipped: PINECONE_API_KEY not set)")
+        print("  (skipped: Pinecone off - PINECONE=1 to run it)")
         return
     hits, sizes, missed = 0, [], []
     for question, facts in _RETRIEVAL_CASES:
@@ -439,6 +443,126 @@ def _check_ban_guard() -> None:
             usage_stats._banned.update(real_banned)
 
 
+def _check_channel_error_guard() -> None:
+    import asyncio
+    import telegram_bot
+    from bot import telegram_announce
+    from telegram.constants import ChatType
+    from telegram.ext import ConversationHandler
+
+    class _Chat:
+        def __init__(self, cid, ctype, title="test"):
+            self.id, self.type, self.title = cid, ctype, title
+
+    class _Msg:
+        def __init__(self, chat, text=""):
+            self.chat, self.text = chat, text
+            self.replies = []
+        async def reply_text(self, text, **kw):
+            self.replies.append(text)
+
+    class _Up:
+        def __init__(self, chat=None, cp=None, user=None, msg=None):
+            self.effective_chat = chat or (getattr(cp, "chat", None) if cp else None)
+            self.channel_post = cp
+            self.edited_channel_post = None
+            self.effective_user = user
+            self.effective_message = msg or cp or (_Msg(chat, "msg") if chat else None)
+
+    ch_chat = _Chat(-100999, ChatType.CHANNEL, "Announcements")
+    grp_chat = _Chat(-100888, ChatType.SUPERGROUP, "Guild Chat")
+    dm_chat = _Chat(12345, ChatType.PRIVATE, "DM")
+
+    assert telegram_announce.is_channel_chat(ch_chat) is True
+    assert telegram_announce.is_channel_chat(grp_chat) is False
+    assert telegram_announce.is_channel_chat(dm_chat) is False
+
+    assert telegram_announce.is_public_chat(ch_chat) is True
+    assert telegram_announce.is_public_chat(grp_chat) is True
+    assert telegram_announce.is_public_chat(dm_chat) is False
+    assert telegram_announce.is_private_chat(dm_chat) is True
+    assert telegram_announce.is_private_chat(grp_chat) is False
+
+    assert telegram_announce.is_public_update(_Up(chat=ch_chat)) is True
+    assert telegram_announce.is_public_update(_Up(cp=_Msg(ch_chat, "hello"))) is True
+    assert telegram_announce.is_public_update(_Up(chat=grp_chat)) is True
+    assert telegram_announce.is_public_update(_Up(chat=dm_chat)) is False
+
+    # Free text handler must immediately drop messages from public groups/channels
+    from bot import telegram_resources
+    up_free_grp = _Up(chat=grp_chat, msg=_Msg(grp_chat, "adamantine please"))
+    res = asyncio.run(telegram_resources.handle_free_text(up_free_grp, None))
+    assert res == ConversationHandler.END, "handle_free_text must stay silent in public chats"
+
+    # _on_error: public groups and channels never get error replies; errors go to admin only
+    class _FakeBot:
+        def __init__(self):
+            self.sent = []
+        async def send_message(self, chat_id, text, **kw):
+            self.sent.append((chat_id, text))
+
+    fake_bot = _FakeBot()
+    class _Context:
+        def __init__(self, bot, err):
+            self.bot = bot
+            self.error = err
+
+    class _AdminUser:
+        def __init__(self, uid):
+            self.id, self.full_name, self.username = uid, "Admin", "admin"
+
+    class _RegularUser:
+        def __init__(self, uid):
+            self.id, self.full_name, self.username = uid, "Player", "player"
+
+    saved_admins = telegram_bot.GO_ALLOWED_USER_IDS
+    telegram_bot.GO_ALLOWED_USER_IDS = {777000}
+    telegram_announce.GO_ALLOWED_USER_IDS = {777000}
+    try:
+        # Case A: Error on a channel post -> channel message gets 0 replies, admin gets DM
+        ch_msg = _Msg(ch_chat, "broken channel post")
+        up_ch_err = _Up(chat=ch_chat, cp=ch_msg)
+        ctx = _Context(fake_bot, RuntimeError("channel glitch"))
+        asyncio.run(telegram_bot._on_error(up_ch_err, ctx))
+        assert len(ch_msg.replies) == 0, "Bot must NEVER reply error messages to channels"
+        assert len(fake_bot.sent) == 1, "Admin must be notified of error"
+        assert fake_bot.sent[0][0] == 777000
+        assert "RuntimeError: channel glitch" in fake_bot.sent[0][1]
+
+        # Case B: Error on non-admin user in a group -> group message gets 0 replies, admin gets DM
+        fake_bot.sent.clear()
+        reg_msg = _Msg(grp_chat, "user query")
+        up_reg_err = _Up(chat=grp_chat, user=_RegularUser(111222), msg=reg_msg)
+        ctx = _Context(fake_bot, ValueError("user glitch"))
+        asyncio.run(telegram_bot._on_error(up_reg_err, ctx))
+        assert len(reg_msg.replies) == 0, "Non-admin must not receive error message"
+        assert len(fake_bot.sent) == 1, "Admin must be notified of non-admin error"
+        assert fake_bot.sent[0][0] == 777000
+        assert "ValueError: user glitch" in fake_bot.sent[0][1]
+
+        # Case C: Error on admin user in a public group -> group message gets 0 replies (NEVER errors in group), admin gets DM
+        fake_bot.sent.clear()
+        adm_grp_msg = _Msg(grp_chat, "/go do something")
+        up_adm_grp_err = _Up(chat=grp_chat, user=_AdminUser(777000), msg=adm_grp_msg)
+        ctx = _Context(fake_bot, KeyError("admin group glitch"))
+        asyncio.run(telegram_bot._on_error(up_adm_grp_err, ctx))
+        assert len(adm_grp_msg.replies) == 0, "Public groups must NEVER receive error messages even from admins"
+        assert len(fake_bot.sent) == 1, "Admin gets notification"
+        assert fake_bot.sent[0][0] == 777000
+
+        # Case D: Error on admin user in a private DM -> admin gets reply in DM + notification
+        fake_bot.sent.clear()
+        adm_dm_msg = _Msg(dm_chat, "/go do something")
+        up_adm_dm_err = _Up(chat=dm_chat, user=_AdminUser(777000), msg=adm_dm_msg)
+        ctx = _Context(fake_bot, KeyError("admin dm glitch"))
+        asyncio.run(telegram_bot._on_error(up_adm_dm_err, ctx))
+        assert len(adm_dm_msg.replies) == 1, "Admin user gets error reply in private DM"
+        assert len(fake_bot.sent) == 1, "Admin also gets notification"
+    finally:
+        telegram_bot.GO_ALLOWED_USER_IDS = saved_admins
+        telegram_announce.GO_ALLOWED_USER_IDS = saved_admins
+
+
 TIER0 = [
     ("module-demos", _run_module_demos),
     ("useable-by-absent-field", _check_useable_by_absent_field),
@@ -465,6 +589,7 @@ TIER0 = [
     ("model-usage-unit", _check_model_usage_unit),
     ("log-rotation", lambda: __import__("importlib").import_module("bot.log_rotation")._demo()),
     ("ban-guard", _check_ban_guard),
+    ("channel-error-guard", _check_channel_error_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
 ]
 

@@ -30,6 +30,7 @@ buttons - never ask again.
 from __future__ import annotations
 
 import paths
+import html
 import json
 import logging
 import re
@@ -77,7 +78,9 @@ _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)\s+(.+)$", re.DOTALL)
 # for every other chat it is a guaranteed no-op that falls straight through.
 _PENDING_TZ: dict = {}  # pending_id -> {"user_id", "chat_id", "on_offset", "candidate"} - in-memory, like _REMINDER_STATE
 _PENDING_TZ_MAX = 200
-_PENDING_TZ_INPUT: dict = {}  # chat_id -> (pending_id, expires_monotonic)
+# Keyed by (chat_id, user_id): in a group, only the person asked may answer -
+# keyed by chat alone, every member's message was read as a timezone.
+_PENDING_TZ_INPUT: dict = {}  # (chat_id, user_id) -> (pending_id, expires_monotonic)
 TZ_INPUT_TTL_SECONDS = 600
 
 # "+3", "-5", "3", "utc+3", "UTC +5:30", "+5.5" - the deterministic path,
@@ -141,8 +144,12 @@ class _PendingTzInputFilter(filters.MessageFilter):
     """Matches only a chat with a live timezone ask - see _PENDING_TZ_INPUT."""
 
     def filter(self, message) -> bool:
-        pending = _PENDING_TZ_INPUT.get(message.chat_id)
+        pending = _PENDING_TZ_INPUT.get(_tz_key(message))
         return bool(pending and time.monotonic() < pending[1])
+
+
+def _tz_key(message) -> tuple:
+    return message.chat_id, getattr(message.from_user, "id", None)
 
 
 _pending_tz_input_filter = _PendingTzInputFilter()
@@ -189,7 +196,8 @@ def utc_offset_to_fire_at(target_date: Optional[date], hour: int, minute: int, u
 _TZ_PER_ROW = 4
 
 
-async def request_utc_offset(message, user_id: int, on_offset: Callable[[float], Awaitable[None]]) -> None:
+async def request_utc_offset(message, user_id: int, on_offset: Callable[[float], Awaitable[None]],
+                            mention: str = "") -> None:
     """Ask the user for their timezone as free text - an offset ("+3") or a
     place ("Київ", "New York") - then resume via on_offset(offset) once they
     confirm what we worked out. Only needed the first time; see
@@ -200,10 +208,11 @@ async def request_utc_offset(message, user_id: int, on_offset: Callable[[float],
     pending_id = uuid.uuid4().hex[:10]
     _PENDING_TZ[pending_id] = {"user_id": user_id, "chat_id": message.chat_id,
                                "on_offset": on_offset, "candidate": None}
-    _PENDING_TZ_INPUT[message.chat_id] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
+    _PENDING_TZ_INPUT[(message.chat_id, user_id)] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
     await message.reply_text(
-        "Вкажіть свій часовий пояс — напишіть місто чи країну (наприклад «Київ») "
-        "або зсув від UTC (наприклад «+3»):"
+        (f"{mention}, в" if mention else "В") + "кажіть свій часовий пояс — напишіть місто чи країну "
+        "(наприклад «Київ») або зсув від UTC (наприклад «+3»):",
+        parse_mode="HTML",
     )
 
 
@@ -214,13 +223,13 @@ async def handle_tz_input(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     message = update.effective_message
     if not message or not message.text:
         return
-    pending_entry = _PENDING_TZ_INPUT.get(message.chat_id)
+    pending_entry = _PENDING_TZ_INPUT.get(_tz_key(message))
     if pending_entry is None:
         return  # the filter already checked, but stay defensive
     pending_id, _expires = pending_entry
     pending = _PENDING_TZ.get(pending_id)
     if pending is None:
-        _PENDING_TZ_INPUT.pop(message.chat_id, None)
+        _PENDING_TZ_INPUT.pop(_tz_key(message), None)
         return
 
     text = message.text.strip()
@@ -263,7 +272,7 @@ async def handle_tz_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if parts[0] == "remindtzno":
         await _drop_keyboard(query, "Гаразд — напишіть місто/країну або зсув від UTC ще раз:")
-        _PENDING_TZ_INPUT[pending["chat_id"]] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
+        _PENDING_TZ_INPUT[(pending["chat_id"], pending["user_id"])] = (pending_id, time.monotonic() + TZ_INPUT_TTL_SECONDS)
         return
 
     candidate = pending.get("candidate")
@@ -272,7 +281,7 @@ async def handle_tz_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     offset, zone = candidate
     _PENDING_TZ.pop(pending_id, None)
-    _PENDING_TZ_INPUT.pop(pending["chat_id"], None)
+    _PENDING_TZ_INPUT.pop((pending["chat_id"], pending["user_id"]), None)
     usage_stats.set_user_tz(pending["user_id"], offset, zone)
     saved = f"{zone} (UTC{offset:+g})" if zone else f"UTC{offset:+g}"
     await _drop_keyboard(query, f"✅ Часовий пояс збережено: {saved}")
@@ -368,19 +377,24 @@ def _parse_absolute(text: str) -> tuple[int, int, str] | None:
 
 
 async def _fire(context: ContextTypes.DEFAULT_TYPE) -> None:
-    reminder_id, chat_id, text = context.job.data
+    reminder_id, chat_id, text, mention = context.job.data
     store = _load()
     store.pop(reminder_id, None)
     _save(store)
-    await context.bot.send_message(chat_id, f"⏰ Reminder: {text}")
+    if mention:
+        # In a group the reminder must say whose it is (and notify them).
+        await context.bot.send_message(chat_id, f"{mention} ⏰ {html.escape(text)}", parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id, f"⏰ Reminder: {text}")
 
 
-def _schedule(app: Application, reminder_id: str, chat_id: int, text: str, fire_at: datetime) -> None:
+def _schedule(app: Application, reminder_id: str, chat_id: int, text: str, fire_at: datetime,
+              mention: str = "") -> None:
     delay = max((fire_at - datetime.now()).total_seconds(), 1)
-    app.job_queue.run_once(_fire, when=delay, data=(reminder_id, chat_id, text), name=reminder_id)
+    app.job_queue.run_once(_fire, when=delay, data=(reminder_id, chat_id, text, mention), name=reminder_id)
 
 
-def schedule_reminder(app: Application, chat_id: int, text: str, fire_at: datetime) -> str:
+def schedule_reminder(app: Application, chat_id: int, text: str, fire_at: datetime, mention: str = "") -> str:
     """Public, UNGATED entry point for other modules to schedule a
     reminder without going through the /remind command (which stays
     GO_ALLOWED_USER_IDS-gated) - e.g. a "remind me when this resource
@@ -389,9 +403,9 @@ def schedule_reminder(app: Application, chat_id: int, text: str, fire_at: dateti
     reschedule-on-restart guarantees as a /remind-created one."""
     reminder_id = uuid.uuid4().hex[:8]
     store = _load()
-    store[reminder_id] = {"chat_id": chat_id, "text": text, "fire_at": fire_at.isoformat()}
+    store[reminder_id] = {"chat_id": chat_id, "text": text, "fire_at": fire_at.isoformat(), "mention": mention}
     _save(store)
-    _schedule(app, reminder_id, chat_id, text, fire_at)
+    _schedule(app, reminder_id, chat_id, text, fire_at, mention)
     return reminder_id
 
 
@@ -506,7 +520,7 @@ def reschedule_pending(app: Application) -> None:
     for reminder_id, r in store.items():
         fire_at = datetime.fromisoformat(r["fire_at"])
         text = r["text"] if fire_at > now else f"(delayed - bot was offline) {r['text']}"
-        _schedule(app, reminder_id, r["chat_id"], text, fire_at)
+        _schedule(app, reminder_id, r["chat_id"], text, fire_at, r.get("mention", ""))
     if store:
         logger.info("remind: rescheduled %d pending reminder(s)", len(store))
 
@@ -514,6 +528,12 @@ def reschedule_pending(app: Application) -> None:
 def _demo() -> None:
     """Pinned regression checks for utc_offset_to_fire_at - run via
     `python3 -m bot.telegram_remind`."""
+    # A timezone ask in a group is answered only by the user it was asked of.
+    _PENDING_TZ_INPUT[(-100, 7)] = ("x", time.monotonic() + 60)
+    _msg = lambda uid: type("M", (), {"chat_id": -100, "from_user": type("U", (), {"id": uid})()})()
+    assert _pending_tz_input_filter.filter(_msg(7)) and not _pending_tz_input_filter.filter(_msg(8))
+    _PENDING_TZ_INPUT.clear()
+
     d = date(2026, 10, 1)
     fire_plus12 = utc_offset_to_fire_at(d, 0, 5, 12.0)
     fire_plus0 = utc_offset_to_fire_at(d, 0, 5, 0.0)

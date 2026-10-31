@@ -299,7 +299,8 @@ async def _finish(message, draft: dict, color: str, option: int, hour: Optional[
 async def handle_amity_screen(msg, ocr_text: str) -> None:
     split = split_effects(ocr_text)
     if split is None:
-        await msg.reply_text("Бачу «Memory completed», але не зміг прочитати бонуси/малуси amity.")
+        await msg.reply_text(f"{msg.from_user.mention_html()}, бачу «Memory completed», але не зміг прочитати "
+                             "бонуси/малуси amity.", parse_mode="HTML")
         return
     bonuses, maluses, parts = await _describe_all(*split)
     ts = msg.date or datetime.datetime.now(datetime.timezone.utc)   # aware either way
@@ -313,8 +314,8 @@ async def handle_amity_screen(msg, ocr_text: str) -> None:
         found = acquired_date(ocr_text)
         monday = (ts - datetime.timedelta(days=ts.weekday())).date()
         if found and found < monday - datetime.timedelta(days=1):
-            await msg.reply_text(f"Цей amity отримано {found:%d.%m} — до тижневого скидання (пн 00:00 UTC), "
-                                 "тож цей варіант відьми вже дає інше. Не зберігаю.")
+            await msg.reply_text(f"{user.mention_html()}, цей amity отримано {found:%d.%m} — до тижневого скидання "
+                                 "(пн 00:00 UTC), тож цей варіант відьми вже дає інше. Не зберігаю.", parse_mode="HTML")
             return
     draft = {"week": _week(ts), "hour": None if inventory else ts.hour, "bonuses": bonuses, "maluses": maluses, "parts": parts,
              "user_id": user.id, "username": user.username, "name": user.full_name,

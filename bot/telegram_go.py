@@ -428,7 +428,7 @@ _SESSIONS: dict[str, GoSession] = {}
 # lets free-text/photo continuation coexist with telegram_assess's own
 # photo handler without the ordering fragility a blanket MessageHandler
 # would risk (see CLAUDE.md's "Handler registration order is load-bearing").
-_PENDING_CONTINUE: dict[int, tuple[str, float]] = {}
+_PENDING_CONTINUE: dict[tuple, tuple[str, float]] = {}  # (chat_id, user_id) -> (sid, expires)
 
 
 def _new_session(messages: list, steps_left: int, nsfw: bool = False) -> str:
@@ -457,7 +457,7 @@ class _PendingContinueFilter(filters.MessageFilter):
     _PENDING_CONTINUE above for why this needs to be this narrow."""
 
     def filter(self, message) -> bool:
-        pending = _PENDING_CONTINUE.get(message.chat_id)
+        pending = _PENDING_CONTINUE.get((message.chat_id, getattr(message.from_user, "id", None)))
         return bool(pending and time.monotonic() < pending[1])
 
 
@@ -1171,7 +1171,7 @@ async def go_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if kind == "cont":
-        _PENDING_CONTINUE[query.message.chat_id] = (sid, time.monotonic() + CONTINUE_TTL_SECONDS)
+        _PENDING_CONTINUE[(query.message.chat_id, query.from_user.id)] = (sid, time.monotonic() + CONTINUE_TTL_SECONDS)
         await query.message.reply_text("💬 Send your follow-up (text and/or a photo) to continue this conversation.")
         return
 
@@ -1206,7 +1206,7 @@ async def handle_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # A fresh /go always starts a clean conversation - drop any dangling
     # "waiting for a Continue reply" state for this chat rather than
     # letting it swallow whatever this new run eventually says.
-    _PENDING_CONTINUE.pop(message.chat_id, None)
+    _PENDING_CONTINUE.pop((message.chat_id, getattr(message.from_user, "id", None)), None)
 
     messages = [
         {"role": "system", "content": _system_prompt(nsfw)},
@@ -1232,7 +1232,7 @@ async def handle_go_continue(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if message is None:
         return
 
-    pending = _PENDING_CONTINUE.pop(message.chat_id, None)
+    pending = _PENDING_CONTINUE.pop((message.chat_id, getattr(message.from_user, "id", None)), None)
     if pending is None:
         return  # filter already checked this, but stay defensive
     sid, expires = pending

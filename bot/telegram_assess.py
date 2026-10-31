@@ -64,6 +64,8 @@ from orna.orna_codex import lookup_by_name
 from bot.telegram_amity import cancel_pending, handle_amity_screen, looks_like_amity_screen
 from bot.telegram_offerings import build_offerings_report, looks_like_offerings_screen
 from bot.telegram_resources import send_report_blocks
+from bot.telegram_announce import (is_admin_user, is_channel_chat, is_channel_update,
+                                   is_public_chat, is_public_update, notify_admins_of_error)
 
 
 logger = logging.getLogger(__name__)
@@ -916,11 +918,11 @@ async def assess_item_screenshot(
         )
         return ConversationHandler.END
 
-    # In a group, people post all kinds of screenshots: only the amity and
+    # In a group or channel, people post all kinds of screenshots: only the amity and
     # offerings screens are for the bot, anything else is ignored SILENTLY
     # (no typing indicator, no error, no OCR text). Item assessment stays
     # available in a private chat.
-    in_group = update.effective_chat.type != "private"
+    in_group = is_public_chat(update.effective_chat)
     if not in_group:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
@@ -932,7 +934,8 @@ async def assess_item_screenshot(
         logger.exception("telegram download failed")
         if in_group:
             return ConversationHandler.END
-        await msg.reply_text(f"Couldn't download your image: {e}")
+        if is_admin_user(getattr(msg, "from_user", None)):
+            await msg.reply_text(f"Couldn't download your image: {e}")
         return ConversationHandler.END
 
     # ---- 3. OCR (blocking → run in a worker thread) -------------------------
@@ -942,23 +945,25 @@ async def assess_item_screenshot(
         logger.exception("tesseract not installed or not on PATH")
         if in_group:
             return ConversationHandler.END
-        await msg.reply_text(
-            "OCR engine (tesseract) not found on this server.\n"
-            "  Linux:   sudo apt install tesseract-ocr tesseract-ocr-ukr\n"
-            "  macOS:   brew install tesseract tesseract-lang\n\n"
-            "If it's installed but only works when running the bot from a "
-            "terminal, your service environment is missing PATH. The bot "
-            "tries /opt/homebrew/bin and /usr/local/bin automatically — "
-            "if neither matches, set `pytesseract.pytesseract.tesseract_cmd` "
-            "to the absolute path of the binary, or add its directory to "
-            "PATH in your launchd plist."
-        )
+        if is_admin_user(getattr(msg, "from_user", None)):
+            await msg.reply_text(
+                "OCR engine (tesseract) not found on this server.\n"
+                "  Linux:   sudo apt install tesseract-ocr tesseract-ocr-ukr\n"
+                "  macOS:   brew install tesseract tesseract-lang\n\n"
+                "If it's installed but only works when running the bot from a "
+                "terminal, your service environment is missing PATH. The bot "
+                "tries /opt/homebrew/bin and /usr/local/bin automatically — "
+                "if neither matches, set `pytesseract.pytesseract.tesseract_cmd` "
+                "to the absolute path of the binary, or add its directory to "
+                "PATH in your launchd plist."
+            )
         return ConversationHandler.END
     except Exception as e:
         logger.exception("ocr failed")
         if in_group:
             return ConversationHandler.END
-        await msg.reply_text(f"OCR failed: {e}")
+        if is_admin_user(getattr(msg, "from_user", None)):
+            await msg.reply_text(f"OCR failed: {e}")
         return ConversationHandler.END
 
     # Console-only diagnostics. Visible in the bot's stdout / launchd logs;
@@ -983,14 +988,20 @@ async def assess_item_screenshot(
             report = await build_offerings_report(ocr_text)
         except Exception as e:
             logger.exception("offerings report failed")
-            await msg.reply_text(f"Не вдалося обробити пожертви: {e}")
+            await notify_admins_of_error(context.bot, e, context_info="Offerings report failed")
+            if not in_group and is_admin_user(getattr(msg, "from_user", None)):
+                await msg.reply_text(f"Не вдалося обробити пожертви: {e}")
             return ConversationHandler.END
         if report is None:
-            await msg.reply_text(
-                "Побачив «NEEDED OFFERINGS», але не зміг розпізнати жодного рядка ресурсу."
-            )
+            if not in_group:
+                await msg.reply_text(
+                    "Побачив «NEEDED OFFERINGS», але не зміг розпізнати жодного рядка ресурсу."
+                )
             return ConversationHandler.END
         blocks, bundles = report
+        if in_group and msg.from_user:
+            # In the guild chat, say whose screenshot this report answers.
+            blocks = [f"{msg.from_user.mention_html()}\n{blocks[0]}", *blocks[1:]]
         await send_report_blocks(msg, blocks, bundles)
         return ConversationHandler.END
 
@@ -1107,6 +1118,9 @@ async def receive_item_name(
     Follow-up handler in AWAITING_NAME state. The user typed the item's name;
     re-run the codex lookup with that name and the previously-saved stats.
     """
+    if is_public_update(update):
+        return ConversationHandler.END
+
     msg = update.effective_message
     if msg is None or not msg.text:
         return AWAITING_NAME
@@ -1221,9 +1235,9 @@ def build_assess_conversation() -> ConversationHandler:
         ],
         states={
             AWAITING_NAME: [
-                # Plain text -> treat as the item's name
+                # Plain text -> treat as the item's name (private chat only)
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND, receive_item_name
+                    filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, receive_item_name
                 ),
                 # New screenshot -> restart the flow
                 MessageHandler(photo_filter, assess_item_screenshot),

@@ -22,3 +22,4 @@ venv/
 # scrapers/orna_scrape_qa.py resume from any checkout.
 data/cache/
 data/state/
+.playwright-mcp/

@@ -123,6 +123,102 @@ def enabled_chats() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Channel & Admin helpers
+# ---------------------------------------------------------------------------
+
+def is_channel_chat(chat) -> bool:
+    if chat is None:
+        return False
+    ctype = getattr(chat, "type", None)
+    return ctype == ChatType.CHANNEL or str(ctype) == "channel"
+
+
+def is_public_chat(chat) -> bool:
+    """True for groups, supergroups, and channels (any shared community chat)."""
+    if chat is None:
+        return False
+    ctype = getattr(chat, "type", None)
+    if ctype == ChatType.PRIVATE or str(ctype) == "private":
+        return False
+    return ctype in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL) or str(ctype) in ("group", "supergroup", "channel")
+
+
+def is_private_chat(chat) -> bool:
+    """True only for 1-on-1 private direct messages with the bot."""
+    if chat is None:
+        return False
+    ctype = getattr(chat, "type", None)
+    return ctype == ChatType.PRIVATE or str(ctype) == "private"
+
+
+def is_channel_update(update: object) -> bool:
+    if update is None:
+        return False
+    if getattr(update, "channel_post", None) is not None or getattr(update, "edited_channel_post", None) is not None:
+        return True
+    return is_channel_chat(getattr(update, "effective_chat", None))
+
+
+def is_public_update(update: object) -> bool:
+    """True if the update is from a group, supergroup, or channel."""
+    if update is None:
+        return False
+    if getattr(update, "channel_post", None) is not None or getattr(update, "edited_channel_post", None) is not None:
+        return True
+    chat = getattr(update, "effective_chat", None) or getattr(getattr(update, "message", None), "chat", None)
+    return is_public_chat(chat)
+
+
+def is_admin_user(user) -> bool:
+    if not user or not getattr(user, "id", None):
+        return False
+    return bool(GO_ALLOWED_USER_IDS and user.id in GO_ALLOWED_USER_IDS)
+
+
+async def notify_admins(bot, text: str, parse_mode: Optional[str] = "HTML") -> None:
+    if not GO_ALLOWED_USER_IDS or bot is None:
+        return
+    for admin_id in GO_ALLOWED_USER_IDS:
+        try:
+            await bot.send_message(admin_id, text, parse_mode=parse_mode)
+        except Exception:
+            logger.warning("could not notify admin %s", admin_id, exc_info=True)
+
+
+async def notify_admins_of_error(bot, error: object, update: object = None, context_info: str = "") -> None:
+    if not GO_ALLOWED_USER_IDS or bot is None:
+        return
+    if update is None and isinstance(error, (TelegramError,)):
+        return
+    lines = ["⚠️ <b>Помилка бота</b>"]
+    if context_info:
+        lines.append(f"<b>Контекст:</b> {html.escape(context_info)}")
+    if update is not None:
+        chat = getattr(update, "effective_chat", None)
+        if chat is None and getattr(update, "channel_post", None) is not None:
+            chat = getattr(update.channel_post, "chat", None)
+        if chat:
+            chat_name = getattr(chat, "title", None) or str(getattr(chat, "id", ""))
+            chat_type = str(getattr(chat, "type", ""))
+            lines.append(f"<b>Чат:</b> {html.escape(chat_name)} ({getattr(chat, 'id', '')}) [<code>{html.escape(chat_type)}</code>]")
+        user = getattr(update, "effective_user", None)
+        if user:
+            name = getattr(user, "full_name", None) or getattr(user, "username", None) or str(user.id)
+            lines.append(f"<b>Користувач:</b> {html.escape(name)} (<code>{user.id}</code>)")
+        msg = getattr(update, "effective_message", None) or getattr(update, "channel_post", None)
+        if msg and getattr(msg, "text", None):
+            lines.append(f"<b>Повідомлення:</b> <code>{html.escape(msg.text[:200])}</code>")
+    if error:
+        if isinstance(error, BaseException):
+            err_str = f"{type(error).__name__}: {error}"
+        else:
+            err_str = str(error)
+        lines.append(f"<b>Помилка:</b> <code>{html.escape(err_str[:500])}</code>")
+    text = "\n".join(lines)
+    await notify_admins(bot, text, parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
 # Protect codes from translation
 # ---------------------------------------------------------------------------
 
@@ -373,8 +469,9 @@ async def broadcast(bot, parts: list, images: list) -> int:
     for chat_id in enabled_chats():
         try:
             used = await _send_one(bot, chat_id, parts, images)
-        except TelegramError:
+        except TelegramError as e:
             logger.warning("announce: send to %s failed", chat_id, exc_info=True)
+            await notify_admins_of_error(bot, e, context_info=f"Не вдалося надіслати анонс у чат {chat_id}")
             continue
         if used is None:
             unregister(chat_id)
@@ -442,8 +539,10 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info("announce: relayed %s announcement(s)", result["relayed"])
     except orna_discord.IntentMissing as e:
         logger.error("announce: %s", e)
-    except Exception:
+        await notify_admins_of_error(context.bot, e, context_info="Discord announcements (Intent missing)")
+    except Exception as e:
         logger.warning("announce: poll failed", exc_info=True)
+        await notify_admins_of_error(context.bot, e, context_info="Discord announcements poll failed")
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +570,7 @@ async def handle_announcements(update: Update, context: ContextTypes.DEFAULT_TYP
     """/announcements [on|off]. In a group: status, or a toggle by a chat admin.
     In a private chat, for the bot's owners: which chats will receive them."""
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
-    if msg is None or chat is None:
+    if msg is None or chat is None or is_channel_chat(chat):
         return
     arg = (context.args[0].lower() if context.args else "")
 
@@ -690,6 +789,51 @@ def _demo() -> None:
         client.close()
     STATE_PATH, _state = saved_path, saved_state
     os.environ.pop(orna_discord.CHANNEL_ENV, None)
+    # --- channel & admin error helpers -------------------------------------
+    assert is_channel_chat(Chat(-1001, ChatType.CHANNEL)) is True
+    assert is_channel_chat(Chat(-1002, ChatType.SUPERGROUP)) is False
+    assert is_channel_chat(Chat(1, ChatType.PRIVATE)) is False
+    assert is_channel_chat(None) is False
+
+    class _Msg:
+        def __init__(self, chat=None, text=""):
+            self.chat, self.text = chat, text
+
+    class _Up:
+        def __init__(self, chat=None, cp=None, user=None):
+            self.effective_chat = chat or (getattr(cp, "chat", None) if cp else None)
+            self.channel_post = cp
+            self.edited_channel_post = None
+            self.effective_user = user
+            self.effective_message = cp or _Msg(chat, "test")
+
+    assert is_channel_update(_Up(chat=Chat(-1001, ChatType.CHANNEL))) is True
+    assert is_channel_update(_Up(cp=_Msg(Chat(-1001, ChatType.CHANNEL), "post"))) is True
+    assert is_channel_update(_Up(chat=Chat(-1002, ChatType.SUPERGROUP))) is False
+    assert is_channel_update(None) is False
+
+    admin_bot = FakeBot()
+    global GO_ALLOWED_USER_IDS
+    saved_admins = GO_ALLOWED_USER_IDS
+    GO_ALLOWED_USER_IDS = {999888777}
+    try:
+        class _User:
+            def __init__(self, uid):
+                self.id, self.full_name, self.username = uid, "Admin", "admin"
+        assert is_admin_user(_User(999888777)) is True
+        assert is_admin_user(_User(12345)) is False
+        assert is_admin_user(None) is False
+
+        # notify_admins_of_error sends to admin, never to channel
+        ch_update = _Up(cp=_Msg(Chat(-1001, ChatType.CHANNEL, "My Channel"), "Error triggering post"))
+        asyncio.run(notify_admins_of_error(admin_bot, ValueError("Something broke"), ch_update, context_info="testing"))
+        assert len(admin_bot.sent) == 1
+        admin_cid, admin_text = admin_bot.sent[0]
+        assert admin_cid == 999888777
+        assert "My Channel" in admin_text and "ValueError: Something broke" in admin_text
+    finally:
+        GO_ALLOWED_USER_IDS = saved_admins
+
     print("telegram_announce: all checks passed")
 
 

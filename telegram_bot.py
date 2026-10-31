@@ -34,6 +34,7 @@ from bot.telegram_orna import (build_clarify_handler, build_chosen_inline_result
 from bot.telegram_orna import _next_text, _today_text
 from bot import usage_stats
 from bot import telegram_announce
+from bot.telegram_announce import is_admin_user, is_channel_chat, is_channel_update, is_public_chat, is_public_update, notify_admins_of_error
 from llm import ollama_client
 
 logging.basicConfig(
@@ -121,7 +122,7 @@ _WELCOME = (
     "• екран характеристик предмета — порахую, як він прокачається\n"
     "• екран «NEEDED OFFERINGS» з вівтаря — покажу, чого не вистачає\n"
     "• екран «Memory completed» з підписом відьми, напр. <code>Red 4</code> — збережу amity для всіх; "
-    "/amity — що знайшли цього тижня; /iam <нік> — ваш нік у грі поруч з вами в /amity\n\n"
+    "<code>/amity</code> — що знайшли цього тижня; <code>/iam &lt;нік&gt;</code> — ваш нік у грі поруч з вами в /amity\n\n"
     "⚡ <b>Швидкі команди:</b>\n"
     "• /res_today — ресурси на сьогодні\n"
     "• /res_next — коли з'явиться потрібний ресурс\n\n"
@@ -289,6 +290,8 @@ async def drop_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.info("banned user_id=%s dropped (%s)", user.id, update.effective_chat.id
                     if update.effective_chat else "?")
         raise ApplicationHandlerStop
+
+
 
 
 def _resolve_target(arg: str) -> Optional[str]:
@@ -552,19 +555,30 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Global safety net: without this, PTB's default handling for an
-    unhandled exception in any handler is to log it and reply with
-    NOTHING - the user just sees silence. Reproduced live via a crash
-    vector in the old telegram_nlp/telegram_go Ollama-JSON parsing (see
-    ollama_client.py's docstring) before this existed; that specific bug
-    is fixed at the source now, but this net stays regardless since any
-    other future handler bug has the exact same silent-failure shape."""
+    """Global safety net: logs unhandled exceptions.
+    Public groups and channels NEVER receive any error or fail messages.
+    Error messages are sent to admin(s) in GO_ALLOWED_USER_IDS only."""
     logger.error("Unhandled exception while processing update: %s", update, exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
+    try:
+        await notify_admins_of_error(context.bot, context.error, update)
+    except Exception:
+        logger.warning("Failed to notify admins of unhandled error", exc_info=True)
+
+    effective_message = getattr(update, "effective_message", None)
+    if not effective_message:
+        return
+
+    # Groups and channels must NEVER receive any error or fail messages!
+    if is_public_update(update):
+        return
+
+    # In private chat, error notices are shown only to admins (GO_ALLOWED_USER_IDS)
+    user = getattr(update, "effective_user", None)
+    if is_admin_user(user):
         try:
-            await update.effective_message.reply_text("Виникла непередбачена помилка. Спробуйте ще раз.")
+            await effective_message.reply_text("Виникла непередбачена помилка. Спробуйте ще раз.")
         except Exception:
-            logger.warning("Failed to notify user about the error", exc_info=True)
+            logger.warning("Failed to notify admin about the error", exc_info=True)
 
 
 async def _post_init(app):
