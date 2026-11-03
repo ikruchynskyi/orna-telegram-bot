@@ -43,10 +43,24 @@ _oauth = {}
 
 
 def _get(path: str) -> dict:
-    """A reddit JSON path: through the API when REDDIT_CLIENT_ID/SECRET are set (a "script" app), else through
+    """A reddit JSON path: through the API when REDDIT_CLIENT_ID/SECRET are set (a "script" app), with a logged-in
+    browser's REDDIT_COOKIE when that is set, else through
     the bot's Chrome - which needs a logged-in Reddit session in data/state/reddit_chrome: since 2026-10 Reddit
     answers anonymous JSON with 403."""
     cid, secret = os.environ.get("REDDIT_CLIENT_ID"), os.environ.get("REDDIT_CLIENT_SECRET")
+    if os.environ.get("REDDIT_COOKIE", "").strip() and not (cid and secret):
+        # a logged-in browser's cookie string (orna_scrape_qa's convention; .env only, never committed)
+        if "sess" not in _oauth:
+            _oauth["sess"] = QA._session()
+        time.sleep(2)
+        for _ in range(3):
+            r = _oauth["sess"].get(QA.BASE + path, timeout=30)
+            if r.status_code == 429:
+                time.sleep(30)
+                continue
+            r.raise_for_status()
+            return r.json()
+        raise RuntimeError("reddit: still rate limited after 3 tries")
     if not (cid and secret):
         return _browser.get(path)
     import httpx
