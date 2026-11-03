@@ -224,7 +224,10 @@ async def notify_admins_of_error(bot, error: object, update: object = None, cont
 
 # A fenced block: its fences stay as they are, its TEXT is translated like the rest (it used to be held
 # whole, so a block of event rules stayed English); only a block that is one token (a lone code) is held.
-_FENCE_RE = re.compile(r"(```[^\n`]*\n?)(.*?)(\n?```)", re.S)
+# The opening fence is ``` plus at most a language word on its own line ("```python\n"). Discord posts often
+# start the text right after it ("```- Due to popular demand, ..."): that first line is TEXT, not a language
+# tag - read as one, it stayed English (patch 1.342, 2026-11-03).
+_FENCE_RE = re.compile(r"(```(?:[A-Za-z0-9_+-]*\n)?)(.*?)(\n?```)", re.S)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _URL_RE = re.compile(r"https?://[^\s<>()\]]+")
 _CODE_WORD_RE = re.compile(r"\b(?:redeem|promo|coupon|gift ?codes?|codes?)\b", re.I)
@@ -300,7 +303,8 @@ def restore(text: str, tokens: list) -> str:
 
     out = _PLACEHOLDER_RE.sub(put, text)
     # inside a fenced block a code needs no `backticks` (the block is already code; they'd show literally)
-    out = re.sub(r"```[^\n`]*\n.*?```", lambda m: re.sub(r"`([^`\n]+)`", r"\1", m.group(0)), out, flags=re.S)
+    out = re.sub(r"```.*?```", lambda m: re.sub(r"`([^`\n]+)`", r"\1", m.group(0)[3:-3]).join(("```", "```")),
+                 out, flags=re.S)
     lost = [tokens[i] for i in range(len(tokens)) if i not in used and tokens[i][0] != "fence"]  # a lost fence costs formatting only
     codes = [v for k, v in lost if k in ("code", "span")]
     urls = [v for k, v in lost if k == "url"]
@@ -688,6 +692,9 @@ def _demo() -> None:
     assert "Defeat the boss before Sunday." in m and ("fence", "```\n") in t and codes_in(t) == ["WINTER2026"], (m, t)
     assert restore(m.replace("Defeat the boss before Sunday.", "Перемогти боса до неділі."), t) == \
         "Rules:\n```\nПеремогти боса до неділі.\nUse code WINTER2026 once.\n```"
+    # text right after the opening fence is text, not a language tag (patch 1.342)
+    m, t = protect("**Server patch 1.342**\n```- Due to popular demand, the Titan Crucible is back\n- Reduced the cost```")
+    assert "Due to popular demand" in m and "Reduced the cost" in m and not any("Due to" in v for _k, v in t), (m, t)
     m, t = protect("Code:\n```\nORNAVERSARY\n```")
     assert "ORNAVERSARY" not in m, m
     m, t = protect("NEW EVENT: Ragnarok returns this weekend!")
