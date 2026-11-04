@@ -960,7 +960,7 @@ async def main(failures: list, started: float) -> int:
         T.MAX_CLOUD_CALLS = 0      # every step tries cloud first; 0 forces local
     results = []
 
-    cases = [c for c in build_cases() if c.tier in tiers and (not only or only == c.id)]
+    cases = [c for c in build_cases() if c.tier in tiers and (not only or c.id in only.split(","))]
     if cases:
         mode = "LOCAL only" if os.environ.get("FORCE_LOCAL") == "1" else "CLOUD -> local"
         print("\n" + "=" * 72)

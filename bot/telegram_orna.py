@@ -5116,6 +5116,10 @@ async def _call_plan_model(user_text: str) -> list[str]:
 # Every REVIEW rewrite, draft and result side by side: three measured rewrites made a correct answer worse
 # (see "No REVIEW once a tool has POSTED"), and the log said only "REVISED". Judge them from this file
 # (data/state/orna_reviews.jsonl); if rewrites hurt more than they help, REVIEW should only approve or redo.
+# The log's first 39 rewrites (2026-11-03..04): 11 changed a number (now rejected, _swaps_a_number), 13 made it
+# worse - cut to one community quote (Goat's Hood x8, sometimes adding the "Forest Goat's Hood" variant), "listed
+# in the card above" for a direct question, a dropped stat - about 6 helped. Points 7-8 and "keep every correct
+# fact" answer those; if the next batch still runs worse than better, drop "revise".
 REVIEW_LOG = paths.STATE / "orna_reviews.jsonl"
 
 
@@ -5172,11 +5176,16 @@ async def _call_review_model(original_request: str, transcript: str, draft_answe
         "4. CONSTRAINTS: Does it meet every explicit constraint of the request?\n"
         "5. EVIDENCE: Does every number and claim come from the evidence, not memory?\n"
         "6. WARNINGS: Does it keep what the evidence warned about (a refusal, a PARTIAL list, an assumption)?\n"
-        "7. NO REPEAT: It must not repeat stats, effects or tags that a codex card already posted"
+        "7. NO REPEAT: It must not repeat the full stat block, effects or tags that a codex card already posted"
         + (f" ({card_note})" if card_note else " - no card was posted this time, so codex facts are fine here")
-        + ".\n"
-        "Then decide. Approve a correct draft. If only the WORDING is wrong, rewrite it correctly - add no claim "
-        "that the evidence does not support; you may add facts FROM the evidence to make it complete. If it "
+        + ". But it still ANSWERS what was asked in its own words: a question about one value (a tier, a rarity, "
+        "a stat) gets that value; \"it is listed in the card above\" is never an answer.\n"
+        "8. SCOPE: It adds nothing about items, variants or topics the user did not ask about (a similarly named "
+        "item is not mentioned unless the request is ambiguous between them).\n"
+        "Then decide. Approve a correct draft - a draft that already answers the question is approved, not "
+        "shortened or reworded. If only the WORDING is wrong, rewrite it correctly - keep every correct fact of "
+        "the draft, add no claim that the evidence does not support; you may add facts FROM the evidence to make "
+        "it complete. If it "
         "needs a tool call (point 1, 3 or 4 not met by the evidence), send it back and name the tool call.\n\n"
         f"ORIGINAL REQUEST: {original_request!r}\n\n"
         f"EVIDENCE GATHERED SO FAR:\n{transcript}\n\n"
