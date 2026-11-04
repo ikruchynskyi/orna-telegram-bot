@@ -90,13 +90,17 @@ Data sources (each = reader module + cache or committed file + scraper):
   required, or gpt-oss emits undeclared tool calls → Ollama 500s).
 - Budget: `MAX_STEPS`, `LOOP_TIMEOUT_SECONDS`; running out SUMMARISES via `_close_out`, never blank.
 - English inside the loop; translation gates at input (`build_loop_messages`) and output.
-  Proper nouns (items, classes) are never translated.
+  Proper nouns (items, classes) are never translated; general game terms use the game's own Ukrainian
+  (`data/orna_terms_uk.json` from `scrapers/orna_scrape_terms_uk.py`: Tier = Ранг, Followers = Компаньйони).
 - Every request gets a PLAN call (gemma4) and a REVIEW call before posting; REVIEW runs on `REVIEW_MODEL`,
-  never the step model (it graded its own drafts).
+  never the step model (it graded its own drafts). Each rewrite is logged with its draft in
+  `data/state/orna_reviews.jsonl` - judge from it whether rewrites help.
 - Context: `_compact` sends the last `_KEEP_FULL_RESULTS` tool results whole and cuts older long ones (the
   repeat cache returns the full text); `_working_state` is appended to every step.
 - Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the
-  undated corpora. Removed game content is scrubbed from the corpora by `scrapers/removed_content.py`.
+  undated corpora. Ranking adds `_recency` (dated passages: newer up, 3+ years down) and the result legend
+  says the newer dated passage wins a disagreement. `_RANKED_MAX` 10000, `_HIT_MAX` 3000 (benchmark: same 12/13 as 16000).
+  Removed game content is scrubbed from the corpora by `scrapers/removed_content.py`.
 - Self-written knowledge (`knowledge/orna_curated.py`): `corrections` (outranks everything; from
   `python3 -m scrapers.patch_audit` - patch notes vs the corpora, human review in `data/patch_audit_report.md`,
   rejections in the cache's `_rejected` - and admin `/correct`) and `verified` (admin `/verify`).
@@ -104,6 +108,16 @@ Data sources (each = reader module + cache or committed file + scraper):
   admin); `/feedback`, `/verify`, `/correct`.
 - Reddit refresh: `python3 -m scrapers.reddit_delta [--dry-run]` - new items only, novelty-judged, appended,
   tail upserted. Needs REDDIT_CLIENT_ID/SECRET or a logged-in Reddit in `data/state/reddit_chrome`.
+- Discord threads: `python3 -m scrapers.discord_threads [fetch|summarize|index]` - the official server's forum
+  threads (#discussion-threads, #devlogs) through the logged-in Discord profile, delta per thread; the LOCAL
+  model turns ~9k-char windows into dated facts (cached per window); namespace `discord_threads`, only new
+  chunks upserted.
+- Monthly refresh: `python3 -m scrapers.refresh` (launchd: `deploy/com.username.ornarefresh.plist`) re-scrapes,
+  re-indexes what changed (a corpus that shrank >30% is put back), runs the delta steps and tier 0, writes
+  `data/cache/logs/refresh-<date>.md`. It commits nothing.
+- Eval suite: a case's `follow_ups` are later turns (`continue_conversation`, the /clarify path); the suite
+  runs `_maybe_plan` like `_start_orna` - without it `original_request` was empty and the finish gates
+  never fired.
 - Continuity: a reply to a message an /orna conversation sent continues it (`_ConversationRecorder`,
   `_ReplyToOrnaFilter`); sessions live 60 min; `/me` profiles (`data/state/orna_profiles.json`) ride along.
 - `_confidence_gate` clamps self-reported confidence by actual evidence.

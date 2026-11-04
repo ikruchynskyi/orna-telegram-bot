@@ -362,7 +362,7 @@ _RETRIEVAL_CASES = [
     ("how do I finish the Samson goblin lord quest", ["Goblin Fortress"]),
 ]
 _RETRIEVAL_PASS = len(_RETRIEVAL_CASES) - 2
-_RETRIEVAL_MEDIAN_MAX = 20000
+_RETRIEVAL_MEDIAN_MAX = 12000   # _RANKED_MAX is 10000 since 2026-11-03 (median 10.3k)
 
 
 def _check_retrieval_benchmark() -> None:
@@ -666,6 +666,9 @@ class Case:
     tier: int
     q: str
     expect: Expect
+    # Later turns of the same conversation (a reply / /clarify each). Every turn's answer must meet
+    # expect.cyrillic, the LAST one the rest: the English-reply bug (2026-11-01) was on a follow-up only.
+    follow_ups: tuple = ()
 
 
 def build_cases() -> list:
@@ -827,6 +830,12 @@ def build_cases() -> list:
              "I want to grind the Spelunking Guild. A run gives guild exp equal to the dungeon tier (tier 1 gives 1, "
              "tier 11 gives 11), but floor counts differ. Which tier gives the most exp per floor?",
              Expect(final_any_of=[["tier 7", "tier7", "t7", "★7", "7 (13"]], final_none_of=["12 floors"])),
+        # A Ukrainian conversation over several turns (the 2026-11-01 one, shortened): every answer in
+        # Ukrainian, the last one on the guild's own proof - Proof of Melancholy belongs to another path.
+        Case("spelunking-uk-turns", 3, "хочу прокачати гільдію Spelunking Guild. що для цього треба робити?",
+             Expect(cyrillic="required", final_none_of=["Melancholy"],
+                    final_any_of=[["Spelunking", "Підземелляництва"]]),
+             follow_ups=("а скільки поверхів у підземеллі 11 рангу?", "а що можна купити в цій гільдії і за що?")),
     ]
 
 
@@ -859,10 +868,28 @@ async def run_case_once(case: Case) -> tuple:
     messages, user_lang = await T.build_loop_messages(case.q)
     sid = T._new_orna_session(messages, T.MAX_STEPS)
     T._ORNA_SESSIONS[sid].user_lang = user_lang
+    # PLAN, as _start_orna does: it also sets session.original_request, which REVIEW and the finish gates
+    # (_quality_needs_assess) read - without it the suite ran a loop with neither (2026-11-03: godforged-orn
+    # 1/3 "never called assess", while the gate meant to catch exactly that never fired).
+    await T._maybe_plan(sid, messages[1]["content"])
+    turn_finals = []
     try:
-        await T._advance(sid, FakeMessage(replies))
+        for turn, said in enumerate(("",) + tuple(case.follow_ups)):
+            start = len(replies)
+            if turn == 0:
+                await T._advance(sid, FakeMessage(replies))
+            else:
+                session = T._ORNA_SESSIONS.get(sid)
+                if session is None:
+                    return f"session gone before follow-up {turn}", [], ""
+                await T.continue_conversation(sid, session, said, FakeMessage(replies))
+            turn_finals.append(_answer(replies[start:]))
     except Exception as exc:
         return f"loop raised {exc!r}", [], ""
+    if case.follow_ups and case.expect.cyrillic:
+        for turn, text in enumerate(turn_finals):
+            if (case.expect.cyrillic == "required") != bool(CYRILLIC.search(text)):
+                return f"turn {turn + 1}'s answer is in the wrong language: {text[:80]!r}", [], text
 
     tools, session = [], T._ORNA_SESSIONS.get(sid)
     for msg in (session.messages if session else []):
@@ -878,14 +905,20 @@ async def run_case_once(case: Case) -> tuple:
         elif action and action not in ("finish", "ask"):   # the loop now records these too
             tools.append(action)
 
+    texts = [t for name, t in replies if name not in ("delete", "reply_photo", "reply_document")]
+    final = _answer(replies)
+    return case.expect.grade("\n".join(texts), final, tools), tools, final
+
+
+def _answer(replies: list) -> str:
+    """The answer among a turn's replies."""
     # A picture sent WITH the answer (finish(images=...)) comes after the text and
     # is not the answer - grading its caption failed image-knowledge 2/4.
     texts = [t for name, t in replies if name not in ("delete", "reply_photo", "reply_document")]
     # The status message edits itself in place and is deleted at the end; it is
     # chrome, never an answer, so it must not be graded as the finish text.
     answers = [t for t in texts if not t.startswith(("\U0001F914", "\U0001F50E", "\U0001F4DA", "⏳"))]
-    final = answers[-1] if answers else (texts[-1] if texts else "")
-    return case.expect.grade("\n".join(texts), final, tools), tools, final
+    return answers[-1] if answers else (texts[-1] if texts else "")
 
 
 async def run_case(case: Case, n: int) -> dict:

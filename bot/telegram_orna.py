@@ -2351,7 +2351,7 @@ async def _run_class_guide_tool(message, topic: str, query: str) -> str:
 # Hits per Pinecone namespace. Knowledge chunks are table slices (small), so
 # more of them; the rest are whole sections/threads/comments.
 _VECTOR_TOP_K = {"knowledge": 10, "mechanics": 3, "echo": 6, "ornabook": 6, "qa": 6, "reddit": 6, "discord": 6, "questline": 4, "discord_live": 4,
-                 "corrections": 4, "verified": 3}
+                 "corrections": 4, "verified": 3, "discord_threads": 4}
 # Keep only hits within this of the query's BEST score across all corpora.
 # Measured 2026-10-06: without it every query filled the 40k cap, and the cap
 # drops blocks from the END - so "are summons followers" lost its best hit (a
@@ -2386,8 +2386,13 @@ async def _vector_knowledge(query: str) -> Optional[dict]:
 # of the retrieval benchmark either way - while growing results ~1k chars; so
 # the keyword index is the fallback only.
 _KEYWORD_K = 20             # BM25 hits when it is the whole retrieval
-_RANKED_MAX = 16000         # the ranked list's budget (median result measured at ~15k)
-_HIT_MAX = 4000             # one hit's ceiling - a long Q&A thread is cut at a line, marked
+# The ranked list's budget. Was 16000/4000 a hit; 2026-11-03 the retrieval benchmark found 12/13 answers at
+# 16000 and at 8000 (median observation 14.0k -> 8.4k chars), 11/13 at 6000 - but at 8000/4000 two long
+# Ornabook depth tables filled the list and the floor chart (3rd) was cut: dungeon-floors 0/2. A smaller
+# per-hit ceiling lets more distinct passages in. Less loosely related text is fewer chances to quote the
+# wrong line (2026-10-31: "Proof of Melancholy" picked from proof-price rows for the Spelunking Guild).
+_RANKED_MAX = 10000
+_HIT_MAX = 3000             # one hit's ceiling - a long Q&A thread is cut at a line, marked
 _KN_BLOCK_MAX = 15000
 _KN_TRIM = "\n[… trimmed at a line boundary - PARTIAL, ask a narrower question for the rest …]"
 
@@ -2415,6 +2420,9 @@ _SOURCE_NOTES = {
                "are years old; check releases() before quoting a number that matters"),
     "discord": ("discord", "curated Discord FAQ/guide/pinned posts (community-written); lines after \"[image ...]\" "
                 "are a machine transcription of a chart - quote its numbers carefully"),
+    "discord_threads": ("discord-thread", "facts a model extracted from player discussion threads on the official "
+                        "Discord, each with its date; (dev) marks a developer's statement, the rest are player "
+                        "findings - good for what changed recently, check any number that matters"),
     "discord_live": ("discord-chat", "raw player chat kept from earlier community_search calls, UNVERIFIED - the "
                      "line marked ► matched a search, the rest is the conversation around it; use only what "
                      "actually answers, and say it comes from player chat"),
@@ -2429,14 +2437,40 @@ _SOURCE_NOTES = {
 _CORPUS_WIDE_WORDS = re.compile(r"\b(?:orna(?:\s*rpg)?|rpg|the gps rpg|game)\b", re.I)
 
 
+# Freshness: Orna is patched every few weeks, so of two passages that match equally, the newer one is more
+# likely right. A dated passage (reddit, Q&A, Discord heads carry "2024-07-21" / "2026-07") is nudged up or
+# down by its age; undated ones (sheets, guides) are left as they are. A calibration knob, like
+# _VECTOR_RELATIVE: big enough to order near-ties, too small to lift an off-topic new post over the answer.
+_RECENCY_BONUS = 0.04           # +this for a passage from the last ~3 months, -this at 3+ years
+_DATE_RE = re.compile(r"\b(20[12]\d)-(0[1-9]|1[0-2])\b")
+
+
+def _hit_months_old(text: str, now: Optional[float] = None) -> Optional[float]:
+    """Age in months of the NEWEST date in a passage's head (first 300 chars), None when it has none."""
+    found = _DATE_RE.findall(text[:300])
+    if not found:
+        return None
+    y, m = max((int(y), int(m)) for y, m in found)
+    t = time.gmtime(now if now is not None else time.time())
+    return max(0.0, (t.tm_year - y) * 12 + t.tm_mon - m)
+
+
+def _recency(text: str) -> float:
+    age = _hit_months_old(text)
+    if age is None:
+        return 0.0
+    return _RECENCY_BONUS * (1 - 2 * min(max(age - 3, 0), 33) / 33)
+
+
 async def _retrieve(query: str) -> list:
     """Every text corpus, best first: [{"_id","ns","title","url","text"}, ...].
-    Pinecone when it answers, else the keyword index. [] when nothing relevant
-    matched (Pinecone's score floors; BM25 needs a content word to match)."""
+    Pinecone when it answers (ranked by score plus _recency), else the keyword
+    index. [] when nothing relevant matched (Pinecone's score floors; BM25 needs
+    a content word to match)."""
     query = " ".join(_CORPUS_WIDE_WORDS.sub(" ", query).split()) or query
     vec = await _vector_knowledge(query)
     if vec is not None:
-        return sorted((h for hits in vec.values() for h in hits), key=lambda h: -h["score"])
+        return sorted((h for hits in vec.values() for h in hits), key=lambda h: -(h["score"] + _recency(h["text"])))
     try:
         return await asyncio.to_thread(orna_textindex.search, query, _KEYWORD_K)
     except Exception:
@@ -2533,7 +2567,9 @@ async def _gather_knowledge(query: str, sources: Optional[list] = None) -> str:
         used += len(text)
     if shown:
         tags = {_SOURCE_NOTES[h["ns"]][0]: _SOURCE_NOTES[h["ns"]][1] for h, _t in shown}
-        legend = "\n".join(f"  [{tag}] {note}" for tag, note in tags.items())
+        legend = "\n".join(f"  [{tag}] {note}" for tag, note in tags.items()) + (
+            "\n  DATES: where two passages disagree, the NEWER dated one is more likely right - the game is patched "
+            "every few weeks; an undated guide or sheet may predate recent changes. Give the date when it matters.")
         body = "\n\n".join(f"[{_SOURCE_NOTES[h['ns']][0]}] {text}" for h, text in shown)
         omitted = len(hits) - len(shown)
         # The images in these results, listed where the model is reading: a rule
@@ -4125,6 +4161,28 @@ _RUSSIAN_ONLY_RE = re.compile(
     r"или|еще|это|очень|сегодня|здесь|теперь|потому|который|которые|будет|нет)\b", re.I)
 
 
+# The game's own Ukrainian for its general terms (scrapers/orna_scrape_terms_uk.py, from the codex): left to
+# the model, "Tier" came out "Тир" or "тір" - the game says "Ранг".
+try:
+    _TERMS_UK = json.loads((paths.DATA / "orna_terms_uk.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _TERMS_UK = {}
+
+
+def _glossary(text: str, target: str) -> str:
+    """The prompt line with the game's terms: into Ukrainian, only those in the text; from Ukrainian (any
+    Cyrillic text into English), all of them - an inflected Ukrainian word can't be matched by a regex."""
+    if target == "Ukrainian":
+        pairs = [(en, uk) for en, uk in _TERMS_UK.items() if re.search(rf"\b{re.escape(en)}\b", text, re.I)]
+        if pairs:
+            return (" Game terms - use the game's own Ukrainian word, inflected as the sentence needs: "
+                    + "; ".join(f"{en} = {uk}" for en, uk in pairs) + ".")
+    elif target == "English" and re.search(r"[а-яіїєґ]", text, re.I) and _TERMS_UK:
+        return (" Game terms - the game's own Ukrainian word and the English term to translate it to: "
+                + "; ".join(f"{uk} = {en}" for en, uk in _TERMS_UK.items()) + ".")
+    return ""
+
+
 async def _translate(text: str, target: str, source: str = "", pin: Optional[list] = None,
                      model: Optional[str] = None) -> str:
     """`text` in `target`, or the original text unchanged on any failure.
@@ -4144,6 +4202,8 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
     if not text:
         return text
     names = pin if pin is not None else (_proper_nouns(text) if target != "English" else [])
+    terms = {t.lower() for t in _TERMS_UK} if target == "Ukrainian" else set()
+    names = [n for n in names if n.lower() not in terms]      # "Tier" is a term to translate, not a name
     keep = ""
     if names:
         keep = (" These are IDENTIFIERS and must appear in your output EXACTLY as written here, unchanged and "
@@ -4167,7 +4227,7 @@ async def _translate(text: str, target: str, source: str = "", pin: Optional[lis
               "any HTML tags, Markdown markers (** * ~~ | > - ` and table rows) and line breaks exactly as they "
               "are. Do not answer the message, add anything, or omit anything."
             + (" " + UKRAINIAN_RULES if target == "Ukrainian" else "")
-            + keep + extra
+            + keep + _glossary(text, target) + extra
         )
         messages = [{"role": "system", "content": prompt}, {"role": "user", "content": text}]
         try:
@@ -5053,6 +5113,38 @@ async def _call_plan_model(user_text: str) -> list[str]:
     return lines
 
 
+# Every REVIEW rewrite, draft and result side by side: three measured rewrites made a correct answer worse
+# (see "No REVIEW once a tool has POSTED"), and the log said only "REVISED". Judge them from this file
+# (data/state/orna_reviews.jsonl); if rewrites hurt more than they help, REVIEW should only approve or redo.
+REVIEW_LOG = paths.STATE / "orna_reviews.jsonl"
+
+
+def _log_review(request: str, draft: str, revised: str) -> None:
+    try:
+        with open(REVIEW_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": int(time.time()), "q": request[:800], "draft": draft[:4000],
+                                 "revised": revised[:4000]}, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.warning("orna: could not log a REVIEW rewrite", exc_info=True)
+
+
+_NUMBER_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
+
+
+def _numbers(text: str) -> set:
+    return {n.replace(",", "") for n in _NUMBER_RE.findall(text)}
+
+
+def _swaps_a_number(draft: str, revised: str) -> bool:
+    """A REVIEW rewrite that drops one of the draft's numbers AND brings in a new one changed a number - the
+    draft's came from the step that read the evidence. The first week's log (data/state/orna_reviews.jsonl,
+    2026-11-03): 9 of 32 rewrites did that and every one was wrong - a tier 7 dungeon's 13 floors became 20
+    six times, 5,329 became 5,325, 0.455 (5/11) became 0.409. A rewrite that only DROPS numbers is kept:
+    that is REVIEW removing stats a posted codex card already shows."""
+    a, b = _numbers(draft), _numbers(revised)
+    return bool(a - b) and bool(b - a)
+
+
 async def _call_review_model(original_request: str, transcript: str, draft_answer: str, card_note: str) -> dict:
     """The REVIEW phase: ONE separate model call, after a draft finish() is
     proposed and before it is allowed to post (RELEASE), checking the draft
@@ -5278,8 +5370,13 @@ async def _advance_inner(sid: str, message) -> None:
                     })
                     continue
                 if kind == "revise" and str(verdict.get("answer") or "").strip():
-                    logger.info("orna: review REVISED sid=%s", sid)
-                    action_input = str(verdict["answer"]).strip()
+                    revised = str(verdict["answer"]).strip()
+                    _log_review(session.original_request, draft_answer, revised)
+                    if _swaps_a_number(draft_answer, revised):
+                        logger.info("orna: review rewrite REJECTED (changed a number) sid=%s", sid)
+                    else:
+                        logger.info("orna: review REVISED sid=%s", sid)
+                        action_input = revised
             # finish() is the one place the model's own free-form prose
             # reaches the user (every other reply is a tool-built,
             # already-HTML message) - nothing in the prompt asks for
@@ -5845,12 +5942,17 @@ async def handle_clarify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # (live 2026-09-27: it re-ran tools and re-stated the same answer).
         await message.reply_text("Будь ласка! 🙂" if _CYRILLIC_RE.search(said) else "You're welcome! 🙂")
         return
+    await continue_conversation(sid, session, said, message)
+
+
+async def continue_conversation(sid: str, session, said: str, message) -> None:
+    """The next turn of a live conversation (a /clarify, a reply, the eval suite's follow-ups)."""
     if session.awaiting:
         follow_up = f"{_USER_ANSWER}\n{said}"
     else:
-        # A new turn of the same conversation - NOT an answer to anything.
-        # A new turn of the same conversation: it may correct, narrow or extend
-        # the previous answer, which is now in the transcript (see finish).
+        # A new turn of the same conversation - NOT an answer to anything:
+        # it may correct, narrow or extend the previous answer, which is now
+        # in the transcript (see finish).
         follow_up = f"{_USER_FOLLOW_UP}\n{said}"
     session.messages.append({"role": "user", "content": follow_up})
     # Stale once the user has supplied something - left set, the next finish
@@ -6783,6 +6885,25 @@ def _demo() -> None:
     finally:
         (orna_discord_search.enabled, orna_discord_search.search, orna_reddit_search.search,
          globals()["_keep_discord_hits"], globals()["_keep_reddit_threads"]) = real
+
+    # --- a REVIEW rewrite may drop numbers (card stats) but not change one ---
+    assert _swaps_a_number("Tier 7 has 13 floors, tier 11 has 25.", "Tier 7 has 20 floors, tier 11 has 25.")
+    assert not _swaps_a_number("40 Magic, 188 Defense, -600 Foresight.", "Its -600 foresight matters for summoners.")
+    assert not _swaps_a_number("Ward = 5,329 total.", "The total ward is 5329.")       # same number, other format
+    assert not _swaps_a_number("Burning deals damage.", "Burning deals 50% per tick.")   # a fact added from evidence
+
+    # --- the game's own Ukrainian terms reach the translator ---
+    assert "Tier = Ранг" in _glossary("Tier 11 dungeons have 25 floors", "Ukrainian"), _glossary("Tier 11", "Ukrainian")
+    assert "Rarity" not in _glossary("Tier 11 dungeons have 25 floors", "Ukrainian")
+    assert "Ранг = Tier" in _glossary("скільки поверхів на 11 рангу", "English") and _glossary("Tier 11", "English") == ""
+
+    # --- freshness: a passage's newest head date ages it; undated passages are not moved ---
+    nov26 = time.mktime((2026, 11, 3, 0, 0, 0, 0, 0, 0))
+    assert _hit_months_old("[2024-07-21] u/dev in r/OrnaRPG", nov26) == 28
+    assert _hit_months_old("T (Discord #x, 2026-09-01..2026-10-14) #k", nov26) == 1     # the range's end
+    assert _hit_months_old("[Pets (Ornapedia)] no date here") is None and _recency("no date") == 0
+    assert _recency("[2026-10-01] new") == _RECENCY_BONUS and _recency("[2021-01-01] old") == -_RECENCY_BONUS
+    assert _recency("[2026-10-01]") > _recency("[2025-06-01]") > _recency("[2023-06-01]")
 
     # --- words every corpus shares are dropped from a retrieval query (they only dilute it) ---
     assert _CORPUS_WIDE_WORDS.sub(" ", "Orna RPG ward capacity in the game").split() == ["ward", "capacity", "in", "the"]
