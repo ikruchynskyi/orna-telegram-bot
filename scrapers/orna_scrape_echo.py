@@ -28,6 +28,7 @@ messier text, never a crash.
 """
 from __future__ import annotations
 
+import paths
 import re
 import sys
 import time
@@ -38,7 +39,7 @@ from bs4 import BeautifulSoup
 
 SITEMAP_URL = "https://playerecho.com/sitemap-0.xml"
 BASE = "https://playerecho.com"
-OUT_PATH = "orna_echo.txt"
+OUT_PATH = str(paths.DATA / "orna_echo.txt")   # was cwd-relative: a run from the repo root missed data/
 # Identify the crawler honestly rather than spoofing a browser.
 HEADERS = {"User-Agent": "orna-telegram-bot/1.0 (guild helper bot; contact via github ikruchynskyi)"}
 DELAY_SECONDS = 1.0
