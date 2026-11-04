@@ -47,7 +47,7 @@ BATCH_CHARS = 50_000
 TIMEOUT = 15.0
 
 NAMESPACES = ("knowledge", "mechanics", "echo", "ornabook", "qa", "reddit", "discord", "questline", "discord_live",
-              "corrections", "verified")
+              "corrections", "verified", "discord_threads")
 
 _host: Optional[str] = None
 
@@ -133,7 +133,7 @@ def _units(namespace: str) -> list:
     if namespace == "discord":
         from knowledge import orna_discord_search
         return orna_discord_search.units()
-    if namespace in ("corrections", "verified"):
+    if namespace in ("corrections", "verified", "discord_threads"):
         from knowledge import orna_curated
         return orna_curated.units(namespace)
     if namespace == "discord_live":
