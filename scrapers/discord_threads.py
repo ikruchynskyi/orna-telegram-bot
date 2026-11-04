@@ -41,19 +41,23 @@ import httpx
 
 import paths
 from knowledge import orna_curated, orna_pinecone
-from orna.orna_discord import clean_markup
+from orna.orna_discord import clean_markup, snowflake_ms
 
 logger = logging.getLogger(__name__)
 
 GUILD = "448527960056791051"     # Orna: The GPS RPG (official)
-# forum channel id -> name. Not read: #beta-feedback, #orn-feedback, #bug-reports (reports, not knowledge),
+# forum channel id -> name. Not read: #devlogs (2 posts, under MIN_MESSAGES), #beta-feedback, #orn-feedback, #bug-reports (reports, not knowledge),
 # #kingdoms, #party-play, #build-showcase, #classic-* - add one here to read it.
-FORUMS = {"1084643200725164062": "discussion-threads", "1362045053857435850": "devlogs"}
+FORUMS = {"1084643200725164062": "discussion-threads"}
 RAW_DIR = paths.CACHE / "discord_threads"
 FACTS = paths.CACHE / "discord" / "thread_facts.json"
 UPLOADED = paths.CACHE / "discord" / "thread_uploaded.json"
 NS = "discord_threads"
 MIN_CHARS = 30          # "lol", "+1", "same" carry nothing
+# Scope (owner, 2026-11-03): threads with more than 50 messages, and only what was said since 2025 - older
+# threads are neither fetched nor summarized, a window that ends before SINCE is skipped.
+MIN_MESSAGES = 51
+SINCE = "2025-01-01"
 WINDOW_CHARS = 9000     # ~2.5k tokens of chat per local-model call
 LINE_CHARS = 1500
 MODEL = os.environ.get("SUMMARY_MODEL", "deepseek-v4.1-flash")
@@ -98,6 +102,8 @@ def _threads(browser, forum: str) -> list:
         if not isinstance(d, dict):
             raise RuntimeError(f"#{FORUMS[forum]}: the thread listing could not be read")
         for t in d.get("threads") or []:
+            if not in_scope(t):
+                continue
             if _load(RAW_DIR / f"{t['id']}.json", {}).get("last") == t.get("last_message_id"):
                 if complete:
                     return out           # sorted by activity: every thread after this one is unchanged too
@@ -106,6 +112,13 @@ def _threads(browser, forum: str) -> list:
         if not d.get("has_more"):
             return out
         offset += 25
+
+
+def in_scope(t: dict) -> bool:
+    """A listed thread worth reading: big enough, and active since SINCE."""
+    last = t.get("last_message_id") or t["id"]
+    since_ms = time.mktime(time.strptime(SINCE, "%Y-%m-%d")) * 1000
+    return (t.get("message_count") or 0) >= MIN_MESSAGES and snowflake_ms(last) >= since_ms
 
 
 def fetch() -> int:
@@ -119,7 +132,7 @@ def fetch() -> int:
             for i, t in enumerate(changed, 1):
                 path = RAW_DIR / f"{t['id']}.json"
                 rec = _load(path, None) or {"id": t["id"], "forum": fname, "messages": [], "last": "0"}
-                rec.update(name=t.get("name", ""), created=(t.get("thread_metadata") or {}).get("create_timestamp", "")[:10])
+                rec.update(name=t.get("name", ""), message_count=t.get("message_count") or 0, created=(t.get("thread_metadata") or {}).get("create_timestamp", "")[:10])
                 before = len(rec["messages"])
                 while True:
                     page = _browser.get(f"https://discord.com/api/v9/channels/{t['id']}/messages?limit=100&after={rec['last']}")
@@ -191,10 +204,17 @@ def _clean_facts(facts) -> list:
     return [str(f).strip()[:600] for f in facts or [] if str(f).strip()]
 
 
+def _scoped() -> list:
+    """(rec, window) for every in-scope window of every saved thread, newest thread first."""
+    return [(rec, w) for p in sorted(RAW_DIR.glob("[0-9]*.json"), key=lambda p: -int(p.stem))
+            for rec in [_load(p, {})] if rec.get("forum") in FORUMS.values()
+            and rec.get("message_count", MIN_MESSAGES) >= MIN_MESSAGES
+            for w in windows(rec) if w[2] >= SINCE]
+
+
 def _todo() -> list:
     facts = _load(FACTS, {})
-    return [(rec, w) for p in sorted(RAW_DIR.glob("[0-9]*.json"), key=lambda p: -int(p.stem))   # newest first
-            for rec in [_load(p, {})] for w in windows(rec) if w[0] not in facts]
+    return [(rec, w) for rec, w in _scoped() if w[0] not in facts]
 
 
 def pending(n: int) -> int:
@@ -243,13 +263,11 @@ def write_corpus() -> int:
     """Rewrite threads_knowledge.txt from the current windows (a grown window's old facts drop out)."""
     facts = _load(FACTS, {})
     entries = []
-    for p in sorted(RAW_DIR.glob("[0-9]*.json"), key=lambda p: -int(p.stem)):
-        rec = _load(p, {})
-        for k, start, end, first, _lines in windows(rec):
-            if facts.get(k):
-                entries.append((f"{rec['name']} (Discord #{rec['forum']}, {start}..{end}) #{k}",
-                                "\n".join(f"- {f}" for f in facts[k]),
-                                f"https://discord.com/channels/{GUILD}/{rec['id']}/{first}"))
+    for rec, (k, start, end, first, _lines) in _scoped():
+        if facts.get(k):
+            entries.append((f"{rec['name']} (Discord #{rec['forum']}, {start}..{end}) #{k}",
+                            "\n".join(f"- {f}" for f in facts[k]),
+                            f"https://discord.com/channels/{GUILD}/{rec['id']}/{first}"))
     orna_curated.save(NS, entries)
     return len(entries)
 
@@ -278,6 +296,11 @@ def index() -> tuple:
 
 
 def _demo() -> None:
+    new_id = str((int(time.mktime((2026, 10, 1, 0, 0, 0, 0, 0, 0)) * 1000) - 1420070400000) << 22)
+    old_id = str((int(time.mktime((2024, 6, 1, 0, 0, 0, 0, 0, 0)) * 1000) - 1420070400000) << 22)
+    assert in_scope({"id": old_id, "last_message_id": new_id, "message_count": 51})
+    assert not in_scope({"id": old_id, "last_message_id": new_id, "message_count": 50})
+    assert not in_scope({"id": old_id, "last_message_id": old_id, "message_count": 900})
     assert _message({"type": 0, "id": "1", "timestamp": "2026-10-01T00:00", "content": "lol same"}) is None
     assert _message({"type": 7, "id": "1", "content": "x" * 50}) is None
     assert _message({"type": 0, "id": "1", "content": "https://tenor.com/view/some-very-long-gif-link-here"}) is None
