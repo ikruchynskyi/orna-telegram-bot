@@ -5,8 +5,9 @@
 
 1. Delta: the developers' listings (orna_scrape_reddit._AUTHORS) are read newest first and stop at the first
    item already in orna_reddit.txt (matched by URL); r/OrnaRPG's newest posts that aren't in orna_qa.txt or
-   the crawl cache are fetched. Reddit is read through the bot's own off-screen Chrome
-   (orna_reddit_search._browser) - no API keys; anonymous JSON is refused.
+   the crawl cache are fetched. Without API keys or REDDIT_COOKIE, Reddit refuses the bot's Chrome every .json
+   ("blocked by network security", 2026-11), so the developer listings come from their RSS feeds through that
+   Chrome (orna_reddit_search._browser) and the r/OrnaRPG threads are skipped (RSS has no scores).
 2. Same filters as the full scrapers: a dev entry needs _MIN_BODY_CHARS and an Orna subreddit; a thread needs
    an answer that passes orna_scrape_qa._block (score, length, no bots); held-out eval threads stay out.
 3. Novelty: each candidate is shown to a free cloud model (gemma4) with the 3 closest existing chunks from the
@@ -73,6 +74,38 @@ def _get(path: str) -> dict:
     return r.json()
 
 
+def _api() -> bool:
+    """True when _get has a route Reddit still answers: API keys or REDDIT_COOKIE."""
+    return bool(os.environ.get("REDDIT_COOKIE", "").strip()
+                or (os.environ.get("REDDIT_CLIENT_ID") and os.environ.get("REDDIT_CLIENT_SECRET")))
+
+
+_ATOM = "{http://www.w3.org/2005/Atom}"
+
+
+def _rss_listing(feed: str) -> dict:
+    """An Atom feed of a /user/<name>/<kind> listing in the .json listing's shape (no scores: RSS has none)."""
+    import re
+    import xml.etree.ElementTree as ET
+    from datetime import datetime
+    children = []
+    for e in ET.fromstring(feed).iter(f"{_ATOM}entry"):
+        md = re.search(r'<div class="md">(.*)</div>', e.findtext(f"{_ATOM}content") or "", re.S)
+        text = re.sub(r"<[^>]+>", "", re.sub(r"</p>|<br\s*/?>", "\n", md.group(1) if md else "")).strip()
+        title, cat = e.findtext(f"{_ATOM}title") or "", e.find(f"{_ATOM}category")
+        when = e.findtext(f"{_ATOM}published") or e.findtext(f"{_ATOM}updated")
+        item = {"name": e.findtext(f"{_ATOM}id") or "",
+                "permalink": e.find(f"{_ATOM}link").get("href").replace("https://www.reddit.com", ""),
+                "subreddit": cat.get("term") if cat is not None else "",
+                "created_utc": datetime.fromisoformat(when).timestamp() if when else 0}
+        if item["name"].startswith("t1_"):          # a comment's title is "/u/<name> on <post title>"
+            item.update(body=text, link_title=title.split(" on ", 1)[-1])
+        else:
+            item.update(title=title, selftext=text)
+        children.append({"data": item})
+    return {"data": {"children": children, "after": children[-1]["data"]["name"] if len(children) >= 100 else None}}
+
+
 def _known_urls(path) -> set:
     try:
         text = path.read_text(encoding="utf-8")
@@ -89,7 +122,7 @@ def dev_candidates(known: set) -> list:
         after, stop = None, False
         for _ in range(MAX_PAGES):
             q = f"/user/{user}/{kind}.json?limit=100&raw_json=1" + (f"&after={after}" if after else "")
-            data = _get(q).get("data") or {}
+            data = (_get(q) if _api() else _rss_listing(_browser.get(q.replace(".json", ".rss", 1), raw=True))).get("data") or {}
             items = [c.get("data") or {} for c in data.get("children") or []]
             for item in items:
                 url = f"https://www.reddit.com{item.get('permalink', '')}".rstrip("/")
@@ -178,8 +211,12 @@ async def main(dry: bool) -> None:
     try:
         print("reading new developer posts and comments...", file=sys.stderr)
         devs = dev_candidates(_known_urls(R.OUTPUT_PATH if hasattr(R, "OUTPUT_PATH") else orna_reddit.DATA_PATH))
-        print(f"reading r/OrnaRPG's newest threads...", file=sys.stderr)
-        qas = qa_candidates(_known_urls(paths.DATA / "orna_qa.txt"))
+        if _api():
+            print(f"reading r/OrnaRPG's newest threads...", file=sys.stderr)
+            qas = qa_candidates(_known_urls(paths.DATA / "orna_qa.txt"))
+        else:   # the answer filter ranks by score, which RSS doesn't carry
+            print("r/OrnaRPG threads skipped: no API key or REDDIT_COOKIE, and RSS has no scores", file=sys.stderr)
+            qas = []
     finally:
         _browser.close()
     print(f"candidates: {len(devs)} developer entries, {len(qas)} threads", file=sys.stderr)
@@ -212,5 +249,20 @@ async def main(dry: bool) -> None:
             print(f"{ns}: {_upsert_tail(ns, before[ns])} new records upserted to Pinecone", file=sys.stderr)
 
 
+def _demo() -> None:
+    feed = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><category term="OrnaRPG"/><content type="html">'
+            '&lt;div class="md"&gt;&lt;p&gt;Sites rotate daily.&lt;/p&gt;&lt;/div&gt;</content><id>t1_abc</id>'
+            '<link href="https://www.reddit.com/r/OrnaRPG/comments/1x/t/abc/"/><updated>2026-10-29T16:58:48+00:00</updated>'
+            '<title>/u/OrnaOdie on Gleaming mobs</title></entry></feed>')
+    d = _rss_listing(feed)["data"]
+    it = d["children"][0]["data"]
+    assert it["body"] == "Sites rotate daily." and it["link_title"] == "Gleaming mobs" and d["after"] is None
+    assert it["permalink"] == "/r/OrnaRPG/comments/1x/t/abc/" and it["subreddit"] == "OrnaRPG" and it["created_utc"] > 0
+    print("ok")
+
+
 if __name__ == "__main__":
-    asyncio.run(main("--dry-run" in sys.argv))
+    if "--demo" in sys.argv:
+        _demo()
+    else:
+        asyncio.run(main("--dry-run" in sys.argv))

@@ -76,8 +76,8 @@ class _Browser:
             finally:
                 self.drv = None
 
-    def get(self, path: str):
-        """GET a reddit.com JSON path from inside the page. Waits out a 429."""
+    def get(self, path: str, raw: bool = False):
+        """GET a reddit.com JSON path from inside the page (raw=True: the text, e.g. an .rss feed). Waits out a 429."""
         with self.lock:
             for _attempt in range(3):
                 drv = self._page()
@@ -87,7 +87,7 @@ class _Browser:
                 res = drv.execute_script(_FETCH, path)
                 self.last = time.time()
                 if res["status"] == 200:
-                    return json.loads(res["body"])
+                    return res["body"] if raw else json.loads(res["body"])
                 if res["status"] == 429:
                     logger.info("reddit: rate limited, waiting %ss", RATE_LIMIT_WAIT)
                     time.sleep(RATE_LIMIT_WAIT)

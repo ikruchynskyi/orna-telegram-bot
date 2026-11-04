@@ -17233,3 +17233,102 @@ You get an accessory from a previous quest called "Lover's Lost", it looks like 
 [2022-05-01] u/Widogeist in r/OrnaRPG - re: unban a player form a kingdom
 https://www.reddit.com/r/OrnaRPG/comments/ufiz55/unban_a_player_form_a_kingdom/i6wymca/
 You likely have to email support at help@playorna.com.  I don't think there's anything we can do (as players) in the game about that stuff.
+
+=== Developer posts added 2026-11-04 (reddit_delta, developer commentary) ===
+[2026-10-29] u/OrnaOdie in r/OrnaRPG - re: Gleaming mobs
+https://www.reddit.com/r/OrnaRPG/comments/1xigyo5/gleaming_mobs/19ru8rvm9kxur/
+Hunting Sites rotate daily, not hourly - just an FYI.
+ This is a T3 guild, so I understand why T11s may not see a crazy amount of immediate use. That said, there are definitely T11 players that are giving us some praise for it - albeit generally they are folk that were already okay with world farming.
+ To say no one asked for it would be a little odd - world farming being lackluster was an extremely common complaint and is what led to the revamps of events like the Hallowed.
+
+[2026-10-29] u/OrnaOdie in r/OrnaRPG - re: Gleaming mobs
+https://www.reddit.com/r/OrnaRPG/comments/1xigyo5/gleaming_mobs/19ru64qo0tzkw/
+Yup, given this was one of the rare times where it became two streams of ascension mats for 1 activity, there was concern about further ascension inflation.
+ There's a lot of concern in the community about how far folk are pushing ascension, so giving more options isn't necessarily always the best idea.
+
+[2026-10-29] u/OrnaOdie in r/OrnaRPG - re: Gleaming mobs
+https://www.reddit.com/r/OrnaRPG/comments/1xigyo5/gleaming_mobs/19rtz5mouzski/
+Material removal was a request of the community fyi (well, virtually everything in the patch was due to community feedback). You've already got the world farming -> material loop via Despair.
+
+[2026-10-29] u/OrnaOdie in r/OrnaRPG - re: Gleaming mobs
+https://www.reddit.com/r/OrnaRPG/comments/1xigyo5/gleaming_mobs/19rtywvtgrrs0/
+The whole premise of gleamings/shiny encounters is to have something rare that you will encounter here and there in your travels - something that you can be excited about. The shop prices are reflective of such rarity.
+ They're not meant to be actively farmed in a sitting. There's no excitement in that.
+
+[2026-10-29] u/OrnaOdie in r/OrnaRPG - re: Gleaming mobs
+https://www.reddit.com/r/OrnaRPG/comments/1xigyo5/gleaming_mobs/19rtvhjz1p36r/
+There was an issue where event mobs interacted with the gleaming rate incorrectly, making gleaming event mobs way too common when combined with event mob boosters. It’s been fixed.
+
+[2026-10-28] u/OrnaOdie in r/OrnaRPG - re: Mi primer problema con Orna RPG luego de 2 años jugando
+https://www.reddit.com/r/OrnaRPG/comments/1xhnsrl/mi_primer_problema_con_orna_rpg_luego_de_2_años/19rs6ww4e2yw0/
+The issue is that our Spanish translation appears to have both the Crow (https://playorna.com/codex/monsters/crow/) and Raven (https://playorna.com/codex/monsters/raven/) translated as "Cuervo"
+ The quest is asking you to defeat a Raven and your video is showing you defeating a Crow.
+
+[2026-10-24] u/OrnaOdie in r/OrnaRPG - re: King's Guard Guild
+https://www.reddit.com/r/OrnaRPG/comments/1xeh8jv/kings_guard_guild/19rllaq2sog6c/
+Sure, but you’re in a thread about this week’s update suggesting it was also released in some ultra unfair way.
+ We stopped live betas in 2022/2023. Players wanted them back, so they are back. Updates with balance/competitive concerns are still done on the private beta server instead of live, like the current 4.0 update.
+
+[2026-10-24] u/OrnaOdie in r/OrnaRPG - re: King's Guard Guild
+https://www.reddit.com/r/OrnaRPG/comments/1xeh8jv/kings_guard_guild/19rll0qgifroi/
+What are you talking about? It was only in beta for 3 days. It’s currently out for everyone.
+
+[2026-10-19] u/OrnaOdie in r/OrnaRPG - re: Inventory display issue
+https://www.reddit.com/r/OrnaRPG/comments/1x8lqx7/inventory_display_issue/phpzduz/
+This is a bit of a technical nuance, but fish are not "stacks", and thus cannot have their count easily available to the game for purposes such as displaying total counts in crafting.
+ It's annoying, but not something I would consider a bug at this time.
+
+[2026-10-10] u/OrnaOdie in r/OrnaRPG - re: What are everyone's guesses for the big news we are getting on the 13th?
+https://www.reddit.com/r/OrnaRPG/comments/1x075kg/what_are_everyones_guesses_for_the_big_news_we/pf504om/
+Thanks! Some of these appear to be more opinionated than non-sensical, but I can implement any that seem to be a priority for the next update.
+ Persistent New bestiary filter was implemented about a year ago, btw.
+
+[2026-10-02] u/OrnaOdie in r/OrnaRPG - re: Halloween event issues
+https://www.reddit.com/r/OrnaRPG/comments/1wvr0mi/halloween_event_issues/pdg3mro/
+I get that this can be one's experience - just sharing some internals about it statistically. Inns have a relatively low chance to seed per area, Haunted Houses have a fixed density - no RNG requirement and more per square mileage of the world.
+
+[2026-10-02] u/OrnaOdie in r/OrnaRPG - re: Halloween event issues
+https://www.reddit.com/r/OrnaRPG/comments/1wvr0mi/halloween_event_issues/pdfd7se/
+Are you sure you were up to date (to have the haunted house update) for the majority of point #1? Haunted Houses are far more common than Inns, given they have a fixed density per area. Inn seeding is at the mercy of RNG.
+ Cooldown is your midnight, not 20 hours.
+
+[2026-10-27] u/Widogeist in r/OrnaRPG - re: Title: How do I unlock the Attuner class?
+https://www.reddit.com/r/OrnaRPG/comments/1xh2o5j/title_how_do_i_unlock_the_attuner_class/19rr1lewwlocj/
+As others have mentioned, the NPC Horus gives the summoner quest. You must complete his pre-requisite quest before he will give you the summoner quest. His first quest is called "The Arisen" which requires you to kill a few arisen monsters (easily done with a few horde beast den dungeons). The 2nd quest will give you the Summoner quest, where you need to obtain a few pieces of attuner gear (easiest way is killing enemies in arena, quality doesn't matter).
+
+[2026-10-27] u/Widogeist in r/OrnaRPG - re: Waxlights
+https://www.reddit.com/r/OrnaRPG/comments/1xgbrxi/waxlights/19rphf5i8nemd/
+Also to note, when you "buy" the waxlight it immediately applies the effect, similar to the torch buffs from spelunking guild.
+
+[2026-10-22] u/Widogeist in r/OrnaRPG - re: Kingdom War stuck?
+https://www.reddit.com/r/OrnaRPG/comments/1xc85kv/kingdom_war_stuck/19rhc7v5mrdcy/
+As far as I know, there's no way to cancel the matchmaking process. You could try sending an email to help@playorna.com and see if maybe they could assist in any way. The game is trying to find a kingdom equivalent to yours in terms of player count, player level (power level), ascension levels, etc, which is why it's taking so long.
+
+[2026-10-16] u/Widogeist in r/OrnaRPG - re: A mountain of loot - what yal got?
+https://www.reddit.com/r/OrnaRPG/comments/1x6m4sg/a_mountain_of_loot_what_yal_got/ph0luu4/
+Travelers Weapon: gives random weapon (usually trash)
+ Travelers Armor: gives random armor (usually trash)
+ Marvelous Item: gives random weapon (usually trash)
+ Pumpkinless Aspect: summons 3x T10 Arisen Pumpkinless raids at your location (spawns at whatever raid anguish level you currently have set)
+ Pumpkinseed Aspect: spawns 1 Giant Pumpkin dungeon at your location for 12hrs
+ Whispered Riddle Aspect: spawns 1 Dullahan Den dungeon at your location for 12hrs
+
+[2026-10-14] u/Widogeist in r/OrnaRPG - re: The great questing beast
+https://www.reddit.com/r/OrnaRPG/comments/1x5dfaa/the_great_questing_beast/pglzqf3/
+Great Questing Beast is a follower/pet currently only available in Heroes of Aethric (through the Adventurer's Guild). It's not available in Orna right now, but maybe they'll add the Adventurer's Guild in the future.
+
+[2026-10-04] u/Widogeist in r/OrnaRPG - re: Rate my setup, any tips
+https://www.reddit.com/r/OrnaRPG/comments/1wr64j8/rate_my_setup_any_tips/pdsrbwm/
+Yes. With 10 adornment slots you'll be able to get an additional +20% summon status using the Beguiled X/Y staff (using Goat's Eye weapon adorns); it already gives a base 30% to summon stats so you'll be starting off at +50% summon stats at anguish item level 0. Summon and pet stat bonuses on items get boosted with higher anguish item level, so the higher anguish item level you increase the staff, the more passive summon stats you'll receive from it. With celestial weapons, they doesn't get bonuses with anguished content so you'd be stuck with the flat 60% stats (assuming you used 5x eos hearts).
+
+[2026-10-02] u/Widogeist in r/OrnaRPG - re: Finished the quest so, what would be the use case for this one?
+https://www.reddit.com/r/OrnaRPG/comments/1wvu55o/finished_the_quest_so_what_would_be_the_use_case/pdhhshg/
+Aglovale is better than Bladeless. Higher att/mag/hp/mana plus it gives a passive arcane++ buff which further augments damage (assuming you can get a good quality Aglo). The only thing better about Bladeless is aglostrike 3 as opposed to aglostrike 2.
+
+[2026-09-30] u/Widogeist in r/OrnaRPG - re: Fml
+https://www.reddit.com/r/OrnaRPG/comments/1wuiccz/fml/pd3ritt/
+If shields give base stats (def/res/hp/mana/atk/mag), upping their anguish level will passively increase the base stats - assuming you're doing anguished content with it. Anguished levels won't increase ward directly, so if the shield only gives ward then additional anguish levels won't really do anything. With something like SGS, I would still recommend making it anguish level 1 so you can roll an anguish passive on it (like ward power or ward regen).
+
+[2026-09-27] u/Widogeist in r/OrnaRPG - re: Rate my setup, any tips
+https://www.reddit.com/r/OrnaRPG/comments/1wr64j8/rate_my_setup_any_tips/pca5va0/
+Farm yourself two Beguiled Quarterstaffs (X or Y version) from the current Apollyon event. 10 adorn slots at godforged and up to 35% base ward. As far as I know, it's the strongest staff in terms of bulking up summon stats
