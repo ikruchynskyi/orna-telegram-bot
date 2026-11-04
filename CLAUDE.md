@@ -108,10 +108,16 @@ Data sources (each = reader module + cache or committed file + scraper):
   admin); `/feedback`, `/verify`, `/correct`.
 - Reddit refresh: `python3 -m scrapers.reddit_delta [--dry-run]` - new items only, novelty-judged, appended,
   tail upserted. Needs REDDIT_CLIENT_ID/SECRET or a logged-in Reddit in `data/state/reddit_chrome`.
-- Discord threads: `python3 -m scrapers.discord_threads [fetch|summarize|index]` - the official server's forum
-  threads (#discussion-threads, #devlogs) through the logged-in Discord profile, delta per thread; the LOCAL
-  model turns ~9k-char windows into dated facts (cached per window); namespace `discord_threads`, only new
-  chunks upserted.
+- Discord threads: `python3 -m scrapers.discord_threads [fetch|summarize|pending N [SINCE]|accept F|index]` -
+  the official server's #discussion-threads, only threads with >50 messages and only windows since 2025 (owner's
+  scope), through the logged-in Discord profile, delta per thread. ~9k-char windows become dated facts (cached
+  per window): `summarize` uses cloud deepseek (`SUMMARY_MODEL`; paid only after the free quota), or
+  `pending`/`accept` lets Claude write them. Namespace `discord_threads`, only new chunks upserted. The 2026
+  windows are done; the 2025 ones are not.
+- ORN feedback: `python3 -m scrapers.orn_feedback [fetch|stale]` - #orn-feedback, the ORN's own per-event
+  summaries (first post edited in place, so every thread is re-read and a text hash marks stale facts).
+  Facts live in `data/cache/discord/orn_feedback_facts.json` (written by hand), go into the same
+  `discord_threads` corpus via `discord_threads.write_corpus()`; run `discord_threads index` after.
 - Monthly refresh: `python3 -m scrapers.refresh` (launchd: `deploy/com.username.ornarefresh.plist`) re-scrapes,
   re-indexes what changed (a corpus that shrank >30% is put back), runs the delta steps and tier 0, writes
   `data/cache/logs/refresh-<date>.md`. It commits nothing.

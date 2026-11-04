@@ -3,7 +3,8 @@
     python3 -m scrapers.discord_threads            # fetch new messages, summarize new windows, index - all three
     python3 -m scrapers.discord_threads fetch      # only pull new messages to data/cache/discord_threads/<id>.json
     python3 -m scrapers.discord_threads summarize  # only extract facts from windows not done before (cloud model)
-    python3 -m scrapers.discord_threads pending N  # write the next N unsummarized windows to data/cache/discord/pending/
+    python3 -m scrapers.discord_threads pending N [SINCE]  # the next N unsummarized windows (ending >= SINCE) to
+                                                   # data/cache/discord/pending/
     python3 -m scrapers.discord_threads accept F   # merge facts written by hand/another model: F = {"<key>": [facts]}
     python3 -m scrapers.discord_threads index      # only write the RAG file and push new chunks to Pinecone
     python3 -m scrapers.discord_threads --demo     # self-check, no network
@@ -217,10 +218,11 @@ def _todo() -> list:
     return [(rec, w) for rec, w in _scoped() if w[0] not in facts]
 
 
-def pending(n: int) -> int:
-    """The next n unsummarized windows as text files, prompt included, for a summarizer outside this script."""
+def pending(n: int, since: str = SINCE) -> int:
+    """The next n unsummarized windows (ending on or after `since`) as text files, prompt included, for a
+    summarizer outside this script."""
     PENDING.mkdir(parents=True, exist_ok=True)
-    todo = _todo()[:n]
+    todo = [t for t in _todo() if t[1][2] >= since][:n]
     for rec, (k, start, end, _first, lines) in todo:
         (PENDING / f"{k}.txt").write_text(_PROMPT.format(name=rec["name"], start=start, end=end,
                                                          chat="\n".join(lines)), encoding="utf-8")
@@ -268,6 +270,8 @@ def write_corpus() -> int:
             entries.append((f"{rec['name']} (Discord #{rec['forum']}, {start}..{end}) #{k}",
                             "\n".join(f"- {f}" for f in facts[k]),
                             f"https://discord.com/channels/{GUILD}/{rec['id']}/{first}"))
+    from scrapers import orn_feedback          # the ORN's own summaries, same namespace
+    entries += orn_feedback.entries()
     orna_curated.save(NS, entries)
     return len(entries)
 
@@ -329,7 +333,7 @@ if __name__ == "__main__":
         _demo()
         sys.exit()
     if step == "pending":
-        pending(int(sys.argv[2]) if len(sys.argv) > 2 else 20)
+        pending(int(sys.argv[2]) if len(sys.argv) > 2 else 20, *sys.argv[3:4])
         sys.exit()
     if step == "accept":
         print("accepted", accept(sys.argv[2]), file=sys.stderr)

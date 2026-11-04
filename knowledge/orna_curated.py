@@ -5,7 +5,7 @@
   says the guides are out of date: what changed, when, and what is true now. Outranks every other source.
 - data/orna_verified.txt - /orna answers a reviewer approved after players voted on them (/verify): a worked
   answer to a question that is likely to be asked again.
-- data/cache/discord/threads_knowledge.txt - facts the local model extracted from the official Discord's
+- data/cache/discord/threads_knowledge.txt - facts a model extracted from the official Discord's
   discussion threads (scrapers/discord_threads.py), one dated section per stretch of a thread; gitignored
   like the rest of the Discord harvest.
 
@@ -29,7 +29,7 @@ FILES = {"corrections": paths.DATA / "orna_corrections.txt", "verified": paths.D
 HEADER = {"corrections": "# Corrections: what official patch notes (or an admin) say the guides get wrong. Written by\n"
                          "# scrapers/patch_audit.py and /correct - edit by hand freely, keep the section format.\n",
           "verified": "# Verified /orna answers: approved by an admin (/verify) after players voted on them.\n",
-          "discord_threads": "# Facts from the official Orna Discord's discussion threads, extracted by the local model.\n"
+          "discord_threads": "# Facts from the official Orna Discord's discussion threads (first run summarized by Claude, later ones by deepseek).\n"
                              "# Written by scrapers/discord_threads.py - rebuilt on every run, don't edit by hand.\n"}
 LABEL = {"corrections": "Correction", "verified": "Verified answer", "discord_threads": "Discord thread"}
 
