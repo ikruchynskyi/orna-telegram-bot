@@ -257,12 +257,10 @@ def _named_crucible(q: str) -> tuple:
 _SLOTS = ("Weapon", "Off-hand", "Head", "Chest", "Legs")
 
 
-def overview() -> str:
-    """Every crucible, one line each: its bonuses with range and the slots they roll on. A build question
-    ("optimal crucible bonuses for my gear") needs them side by side - 2026-11-04 the loop asked for the
-    Anguished Crucible, saw only its table, and never weighed the Titan Crucible's Damage Limit Break on any slot
-    or the Yelmogus Crucible's Status Effect Chance."""
-    groups: dict = {}
+def _crucible_rows() -> list:
+    """(crucible item, crucible type, bonus, "lo–hi", where) for every crucible table row."""
+    items = {kind: f"{word.title()} Crucible" for word, kind in reversed(list(_CRUCIBLE_TYPES.items()))}
+    out = []
     for row in all_bonuses().get("crucibles") or []:
         cells = row.split(" | ")
         kind = next((c[len("Crucible: "):] for c in cells if c.startswith("Crucible: ")), "")
@@ -270,15 +268,31 @@ def overview() -> str:
         hi = next((c[5:] for c in cells if c.startswith("Max: ")), "")
         slots = [sl for sl in _SLOTS if f"Can apply to {sl}" in row]
         where = "all 5 slots" if len(slots) == len(_SLOTS) else "/".join(slots) or "no slot"
-        groups.setdefault(kind, []).append(f"{cells[0]} {lo}–{hi} ({where})")
-    items = {kind: f"{word.title()} Crucible" for word, kind in reversed(list(_CRUCIBLE_TYPES.items()))}
-    lines = []
-    for kind, bonuses in groups.items():
-        item = next((v for k, v in items.items() if k in kind.lower()), "")
-        lines.append(f"{item or kind} [{kind}]: " + "; ".join(bonuses))
+        out.append((next((v for k, v in items.items() if k in kind.lower()), kind), kind, cells[0], f"{lo}–{hi}", where))
+    return out
+
+
+def overview() -> str:
+    """Every crucible, one line each: its bonuses with range and the slots they roll on. A build question
+    ("optimal crucible bonuses for my gear") needs them side by side - 2026-11-04 the loop asked for the
+    Anguished Crucible, saw only its table, and never weighed the Titan Crucible's Damage Limit Break on any slot
+    or the Yelmogus Crucible's Status Effect Chance."""
+    groups: dict = {}
+    for item, kind, bonus, rng, where in _crucible_rows():
+        groups.setdefault((item, kind), []).append(f"{bonus} {rng} ({where})")
+    lines = [f"{item} [{kind}]: " + "; ".join(b) for (item, kind), b in groups.items()]
     return ("[all crucibles - aussiescodex: each rolls ONE of its bonuses onto an anguished item; brackets = the "
             "slots it can roll on, of the 5: Weapon, Off-hand, Head, Chest, Legs - accessories take no crucible]\n"
             + "\n".join(lines)) if lines else ""
+
+
+def where_rolls(bonus: str, amity_words: str = "") -> str:
+    """Every crucible that rolls `bonus` (name prefix) with range and slots, plus the amities whose description
+    holds `amity_words` - "where can I get X" in one line."""
+    crucibles = [f"{item} {rng} ({where})" for item, _k, b, rng, where in _crucible_rows() if b.startswith(bonus)]
+    amities = [f"amity {a['range']} ({a['desc']})" for a in all_bonuses().get("amity_cards") or []
+               if amity_words and amity_words in (a.get("desc") or "").lower()]
+    return "; ".join(crucibles + amities)
 
 
 def search(query: str, limit: int = 40) -> str:
@@ -328,6 +342,8 @@ def _demo_crucible_names() -> None:
         assert "Titan Crucible [Giants and Titans" in every and "Anguished Crucible [Regular Anguish 2.0]" in every, every[:300]
         assert "Pet Act 3%–7% (Head)" in every and "Elemental Weakness 2%–5% (all 5 slots)" in every, every
         assert "accessories take no crucible" in every
+        dlb = where_rolls("Damage Limit Break", "maximum damage limit")
+        assert "Anguished Crucible 50%–100% (Weapon)" in dlb and "Titan Crucible" in dlb and "amity" in dlb, dlb
     rows = search("Anguished Crucible")
     if rows:   # needs the fetched table
         assert rows.startswith("[crucibles - aussiescodex: every bonus the Anguished Crucible") and \

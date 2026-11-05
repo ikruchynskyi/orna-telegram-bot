@@ -102,7 +102,11 @@ Data sources (each = reader module + cache or committed file + scraper):
   is a near-identical text with a changed number, or brings a number the evidence lacks.
 - Build questions (`_OPTIMIZE_RULE`): every crucible side by side (`orna_bonuses.overview()`, on any crucible
   query), the pet's per-skill act/landing estimate in `research` (`orna_aussies._act_summary`, the Beowulf
-  guide's act-rate formula), then cap / reliability / size before a per-slot pick.
+  guide's act-rate formula), then `build_check` - one result with every mechanic that can decide a build
+  (CONTEXT, PIPELINE, CAPS, STACKING, SOURCE & RELIABILITY, SATURATION, SLOTS, TRADE-OFFS, FRESHNESS): each
+  dimension heads with the curated sentences of `orna_mechanics.txt` "Build math" (+ formula, stat bonuses),
+  then focused search passages; CAPS lists where the cap can be raised (`orna_bonuses.where_rolls`). REVIEW
+  sees a whole checklist and point 9 checks it. Spec/plan: `docs/superpowers/*/2026-11-04-orna-build-reasoning*`.
 - Context: `_compact` sends the last `_KEEP_FULL_RESULTS` tool results whole and cuts older long ones (the
   repeat cache returns the full text); `_working_state` is appended to every step.
 - Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the

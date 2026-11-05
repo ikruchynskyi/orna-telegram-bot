@@ -238,7 +238,7 @@ def _markdown_to_html(text: str) -> str:
     """
     text = _CITE_RE.sub("", text)
     text = _LATEX_RE.sub(lambda m: _LATEX[m.group(1)], text)
-    if "\n" not in text and text.count("\\n") >= 2:     # JSON escaped twice by the model: one line of "\n" (2026-11-04)
+    if text.count("\\n") >= 2 and text.count("\\n") > text.count("\n"):     # JSON escaped twice by the model: one line of "\n" (2026-11-04)
         text = text.replace("\\n", "\n").replace('\\"', '"')
     stash: list[str] = []
 
@@ -1345,6 +1345,7 @@ def _demo() -> None:
     assert _markdown_to_html(r"A $\rightarrow$ B, 6% $\times$ 40%, $5, \topic") == r"A → B, 6% × 40%, $5, \topic"
     assert _markdown_to_html(r"**Head**\nPet Act\n\"3-7%\"") == '<b>Head</b>\nPet Act\n&quot;3-7%&quot;'
     assert _markdown_to_html("path C:\\new\nline") == "path C:\\new\nline"        # real newlines: left alone
+    assert _markdown_to_html(r"**A**\n- one\n- two" + "\nFollow up") == "<b>A</b>\n• one\n• two\nFollow up"
     assert _markdown_to_html("- one\n- two") == "• one\n• two"
     # "*"-marked bullets must become bullets, not be paired into italic spans.
     assert _markdown_to_html("* one\n* two\n* three") == "• one\n• two\n• three"

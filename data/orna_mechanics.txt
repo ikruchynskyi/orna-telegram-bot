@@ -323,6 +323,46 @@ Several bonuses stack MULTIPLICATIVELY, not additively: Weapon Proficiency +5%
 (Mage/Thief offensive stats), Origin Town +10% to core stats, and a Party bonus
 +10% to core stats. Combined that is 1.05 × 1.10 × 1.10 ≈ +27%, not +25%.
 
+=== Build math: caps, stacking, weakness, status, pets ===
+What decides a build or gear-bonus choice, beyond the damage formula above.
+DAMAGE CAPS. Damage is capped at 9,999,999 per hit; Damage Limit Break (an
+anguish/crucible bonus) and some amities raise that limit (Reddit, u/Widogeist,
+2024-07-17). A raid also caps damage, at the raid's max HP and per player
+(player, 2026-07-23), and events set their own raid cap (Apollyon 2025: 50%,
+lowered to 40%). Skills that hit many times (Deity's 2000 Seals/Blades) get
+past the per-hit cap (players, 2026-07-06). Ara (Heretic specialization) has
+5x the damage cap. UNKNOWN: whether Damage Limit Break raises a raid's
+per-player cap, and whether Damage Limit Break from several items stacks. So a
+build "at the damage cap" gains nothing from more damage of any kind until the
+cap rises - first ask which cap it is at.
+WEAKNESS STACKING (players, 2026-06-03..04). Blights do not stack with other
+blights and sigils replace each other, but ONE blight and ONE sigil both apply:
+blight +50% damage, sigil +20%. Weakness exploit applies to both, and a sigil
+counts as a weakness for weakness exploit and for flask charging (double
+charge). That is why weakness exploit beats +element damage in a sigil build:
+it applies twice.
+BONUS STACKING. Different buffs multiply (see the damage formula). Anguish
+bonuses: proof chance and anguished-gear chance add; the other anguish bonuses
+multiply (player, 2026-09-03). A 5% bonus does not cancel a 5% malus, because
+they multiply (players, 2026-08-13).
+PVP. Anguish bonuses, crucible bonuses included, do not work in PvP (possibly
+except against anguished opponents) (players, 2026-08-05 and 2026-08-13).
+Demonworking (Anguish Level) stats are PvE-only too (section above).
+STATUS EFFECTS. The chance to apply a status is rolled once, on the first
+successful hit (damage formula section). Status immunity items protect you from
+enemies' debuffs, not from a follower's or your own items' (Reddit, u/Widogeist).
+UNKNOWN: whether the player's Status Effect Chance changes a follower's skill
+chance.
+PETS. A follower's act chance is the sum of its category rates over its skills
+plus its attack rate; Pet/Follower Act from gear, spec or amity adds to EACH
+buff/spell/debuff/heal skill, not to attack or protect; at 100% it acts every
+turn, so more act rate after that only shifts which skill it picks (player
+research thread 2026-07-28; Fey Cactus example 2026-02-22). The research tool
+shows this estimate per follower.
+CRUCIBLES. A crucible replaces an anguished item's bonus with one random bonus
+from its own pool; the pool and the slots differ per crucible, and accessories
+take none (aussiescodex crucible table).
+
 === Dungeons: Battle Dungeons only (Exploration Dungeons removed 2026-07-29) ===
 Exploration (Deep) Dungeons - the mining, top-down kind added in late 2023 - were
 removed on 2026-07-29 (server 1.331, app 3.26.1, playorna.com/releases): Goblin

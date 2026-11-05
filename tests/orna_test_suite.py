@@ -797,8 +797,21 @@ def build_cases() -> list:
         Case("crucible-optimize", 3, "I want to improve my build by rolling new anguish bonuses on items. Suggest "
              "optimal bonuces from crucibles for items from Heretic's element weakness build. I'm planing to use "
              "Gorynych pet for elemental weakness debufs",
-             Expect(tools_all=["research", "knowledge_search"], final_any_of=[["limit break"], ["titan"]],
+             Expect(tools_all=["research", "build_check"], final_any_of=[["limit break"], ["titan"]],
                     final_none_of=["accessor"])),
+        # build_check's CONTEXT / STACKING / CAPS points (spec 2026-11-04-orna-build-reasoning): the fact that decides
+        # each is in the mechanics corpus - crucible bonuses do nothing in PvP, weakness exploit applies to blight
+        # and sigil both, a raid caps damage.
+        Case("pvp-crucible", 3, "which crucible bonuses should I roll on my gear for Beowulf in PvP arena?",
+             Expect(tools_all=["build_check"], final_any_of=[[
+                 "not work", "n't work", "not apply", "n't apply", "no effect", "not active", "inactive", "useless",
+                 "not function", "n't function", "ineffective", "no benefit", "do nothing", "does nothing"]])),
+        Case("weakness-vs-element", 3, "for my Heretic, is a weakness exploit amity better than a fire damage amity?",
+             Expect(tools_any=["build_check", "knowledge_search", "class_guide"], final_any_of=[[
+                 "twice", "applies to both", "both the blight", "blight and the sigil", "blight and a sigil",
+                 "sigil and a blight", "sigil and blight", "blight and sigil", "each count", "doubl", "two weakness"]])),
+        Case("gsh-raid-cap", 3, "how can I raise my Grand Summoner Hydrus damage in raids?",
+             Expect(tools_any=["build_check", "class_guide", "knowledge_search"], final_any_of=[["cap"]])),
         Case("heretic-build", 3, "give me build advice for the heretic omniflask raid build",
              Expect(tools_all=["class_guide"], cyrillic="forbidden")),
         # _AGGREGATE_RULE: assess per NAMED item (a codex page shows the

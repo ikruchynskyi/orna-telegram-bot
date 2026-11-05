@@ -91,6 +91,7 @@ from knowledge import orna_discord_search
 from knowledge import orna_reddit_search
 from knowledge import orna_pinecone
 from knowledge import orna_textindex
+from knowledge import orna_mechanics
 from orna import orna_classes
 from knowledge import orna_guides
 from knowledge import orna_knowledge
@@ -149,7 +150,7 @@ MAX_CLOUD_CALLS = 20
 ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
-_ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research",
+_ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research", "build_check",
             "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
             "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish",
             "parallel")
@@ -157,7 +158,7 @@ _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "
 # the model put "assess the two items" in a parallel step 4 times when it was refused). Not the browser
 # search (Chrome sessions) or tools that post one combined deliverable. Up to _PARALLEL_MAX per step.
 _PARALLEL_OK = ("search_codex", "query", "sql", "open_entry", "knowledge_search", "web_search", "releases",
-                "class_guide", "research", "calculate", "assess")
+                "class_guide", "research", "build_check", "calculate", "assess")
 _PARALLEL_MAX = 4
 # Declared to Ollama on every step call - NOT because the loop wants native
 # tool calling (it reads its action out of either channel, see
@@ -884,7 +885,19 @@ async def _run_codex_search(message, query: str, lang: str = "en", sources: Opti
 
     _remember_entries(session, results)
     _cite_entries(sources, results)
-    return f"{len(results)} results for {query!r}: {_names_observation(results)}"
+    return f"{len(results)} results for {query!r}: {_names_observation(results)}" + _exact_note(query, results)
+
+
+def _exact_note(query: str, results: list) -> str:
+    """When one result IS the name asked for, say so: the others only share words with it. 2026-11-05: "Goat's
+    Hood" also opened Forest Goat's Hood and the answer described both (goats-hood 3/5, REVIEW's SCOPE point
+    kept it)."""
+    norm = lambda x: re.sub(r"[^\w]+", " ", (x or "").lower()).strip()
+    exact = [r.get("name") for r in results if norm(r.get("name")) == norm(query)]
+    if len(exact) == 1 and len(results) > 1:
+        return (f". {exact[0]} is the exact name asked for; the others only share words with it - do not open or "
+                "mention them unless the user asked for them.")
+    return ""
 
 
 # difflib ratio for a correction trusted BEFORE the word-dropping ladder: one
@@ -2795,6 +2808,134 @@ async def _run_knowledge_tool(message, query: str, sources: Optional[list] = Non
     return out or f"no knowledge-base matches for {query!r} - try web_search instead"
 
 
+# build_check: every mechanic that can decide a build choice, in ONE result (the research-supergraph idea applied
+# to mechanics). 2026-11-04: the corpora held the per-hit cap, the raid cap, how blights and sigils stack and that
+# crucible bonuses do not work in PvP - the loop's narrow searches found none of them. Spec and plan:
+# docs/superpowers/specs|plans/2026-11-04-orna-build-reasoning*. Each dimension: (name, rule, query, focus words).
+_BUILD_DIMENSIONS = (
+    ("CONTEXT", "Which content: raid, tower, anguish level, endless, monument, PvP (arena/BoF)? One target or many, "
+     "and its immunities? Anguish and crucible bonuses do not work in PvP.",
+     "{goal} raid tower anguish endless pvp", ("raid", "tower", "anguish", "endless", "pvp", "arena", "immun")),
+    ("PIPELINE", "Where does the boosted bonus enter the damage formula? Penetration comes first: a multiplier on "
+     "zero damage is zero.", "damage formula penetration multiplier {goal}",
+     ("formula", "penetrat", "m1", "m2", "multipl", "threshold")),
+    ("CAPS", "Is the build at a cap (9,999,999 per hit, a raid's per-player cap, a class cap)? If a passage says "
+     "the build reaches the damage cap, the FIRST pick is raising the cap (where: below), before any more damage "
+     "%: more damage adds nothing at the cap. Say which cap; whether Damage Limit Break raises a raid's cap is "
+     "unknown.", "damage cap limit break {goal}",
+     ("cap", "limit break", "9,999,999")),
+    ("STACKING", "Which of these bonuses add and which multiply? Does the same bonus from two items stack?",
+     "bonus stack additive multiply {goal}", ("stack", "additive", "add;", "multipl", "replace", "cancel")),
+    ("SOURCE & RELIABILITY", "What creates the effect the build relies on? Is it sure (your own skill) or a "
+     "chance (a pet's debuff, a proc)? How often does it land, how long does it last?",
+     "{goal} chance to apply land duration", ("chance", "land", "apply", "duration", "rolled", "sigil", "blight")),
+    ("SATURATION", "Does the stat stop helping (100% act, crit or status chance; a buff that is already always "
+     "up)? Past that point more of it is wasted.", "{goal} 100% every turn maximum",
+     ("every turn", "always", "at 100%", "wasted", "maximum", "no more")),
+    ("SLOTS & AVAILABILITY", "Which slot can roll or hold it (one anguish bonus per item, accessories take no "
+     "crucible)? Is the source event-only?", "crucible slot event {goal}",
+     ("slot", "crucible", "weapon", "off-hand", "head", "chest", "legs", "accessor", "event")),
+    ("TRADE-OFFS", "What does the slot give up: ward, HP, mana, defense, survival at higher anguish?",
+     "{goal} survivability ward mana", ("ward", "mana", "surviv", " hp", "malus")),
+)
+_BUILD_HITS = 2            # passages shown per dimension
+# The curated mechanics every build answer rests on; their sentences on a dimension head it, whatever the search
+# finds (2026-11-04 tuning: with the build's own words in each query, the cap and PvP facts never ranked).
+_BUILD_CURATED = ("Build math", "Combat: the universal damage formula", "Stat bonuses (they multiply)")
+_BUILD_HIT_CHARS = 420     # of each passage, the sentences that carry the dimension's words
+
+
+def _focus(text: str, words: tuple, limit: int = _BUILD_HIT_CHARS) -> str:
+    """The sentences of `text` that hold one of `words`, in order, within `limit`; "" when none does (a passage
+    with nothing on this dimension is not shown under it)."""
+    body = text.split("\n", 1)[1] if text.startswith("===") and "\n" in text else text
+    body = re.sub(r"\n(?![-•]\s|===|\s*\n)", " ", body)      # rejoin hard-wrapped lines; keep bullets and headings
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", body) if x.strip()]
+    score = lambda x: sum(w in x.lower() for w in words)
+    # the sentences that name most of the dimension's words win; then they are shown in the text's own order
+    ranked = sorted((i for i, x in enumerate(sentences) if score(x)), key=lambda i: (-score(sentences[i]), i))
+    keep, size = set(), 0
+    for i in ranked:
+        if size + len(sentences[i]) <= limit:
+            keep.add(i)
+            size += len(sentences[i]) + 1
+    keep = [sentences[i] for i in sorted(keep)]
+    return " ".join(keep)
+
+
+def _compose_build_check(goal: str, mode: str, gear: str, hits_by_dim: list, extras: list, curated: str = "",
+                         notes: Optional[dict] = None) -> str:
+    """The BUILD CHECKLIST block: per dimension its rule, the `curated` mechanics sentences on it, and up to
+    _BUILD_HITS focused passages, a snippet shown once across the whole checklist. Pure - tier 0 tests it."""
+    head = (f"BUILD CHECKLIST for {goal!r}" + (f" with {gear!r}" if gear else "")
+            + (f" ({mode})" if mode else " (game mode not given: ask, or state your assumption in the answer)")
+            + " - answer every line that changes the recommendation; \"unknown\" is an answer:")
+    out, seen = [head], set()
+    for (name, rule, _query, words), hits in zip(_BUILD_DIMENSIONS, hits_by_dim):
+        out.append(f"\n{name}: {rule}")
+        if (notes or {}).get(name):
+            out.append(f"  {notes[name]}")
+        known = _focus(curated, words, 450) if curated else ""
+        if known:
+            out.append(f"  [mechanics] {known}")
+            seen.update(sentence[:120].lower() for sentence in [known])
+        shown = 0
+        for h in hits or []:
+            if curated and any(t in (h.get("text") or "")[:90] for t in _BUILD_CURATED):
+                continue        # the curated mechanics are already above, from the file itself
+            snippet = _focus(h.get("text", ""), words)
+            key = snippet[:120].lower()
+            if shown >= _BUILD_HITS or not snippet or key in seen:
+                continue
+            seen.add(key)
+            tag = _SOURCE_NOTES.get(h.get("ns"), (h.get("ns") or "source",))[0]
+            out.append(f"  [{tag}] {(h.get('title') or '').strip()[:80]}: {snippet}")
+            shown += 1
+        if not shown and not known:
+            out.append("  (no passage found - if this matters, say it is unknown)")
+    out += [f"\n{e}" for e in extras if e]
+    return "\n".join(out)
+
+
+async def _run_build_check_tool(args: dict, sources: Optional[list] = None) -> str:
+    goal = " ".join(str(args.get("goal") or "").split())
+    mode = " ".join(str(args.get("mode") or "").split())
+    gear = " ".join(str(args.get("gear") or "").split())
+    if not goal:
+        return 'build_check needs args.goal: what the build boosts ("elemental weakness omniflask")'
+    subject = f"{goal} {gear}".strip()
+    found = await asyncio.gather(*(_retrieve(q.format(goal=subject)) for _n, _r, q, _w in _BUILD_DIMENSIONS),
+                                 return_exceptions=True)
+    hits_by_dim = [r[:6] if isinstance(r, list) else [] for r in found]
+    extras = []
+    if re.search(r"crucible|anguish", subject, re.I):
+        try:
+            extras.append(await asyncio.to_thread(orna_bonuses.overview))
+        except Exception:
+            logger.warning("orna: build_check crucible overview failed", exc_info=True)
+    try:
+        notes = await asyncio.to_thread(orna_releases.search_strict, goal, 3)
+    except Exception:
+        notes = []
+    if notes:
+        extras.append("FRESHNESS - official patch notes that mention this, newest first (they win over older "
+                      "passages):\n" + orna_releases.format_notes(notes, max_items=4))
+    if sources is not None:
+        for hits in hits_by_dim:
+            for h in hits[:_BUILD_HITS]:
+                _add_source(sources, h.get("title", ""), h.get("url", ""))
+    try:
+        curated = " ".join(body for title, body in orna_mechanics._load() if title.startswith(_BUILD_CURATED))
+    except Exception:
+        curated = ""
+    try:
+        raise_cap = await asyncio.to_thread(orna_bonuses.where_rolls, "Damage Limit Break", "maximum damage limit")
+    except Exception:
+        raise_cap = ""
+    notes = {"CAPS": f"Where the cap can be raised: {raise_cap}"} if raise_cap else {}
+    return _compose_build_check(goal, mode, gear, hits_by_dim, extras, curated, notes)
+
+
 # community_search is a LAST resort, gated in code (a prompt rule is ~70-90%):
 # it drives real browsers - Discord on the user's own account (ban risk, see
 # orna_discord_search) and an off-screen Chrome on Reddit - takes 10-30s, and
@@ -3466,6 +3607,11 @@ _TOOLS_TEXT = (
     "class name often finds a boss with the same name (\"Gilgamesh\" finds the boss Fallen Gilgamesh). For a "
     "class, use estimate_stats (its stats) or knowledge_search (what it gives; is it a class or a "
     "specialization).\n"
+    "- build_check(args={\"goal\":\"<what the build boosts: elemental weakness omniflask / crit / pact damage>\","
+    "\"mode\":\"<raid/tower/anguish/endless/pvp, if known>\",\"gear\":\"<the items, pet or bonus being "
+    "chosen>\"}): The mechanics checklist for a BUILD question: game mode, the damage formula, caps, stacking, "
+    "how reliable the source is, saturation, slots, trade-offs and recent patches, each with the community "
+    "passages about it. Call it once, after you know the build's goal. See BUILD OPTIMIZATION.\n"
     "- calculate(action_input=<numeric expression, e.g. \"1.5 * 1.2 * 1.1\">): Calculates + - * / ** % and "
     "parentheses. Use it for all arithmetic with more than one step, and always to combine numbers from "
     "different tool results. Write the numbers you found into the expression.\n"
@@ -3667,20 +3813,22 @@ _CLASS_GUIDE_RULE = (
 # 2026-11-04: "optimal crucible bonuses for a Heretic weakness build with Gorynych" was answered from one crucible's
 # table: no pet numbers, no damage cap, no weighing of a chance-based source against a sure one.
 _OPTIMIZE_RULE = (
-    "BUILD OPTIMIZATION - for \"which bonuses, crucibles, amities or adornments are best for my build/gear\":\n"
+    "BUILD OPTIMIZATION - for \"which bonuses, crucibles, amities, adornments, pets or gear are best for my "
+    "build\", or \"is X or Y better for my build\":\n"
     "  1. Get the build's goal and gear: class_guide (its Priorities: and Notes: lines) or the user's items.\n"
-    "  2. Get ALL the options. knowledge_search(\"crucible bonuses\") gives every crucible, each bonus's range and "
-    "the slots where it can roll.\n"
-    "  3. If the build relies on a pet, call research(<pet>). It shows how often the pet uses each skill and the "
+    "  2. If the build relies on a pet, call research(<pet>). It shows how often the pet uses each skill and the "
     "chance that its status effect lands.\n"
-    "  4. Before you recommend an option, check three things and write them in the answer:\n"
-    "     a. CAP: if a source says the build reaches the damage cap, more damage of any kind is wasted. Then "
-    "Damage Limit Break comes first.\n"
-    "     b. RELIABILITY: name the source the build depends on. A bonus that improves a chance-based source (a "
-    "pet that casts a debuff on some turns) is worth less than one that improves a sure source.\n"
-    "     c. SIZE: compare the ranges side by side (a 2-5% roll against a 20% amity). Use calculate() for totals.\n"
-    "  5. Recommend one bonus for each gear slot, with the crucible and the range. Mark estimates as estimates. "
-    "If no source says how two bonuses interact, say so."
+    "  3. Call build_check(args={goal, mode, gear}) once. Put \"crucible\" in goal or gear for a crucible "
+    "question: then it also lists every crucible, each bonus's range and the slots where it can roll.\n"
+    "  4. GAME MODE: if the user did not say raid, tower, anguish, endless or PvP, ask, or state your assumption. "
+    "The right pick often changes with the mode (a raid caps damage per player; crucible bonuses do not work "
+    "in PvP).\n"
+    "  5. Give one pick for each gear slot, with its source (crucible, amity, item) and range. Then one line for "
+    "each checklist point that changes a pick - for example: CAPS (at a cap, Damage Limit Break comes before "
+    "more damage), SOURCE & RELIABILITY (a bonus to a pet's chance-based debuff is worth less than one to a sure "
+    "source), STACKING (what adds, what multiplies, what replaces), SIZE (compare ranges side by side; use "
+    "calculate() for totals).\n"
+    "  6. A point the checklist marks UNKNOWN stays unknown in the answer. Mark estimates as estimates."
 )
 
 _STRATEGY_RULE = (
@@ -4440,6 +4588,7 @@ def _working_state(messages: list) -> str:
 # "sold in the Circle of Anguish Guild Shop" into "the evidence does not
 # specify where it is obtained".
 _REVIEW_RESULT_CHARS = 4000
+_REVIEW_CHECKLIST_CHARS = 12000     # a BUILD CHECKLIST is what REVIEW point 9 checks against: it needs all of it
 _REVIEW_EVIDENCE_CHARS = 30000
 
 
@@ -4455,8 +4604,9 @@ def _review_evidence(messages: list) -> str:
         if tag:
             turns.append(f"- {tag.group(1)}: {content[tag.end():][:600]}")
         elif hit:
-            results.append(f"[RESULT #{hit.group(1)} - {hit.group(2)}]\n"
-                           + _truncate_lines(content[hit.end():].strip(), _REVIEW_RESULT_CHARS, _KN_TRIM))
+            body = content[hit.end():].strip()
+            cap = _REVIEW_CHECKLIST_CHARS if body.startswith("BUILD CHECKLIST") else _REVIEW_RESULT_CHARS
+            results.append(f"[RESULT #{hit.group(1)} - {hit.group(2)}]\n" + _truncate_lines(body, cap, _KN_TRIM))
     kept, used = [], 0
     for r in reversed(results):                    # newest first, then restore order
         if kept and used + len(r) > _REVIEW_EVIDENCE_CHARS:
@@ -4754,6 +4904,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
             return obs + await _entity_knowledge(obs, sources)
         if action == "research":
             return await _run_research_tool(message, action_input, args, sources, session)
+        if action == "build_check":
+            return await _run_build_check_tool(args, sources)
         if action == "knowledge_search":
             return await _run_knowledge_tool(message, action_input, sources)
         if action == "monuments":
@@ -4858,6 +5010,7 @@ _ACTION_LABELS = {
     "web_search": "🌐 Шукаю в інтернеті…",
     "community_search": "💬 Шукаю в Reddit і Discord…",
     "research": "🔗 Збираю дані з кодексу…",
+    "build_check": "🧭 Перевіряю механіки білду…",
     "estimate_stats": "📊 Рахую характеристики…",
 }
 _THINKING_LABEL = "🤔 Думаю…"
@@ -4897,6 +5050,8 @@ def _status_detail(action: str, action_input: str, args: dict) -> str:
         return clip(", ".join(map(str, ents)) if isinstance(ents, list) and ents else action_input)
     if action == "class_guide":
         return clip(" ".join(str(args.get(k)) for k in ("topic", "query") if args.get(k)))
+    if action == "build_check":
+        return clip(" ".join(str(args.get(k)) for k in ("goal", "mode") if args.get(k)))
     # search_codex / open_entry / knowledge_search / web_search / releases /
     # need / next / calculate: the free-text input carries the argument.
     return clip(action_input)
@@ -5218,6 +5373,9 @@ async def _call_review_model(original_request: str, transcript: str, draft_answe
         "a stat) gets that value; \"it is listed in the card above\" is never an answer.\n"
         "8. SCOPE: It adds nothing about items, variants or topics the user did not ask about (a similarly named "
         "item is not mentioned unless the request is ambiguous between them).\n"
+        "9. BUILD: If the evidence has a BUILD CHECKLIST, the draft covers each checklist point that changes its "
+        "recommendation (game mode, caps, stacking, how reliable the source is), or says it is unknown. A point "
+        "the checklist or a tool marks UNKNOWN is not stated as fact.\n"
         "Then decide. Approve a correct draft - a draft that already answers the question is approved, not "
         "shortened or reworded. If only the WORDING is wrong, rewrite it correctly - keep every correct fact of "
         "the draft, add no claim that the evidence does not support; you may add facts FROM the evidence to make "
@@ -6940,6 +7098,26 @@ def _demo() -> None:
     assert not _swaps_a_number("Head: Status Effect Chance 5-15% makes the pet's debuff land; 2.4% of turns. Confidence 85.",
                                "Pet Act is the reliable pick for the head slot: it rolls 3-7%, and the guide wants ~20%.", ev)
     assert _swaps_a_number("Tier 7 has 13 floors.", "A tier 7 dungeon has 20 floors in total.", "tier 11: 20 floors")
+    # build_check's composer: every dimension, a snippet once, an empty dimension says unknown, a missing mode asks
+    cap = {"ns": "mechanics", "title": "Build math", "text": "=== Build math ===\nDamage is capped at 9,999,999 per "
+           "hit. Weakness exploit applies to both."}
+    hits = [[cap]] * 3 + [[]] * (len(_BUILD_DIMENSIONS) - 3)
+    box = _compose_build_check("elemental weakness", "", "", hits, ["CRUCIBLES x"])
+    assert all(f"\n{n}: " in box for n, *_ in _BUILD_DIMENSIONS), box
+    assert box.count("capped at 9,999,999") == 1 and "game mode not given" in box and box.endswith("CRUCIBLES x"), box
+    assert box.count("say it is unknown") == len(_BUILD_DIMENSIONS) - 1, box      # only CAPS has a matching sentence
+    assert _focus("A ward line.", ("cap",)) == ""
+    assert _focus("Damage is capped at 9,999,999\nper hit. Mana here.\n- a cap bullet", ("cap",)) == \
+        "Damage is capped at 9,999,999 per hit. - a cap bullet"
+    box = _compose_build_check("x", "pvp", "", [[]] * len(_BUILD_DIMENSIONS), [],
+                               "Crucible bonuses do not work in PvP. Damage is capped at 9,999,999 per hit.")
+    assert "[mechanics] Crucible bonuses do not work in PvP." in box.split("PIPELINE")[0], box
+    assert "capped at 9,999,999" in box.split("CAPS")[1].split("STACKING")[0], box
+    assert "Goat's Hood is the exact name" in _exact_note("goat's hood", [{"name": "Goat's Hood"}, {"name": "Forest Goat's Hood"}])
+    assert _exact_note("goat hood", [{"name": "Goat's Hood"}, {"name": "Forest Goat's Hood"}]) == ""
+    box = _compose_build_check("x", "", "", [[]] * len(_BUILD_DIMENSIONS), [], "", {"CAPS": "Where: Titan 40%"})
+    assert "  Where: Titan 40%" in box.split("\nCAPS")[1].split("\nSTACKING")[0], box
+    assert _focus("=== T ===\nA ward line. The cap is 10M. Mana here.", ("cap",)) == "The cap is 10M."
 
     # --- the game's own Ukrainian terms reach the translator ---
     assert "Tier = Ранг" in _glossary("Tier 11 dungeons have 25 floors", "Ukrainian"), _glossary("Tier 11", "Ukrainian")
