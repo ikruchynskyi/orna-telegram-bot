@@ -1,10 +1,10 @@
 """Live search of r/OrnaRPG, through a real Chrome on a dedicated profile.
 
-WHY A BROWSER. Anonymous API-style access 403s (see orna_scrape_reddit.py).
-Measured 2026-10-06: a HEADLESS Chrome also gets 403 - but a normal Chrome
-window gets 200 from /r/OrnaRPG/search.json even logged out. So: a real,
-non-headless Chrome, moved off-screen so nothing pops up, fetching Reddit's own
-JSON from inside a reddit.com page. No login is needed; `login` exists in case
+WHY A BROWSER. Anonymous API-style access 403s (see orna_scrape_reddit.py), and
+since 2026-11 so does every .json from this browser ("blocked by network
+security"), logged in or not. A real, non-headless Chrome, moved off-screen so
+nothing pops up, opens the search page and the thread pages as a reader would
+and reads the posts, comments and scores out of them (_SEARCH_JS, _THREAD_JS). No login is needed; `login` exists in case
 Reddit starts requiring one (Google sign-in refuses an automated browser - log
 in once in a NORMAL Chrome on this profile instead, see README).
 
@@ -43,6 +43,7 @@ QA_CACHE = paths.QA_CRAWL                # orna_scrape_qa's crawl: one <post id>
 LIVE_FILE = CACHE_DIR / "live.json"
 SITE = "https://www.reddit.com"
 MIN_INTERVAL = 2.0                     # seconds between requests
+PAGE_INTERVAL = 6.0                    # seconds between page loads: hundreds of quick loads got a CAPTCHA (2026-11-04)
 THREADS = 3                            # threads rendered per search
 RATE_LIMIT_WAIT = 30
 
@@ -96,7 +97,60 @@ class _Browser:
         raise RuntimeError("reddit: still rate limited after 3 tries")
 
 
+    def page(self, path: str, script: str, scrolls: int = 0):
+        """Open a reddit.com page as a reader would (scrolling to the bottom `scrolls` times, for a feed) and return
+        `script`'s result on it. Since 2026-11 Reddit's network security refuses this browser every .json, but
+        serves the pages themselves."""
+        with self.lock:
+            drv = self._page()
+            wait = PAGE_INTERVAL - (time.time() - self.last)
+            if wait > 0:
+                time.sleep(wait)
+            drv.get(SITE + path)
+            self.last = time.time()
+            head = str(self._eval("return location.href + ' ' + String(document.body && document.body.innerText).slice(0, 400)"))
+            if "blocked by network security" in head or head.startswith("chrome-error:") or "captcha" in head.lower():
+                raise RuntimeError(f"reddit refused the page {path.split('?')[0]}: {head[:120]}")
+            for _ in range(scrolls):
+                self._eval("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(MIN_INTERVAL)
+            return self._eval(script)
+
+    def _eval(self, script: str):
+        """Run a function body in the page through DevTools, as plain JSON: chromedriver's own execute_script fails
+        on some Reddit pages ("cannot deserialize the result value")."""
+        r = self.drv.execute_cdp_cmd("Runtime.evaluate", {"expression": f"(function(){{{script}}})()",
+                                                          "returnByValue": True})
+        if "exceptionDetails" in r:
+            raise RuntimeError(f"page script failed: {r['exceptionDetails'].get('text')}")
+        return r["result"].get("value")
+
 _browser = _Browser()
+
+# a search page: the result links, in relevance order
+_SEARCH_JS = """return [...document.querySelectorAll('a[data-testid="post-title"]')]
+  .map(a => ({permalink: a.getAttribute('href'), title: a.getAttribute('aria-label') || a.innerText.trim()}));"""
+# a thread page: the post and its top-level comments, in the .json fields orna_scrape_qa._block reads
+_THREAD_JS = """const p = document.querySelector('shreddit-post'), t = e => e ? e.innerText.trim() : '';
+if (!p) return null;
+return {post: {id: p.id.replace('t3_', ''), title: p.getAttribute('post-title'), permalink: p.getAttribute('permalink'),
+               score: +p.getAttribute('score') || 0, num_comments: +p.getAttribute('comment-count') || 0,
+               created: p.getAttribute('created-timestamp'), selftext: t(document.getElementById(p.id + '-post-rtjson-content'))},
+        comments: [...document.querySelectorAll('shreddit-comment[depth="0"]')].map(c => ({
+               score: +c.getAttribute('score') || 0, author: c.getAttribute('author') || '',
+               body: t(c.querySelector('[slot="comment"]'))}))};"""
+
+
+def thread(permalink: str):
+    """(post, top-level comments) of one thread page, top-voted first - the shapes _block takes - or None."""
+    from datetime import datetime
+    r = _browser.page(f"{permalink}?sort=top", _THREAD_JS)
+    if not r:
+        return None
+    post = r["post"]
+    created = post.pop("created") or ""
+    post["created_utc"] = datetime.fromisoformat(created).timestamp() if created else 0
+    return post, [c for c in r["comments"] if c["body"]]
 
 
 def _variants(query: str) -> list:
@@ -133,28 +187,27 @@ def search(query: str, threads: int = THREADS) -> list:
     live = _load_live()
     out = []
     try:
-        posts = []
+        links = []
         for q in _variants(query):
-            data = _browser.get(f"/r/OrnaRPG/search.json?q={quote(q)}&restrict_sr=1&sort=relevance"
-                                f"&t=all&limit=15&raw_json=1")
-            posts = [c["data"] for c in (data.get("data") or {}).get("children") or []
-                     if (c.get("data") or {}).get("num_comments", 0) > 0]
-            if posts:
+            links = _browser.page(f"/r/OrnaRPG/search/?q={quote(q)}&type=posts&sort=relevance", _SEARCH_JS)
+            if links:
                 break
-        for p in posts:
-            if len(out) >= threads:
+        seen = set()
+        for link in links:
+            pid = link["permalink"].split("/comments/")[-1].split("/")[0]
+            if len(out) >= threads or len(seen) >= 15:
                 break
-            cached = QA_CACHE / f"{p['id']}.json"
-            if p["id"] in live:
-                block, new = live[p["id"]], False
-            elif cached.exists():
-                block, new = _block(p, json.loads(cached.read_text())), False
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if pid in live:
+                block, new = live[pid], False
             else:
-                block = _block(p, _comments(_browser.get(f"{p['permalink']}.json?limit=50&sort=top&raw_json=1")))
-                new = True
+                got = thread(link["permalink"])
+                block = _block(*got) if got else ""
+                new = not (QA_CACHE / f"{pid}.json").exists()
             if block:       # "" = no answer passed the corpus's own filters
-                out.append({"id": p["id"], "title": p.get("title", ""), "url": SITE + p.get("permalink", ""),
-                            "block": block, "new": new})
+                out.append({"id": pid, "title": link["title"], "url": SITE + link["permalink"], "block": block, "new": new})
     finally:
         _browser.close()
     return out

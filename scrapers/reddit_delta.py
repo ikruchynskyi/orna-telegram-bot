@@ -6,8 +6,8 @@
 1. Delta: the developers' listings (orna_scrape_reddit._AUTHORS) are read newest first and stop at the first
    item already in orna_reddit.txt (matched by URL); r/OrnaRPG's newest posts that aren't in orna_qa.txt or
    the crawl cache are fetched. Without API keys or REDDIT_COOKIE, Reddit refuses the bot's Chrome every .json
-   ("blocked by network security", 2026-11), so the developer listings come from their RSS feeds through that
-   Chrome (orna_reddit_search._browser) and the r/OrnaRPG threads are skipped (RSS has no scores).
+   ("blocked by network security", 2026-11), so that Chrome (orna_reddit_search._browser) reads the developer
+   listings from their RSS feeds, and r/OrnaRPG's /new/ page and thread pages as a reader would.
 2. Same filters as the full scrapers: a dev entry needs _MIN_BODY_CHARS and an Orna subreddit; a thread needs
    an answer that passes orna_scrape_qa._block (score, length, no bots); held-out eval threads stay out.
 3. Novelty: each candidate is shown to a free cloud model (gemma4) with the 3 closest existing chunks from the
@@ -27,7 +27,7 @@ import time
 
 import paths
 from knowledge import orna_pinecone, orna_qa, orna_reddit, orna_textindex
-from knowledge.orna_reddit_search import _browser, _comments
+from knowledge.orna_reddit_search import _browser, _comments, thread
 from llm.ollama_client import OLLAMA_CLOUD_HOST, OllamaError, chat_json
 from scrapers import orna_scrape_qa as QA
 from scrapers import orna_scrape_reddit as R
@@ -37,6 +37,10 @@ JUDGE_MODEL = os.environ.get("REDDIT_DELTA_MODEL", "gemma4:31b")
 VERDICTS = paths.CACHE / "reddit_delta.json"
 MAX_PAGES = 10          # 100 items a page; a delta stops far earlier, at the first known item
 NEW_POSTS_PAGES = 3     # r/OrnaRPG/new: the newest 300 posts
+FEED_SCROLLS = 12       # the same through the /new/ page: about 25 more posts a scroll
+_FEED_JS = """return [...document.querySelectorAll('shreddit-post')].map(p => ({id: p.id.replace('t3_', ''),
+  permalink: p.getAttribute('permalink'), num_comments: +p.getAttribute('comment-count') || 0,
+  created: p.getAttribute('created-timestamp')}));"""
 QA_MIN_AGE_DAYS = 2     # a post younger than this hasn't collected its answers yet
 
 
@@ -142,28 +146,42 @@ def qa_candidates(known: set) -> list:
     """New r/OrnaRPG threads with answers that pass the corpus filters: (url, block)."""
     heldout = QA._load_eval_ids()
     cutoff = time.time() - QA_MIN_AGE_DAYS * 86400
+    out = []
+    for p in _new_posts():
+        url = f"https://www.reddit.com{p.get('permalink', '')}".rstrip("/")
+        if (not p.get("permalink") or url in known or p.get("id") in heldout or not p.get("num_comments")
+                or (p.get("created_utc") or 0) > cutoff):
+            continue
+        if _api():
+            comments = _comments(_get(f"{p['permalink']}.json?limit=50&sort=top&raw_json=1"))
+        else:       # the thread page: the post's own fields (selftext, score) come with it
+            got = thread(p["permalink"])
+            if not got:
+                continue
+            p, comments = got
+        if QA.CACHE_DIR:
+            os.makedirs(QA.CACHE_DIR, exist_ok=True)
+            with open(os.path.join(QA.CACHE_DIR, f"{p['id']}.json"), "w", encoding="utf-8") as fh:
+                json.dump(comments, fh)
+        block = QA._block(p, comments)
+        if block:
+            out.append((url, block))
+    return out
+
+
+def _new_posts() -> list:
+    """r/OrnaRPG's newest posts, newest first: the .json listing with an API route, else the /new/ page."""
+    if not _api():
+        from datetime import datetime
+        posts = {}
+        for p in _browser.page("/r/OrnaRPG/new/", _FEED_JS, scrolls=FEED_SCROLLS):
+            p["created_utc"] = datetime.fromisoformat(p.pop("created")).timestamp() if p.get("created") else 0
+            posts.setdefault(p["id"], p)
+        return list(posts.values())
     out, after = [], None
     for _ in range(NEW_POSTS_PAGES):
         data = _get("/r/OrnaRPG/new.json?limit=100&raw_json=1" + (f"&after={after}" if after else "")).get("data") or {}
-        for c in data.get("children") or []:
-            p = c.get("data") or {}
-            url = f"https://www.reddit.com{p.get('permalink', '')}".rstrip("/")
-            if (url in known or p.get("id") in heldout or not p.get("num_comments")
-                    or (p.get("created_utc") or 0) > cutoff):
-                continue
-            cached = QA.CACHE_DIR and os.path.join(QA.CACHE_DIR, f"{p['id']}.json")
-            if cached and os.path.exists(cached):
-                with open(cached, encoding="utf-8") as fh:
-                    comments = json.load(fh)
-            else:
-                comments = _comments(_get(f"{p['permalink']}.json?limit=50&sort=top&raw_json=1"))
-                if cached:
-                    os.makedirs(QA.CACHE_DIR, exist_ok=True)
-                    with open(cached, "w", encoding="utf-8") as fh:
-                        json.dump(comments, fh)
-            block = QA._block(p, comments)
-            if block:
-                out.append((url, block))
+        out += [c.get("data") or {} for c in data.get("children") or []]
         after = data.get("after")
         if not after:
             break
@@ -211,12 +229,8 @@ async def main(dry: bool) -> None:
     try:
         print("reading new developer posts and comments...", file=sys.stderr)
         devs = dev_candidates(_known_urls(R.OUTPUT_PATH if hasattr(R, "OUTPUT_PATH") else orna_reddit.DATA_PATH))
-        if _api():
-            print(f"reading r/OrnaRPG's newest threads...", file=sys.stderr)
-            qas = qa_candidates(_known_urls(paths.DATA / "orna_qa.txt"))
-        else:   # the answer filter ranks by score, which RSS doesn't carry
-            print("r/OrnaRPG threads skipped: no API key or REDDIT_COOKIE, and RSS has no scores", file=sys.stderr)
-            qas = []
+        print(f"reading r/OrnaRPG's newest threads...", file=sys.stderr)
+        qas = qa_candidates(_known_urls(paths.DATA / "orna_qa.txt"))
     finally:
         _browser.close()
     print(f"candidates: {len(devs)} developer entries, {len(qas)} threads", file=sys.stderr)
