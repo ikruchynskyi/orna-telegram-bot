@@ -76,7 +76,10 @@ Data sources (each = reader module + cache or committed file + scraper):
   images transcribed by a vision model (new images only; cached per attachment) → `.discord_cache/` →
   `discord` namespace.
 - `orna_reddit_search.py` - live r/OrnaRPG search through an off-screen, NON-headless Chrome
-  (`.reddit_chrome/`; headless gets 403). Threads rendered like `orna_qa` (reuses `orna_scrape_qa._block`).
+  (`data/state/reddit_chrome`). Since 2026-11 Reddit blocks every `.json` from it ("network security"), so it
+  opens the search and thread pages as a reader would and reads posts/comments/scores out of the DOM
+  (`_SEARCH_JS`, `_THREAD_JS`, run via DevTools). 6 s between page loads: rapid loads got a CAPTCHA and a 429;
+  a block/CAPTCHA/429 page raises, never retried around. Threads rendered like `orna_qa` (`orna_scrape_qa._block`).
 - `community_search` action = Reddit + Discord live search in parallel: last resort, refused in code until
   `knowledge_search` AND `web_search` ran. What it finds is kept (`.reddit_cache/live.json` → `qa`
   namespace; `.discord_cache/live.json` → `discord_live`) so the next ask hits `knowledge_search`.
@@ -107,7 +110,9 @@ Data sources (each = reader module + cache or committed file + scraper):
 - Feedback (`bot/orna_feedback.py`): every answer logged; reactions are votes (groups: only if the bot is
   admin); `/feedback`, `/verify`, `/correct`.
 - Reddit refresh: `python3 -m scrapers.reddit_delta [--dry-run]` - new items only, novelty-judged, appended,
-  tail upserted. Needs REDDIT_CLIENT_ID/SECRET or a logged-in Reddit in `data/state/reddit_chrome`.
+  tail upserted. With REDDIT_CLIENT_ID/SECRET or REDDIT_COOKIE it uses JSON; otherwise the dev listings come
+  from RSS and r/OrnaRPG from the `/new/` + thread pages (2026-11-04 the `/new/` page only reached Jul-Aug
+  posts - check its dates before trusting a run to cover the latest month).
 - Discord threads: `python3 -m scrapers.discord_threads [fetch|summarize|pending N [SINCE]|accept F|index]` -
   the official server's #discussion-threads, only threads with >50 messages and only windows since 2025 (owner's
   scope), through the logged-in Discord profile, delta per thread. ~9k-char windows become dated facts (cached
