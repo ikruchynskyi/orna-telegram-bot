@@ -19,6 +19,7 @@ from telegram import (
     BotCommandScopeDefault,
     Update,
 )
+from telegram.error import NetworkError
 from telegram.ext import (ApplicationBuilder, ApplicationHandlerStop, CommandHandler, ContextTypes,
                           filters, MessageHandler, TypeHandler)
 from bot.telegram_assess import build_assess_conversation
@@ -558,6 +559,10 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Global safety net: logs unhandled exceptions.
     Public groups and channels NEVER receive any error or fail messages.
     Error messages are sent to admin(s) in GO_ALLOWED_USER_IDS only."""
+    if update is None and isinstance(context.error, NetworkError):
+        # polling lost the network (DNS gone while the Mac sleeps); the library retries by itself
+        logger.warning("Telegram polling: network error, retrying (%s)", context.error)
+        return
     logger.error("Unhandled exception while processing update: %s", update, exc_info=context.error)
     try:
         await notify_admins_of_error(context.bot, context.error, update)
