@@ -242,7 +242,7 @@ def refetch_now() -> dict:
 # nothing - the rows say "Regular Anguish 2.0", and "anguished" is not in it.
 _CRUCIBLE_TYPES = {"anguished": "regular anguish 2.0", "darkrift": "darkrift riftfall",
                    "yelmogus": "yelbeghen wyrmhunt", "yelbeghen": "yelbeghen wyrmhunt",
-                   "yggdrasil": "yggdrasil crucible"}
+                   "yggdrasil": "yggdrasil", "titan": "giants and titans", "hallowed": "hallowed hallowed"}
 
 
 def _named_crucible(q: str) -> tuple:
@@ -252,6 +252,33 @@ def _named_crucible(q: str) -> tuple:
             if word in q:
                 return f"{word.title()} Crucible", kind
     return "", ""
+
+
+_SLOTS = ("Weapon", "Off-hand", "Head", "Chest", "Legs")
+
+
+def overview() -> str:
+    """Every crucible, one line each: its bonuses with range and the slots they roll on. A build question
+    ("optimal crucible bonuses for my gear") needs them side by side - 2026-11-04 the loop asked for the
+    Anguished Crucible, saw only its table, and never weighed the Titan Crucible's Damage Limit Break on any slot
+    or the Yelmogus Crucible's Status Effect Chance."""
+    groups: dict = {}
+    for row in all_bonuses().get("crucibles") or []:
+        cells = row.split(" | ")
+        kind = next((c[len("Crucible: "):] for c in cells if c.startswith("Crucible: ")), "")
+        lo = next((c[5:] for c in cells if c.startswith("Min: ")), "")
+        hi = next((c[5:] for c in cells if c.startswith("Max: ")), "")
+        slots = [sl for sl in _SLOTS if f"Can apply to {sl}" in row]
+        where = "all 5 slots" if len(slots) == len(_SLOTS) else "/".join(slots) or "no slot"
+        groups.setdefault(kind, []).append(f"{cells[0]} {lo}–{hi} ({where})")
+    items = {kind: f"{word.title()} Crucible" for word, kind in reversed(list(_CRUCIBLE_TYPES.items()))}
+    lines = []
+    for kind, bonuses in groups.items():
+        item = next((v for k, v in items.items() if k in kind.lower()), "")
+        lines.append(f"{item or kind} [{kind}]: " + "; ".join(bonuses))
+    return ("[all crucibles - aussiescodex: each rolls ONE of its bonuses onto an anguished item; brackets = the "
+            "slots it can roll on, of the 5: Weapon, Off-hand, Head, Chest, Legs - accessories take no crucible]\n"
+            + "\n".join(lines)) if lines else ""
 
 
 def search(query: str, limit: int = 40) -> str:
@@ -264,12 +291,13 @@ def search(query: str, limit: int = 40) -> str:
     if not q:
         return ""
     data = all_bonuses()
+    every = overview() if re.search(r"crucible|anguish(ed)? bonus", q) else ""
     item, crucible = _named_crucible(q)
-    if crucible:   # a named crucible: every bonus it can roll, with ranges and slots
+    if crucible:   # a named crucible: every bonus it can roll, with ranges and slots - and the others beside it
         rows = [l for l in data.get("crucibles") or [] if crucible in l.lower()]
         if rows:
             return f"[crucibles - aussiescodex: every bonus the {item} can roll, with its range and gear slots]\n" \
-                + "\n".join(rows)
+                + "\n".join(rows) + (f"\n\n{every}" if every else "")
     words = {w for w in re.findall(r"[^\W_]+", q) if len(w) > 2}
     out = []
     for section in ("amities", "crucibles"):
@@ -286,12 +314,20 @@ def search(query: str, limit: int = 40) -> str:
             hits = [l for _s, l in scored]
         if hits:
             out.append(f"[{section} - aussiescodex]\n" + "\n".join(hits[:limit]))
+    if every:
+        out = [o for o in out if not o.startswith("[crucibles")] + [every]
     return "\n\n".join(out)
 
 
 def _demo_crucible_names() -> None:
     assert _named_crucible("what effects does the anguished crucible give") == ("Anguished Crucible", "regular anguish 2.0")
     assert _named_crucible("anguished gear") == ("", "")          # "crucible" must be named
+    assert _named_crucible("titan crucible rolls") == ("Titan Crucible", "giants and titans")
+    every = overview()
+    if every:   # needs the fetched table
+        assert "Titan Crucible [Giants and Titans" in every and "Anguished Crucible [Regular Anguish 2.0]" in every, every[:300]
+        assert "Pet Act 3%–7% (Head)" in every and "Elemental Weakness 2%–5% (all 5 slots)" in every, every
+        assert "accessories take no crucible" in every
     rows = search("Anguished Crucible")
     if rows:   # needs the fetched table
         assert rows.startswith("[crucibles - aussiescodex: every bonus the Anguished Crucible") and \

@@ -792,6 +792,13 @@ def build_cases() -> list:
                     final_none_of=["no known weaknesses"])),
         # _CLASS_GUIDE_RULE + the language lock, which lost to the prompt's
         # own Ukrainian examples until it was made deterministic.
+        # _OPTIMIZE_RULE (2026-11-04): every crucible side by side, the pet's numbers from research, the guide's
+        # damage cap -> Damage Limit Break; the Titan Crucible is the only Elemental Weakness roll.
+        Case("crucible-optimize", 3, "I want to improve my build by rolling new anguish bonuses on items. Suggest "
+             "optimal bonuces from crucibles for items from Heretic's element weakness build. I'm planing to use "
+             "Gorynych pet for elemental weakness debufs",
+             Expect(tools_all=["research", "knowledge_search"], final_any_of=[["limit break"], ["titan"]],
+                    final_none_of=["accessor"])),
         Case("heretic-build", 3, "give me build advice for the heretic omniflask raid build",
              Expect(tools_all=["class_guide"], cyrillic="forbidden")),
         # _AGGREGATE_RULE: assess per NAMED item (a codex page shows the

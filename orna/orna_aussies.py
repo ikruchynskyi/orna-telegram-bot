@@ -669,6 +669,8 @@ def resolve_entity(name: str) -> dict:
     if not q:
         return {"unresolved": name}
     hits = _name_index().get(q.lower())
+    if not hits:    # a name without its epithet: "Gorynych" -> "Gorynych, Son of Mountains" (2026-11-04 unresolved)
+        hits = [ci for nm, cis in _name_index().items() if nm.split(",")[0] == q.lower() for ci in cis]
     if not hits:
         fuzzy = fuzzy_codex_name(q)
         if fuzzy:
@@ -721,6 +723,12 @@ def _effect_names(record: dict) -> list:
     return out
 
 
+def _stats(rec: dict) -> dict:
+    """A record's stats, with a string the dump split into characters rejoined (items' element: ['d','r','a',...])."""
+    return {k: "".join(v) if isinstance(v, list) and v and all(isinstance(x, str) and len(x) == 1 for x in v) else v
+            for k, v in (rec.get("stats") or {}).items()}
+
+
 def _leaf(category: str, rid: str) -> dict:
     """Compact analysis view of one cross-linked record. A dangling id (not in
     the dump) degrades to just its id as the name, empty everything else."""
@@ -731,7 +739,7 @@ def _leaf(category: str, rid: str) -> dict:
         "useable_by": r.get("useable_by"),
         "place": r.get("place"), "item_type": r.get("item_type"),
         "tier": r.get("tier"), "rarity": r.get("rarity"),
-        "stats": dict(r.get("stats") or {}),
+        "stats": _stats(r),
         "effects": _effect_names(r),
     }
 
@@ -805,11 +813,59 @@ def _entity_facts(rec: dict) -> dict:
         if v not in (None, "", [], {}):
             facts[k] = v
     if rec.get("stats"):
-        facts["stats"] = dict(rec["stats"])
+        facts["stats"] = _stats(rec)
     eff = _effect_names(rec)
     if eff:
         facts["effects"] = eff
     return facts
+
+
+def _skill_kind(spell: dict) -> str:
+    """The act-rate category a follower's skill draws on: damage -> spell, a no-damage skill on an opponent ->
+    debuff, anything else (self/ally: buffs, wards) -> buff (the follower act-rate guide's categories)."""
+    if (spell.get("stats") or {}).get("power"):
+        return "spell"
+    return "debuff" if "opponent" in (spell.get("targets") or "") else "buff"
+
+
+def _act_summary(rec: dict) -> list:
+    """How often a follower uses each skill, from the community act-rate guide (orna_guide_beowulf.txt, "Follower
+    Act Rates"): each skill gets its category's rate per turn, attack rate is added once, the sum is the chance to
+    act; +Pet/Follower Act from gear/amity adds to EVERY skill (not attack); at 100% it acts every turn. Past 100%
+    the split between skills is assumed proportional. Turns the model could not do itself (2026-11-04: "Gorynych
+    for weakness debuffs" answered with no number at all)."""
+    stats = rec.get("stats") or {}
+    rate = lambda k: float(stats.get(f"{k}_rate") or 0)
+    spells = _codex()["main"].get("spells", {})
+    skills = []
+    for x in rec.get("skills") or []:
+        if isinstance(x, (list, tuple)) and len(x) == 2 and x[1] in spells:
+            sp = spells[x[1]]
+            skills.append((display_name("spells", x[1]) or x[1], _skill_kind(sp), sp.get("causes") or []))
+    if not skills or not any(rate(k) for k in ("spell", "buff", "debuff", "heal")):
+        return []
+    base = rate("attack") + sum(rate(k) for _n, k, _c in skills)
+    need = max(0.0, (100 - base) / len(skills))
+    out = [f"act estimate (community act-rate formula, 1 enemy, no calls/AI): {base:g}% of turns at base; "
+           f"acts every turn from about +{need:.1f}% pet act"]
+    pct = lambda c: float(str(c.get("chance") or "0").rstrip("%") or 0) / 100
+    sure = lambda causes: max((pct(e) for e in causes if isinstance(e, dict)), default=0)
+    for n, k, causes in skills:
+        landed = "; ".join(f"{e.get('name')} {e.get('chance')}" for e in causes if isinstance(e, dict) and e.get("chance"))
+        out.append(f"{n} [{k}]: {rate(k):g}% of turns" + (f", then {landed} to land" if landed else "")
+                   + (f" = lands on about {rate(k) * sure(causes):.1f}% of turns" if k == "debuff" and landed else ""))
+    debuffs = [(n, k, c) for n, k, c in skills if k == "debuff" and sure(c)]
+    for extra in (10, 20):
+        tot = base + extra * len(skills)
+        per = {n: (rate(k) + extra) / max(tot, 100) * 100 for n, k, _c in skills}
+        out.append(f"with +{extra}% pet act: acts {min(tot, 100):g}% of turns; "
+                   + ", ".join(f"{n} {v:.0f}%" for n, v in per.items())
+                   + (f"; its debuffs land on about {sum(per[n] * sure(c) for n, _k, c in debuffs):.0f}% of turns"
+                      if debuffs else ""))
+    if debuffs:
+        out.append("the landing chance is the follower skill's own; UNKNOWN whether the player's Status Effect Chance "
+                   "raises it - the codex does not say either way")
+    return out
 
 
 def build_supergraph(names, per_relation_cap: int = 80) -> dict:
@@ -856,25 +912,28 @@ def build_supergraph(names, per_relation_cap: int = 80) -> dict:
             })
         # a follower's bestial_bond is its defining data and is NOT a [cat,id]
         # edge, so it is summarised here rather than as a relation.
-        bond = _bond_summary(rec)
-        # ~200 follower names collide with a same-named monster/boss, which
-        # outranks the follower in resolution - so "what does follower X give"
-        # lands on the monster and the bond (the whole point) is missed. When
-        # the picked entity has no bond but a same-named FOLLOWER does, show its
-        # bond too; the "also matches" note tells the model whose it is.
-        if not bond:
-            for c, i, _n in res.get("alternatives") or []:
-                if c == "followers":
-                    bond = _bond_summary(codex["followers"].get(i) or {})
-                    if bond:
-                        break
         entities.append({
             "category": cat, "id": rid, "name": res["name"],
             "facts": _entity_facts(rec),
             "alternatives": res.get("alternatives") or [],
             "relations": relations,
-            "bond": bond,
+            "bond": _bond_summary(rec),
+            "acts": _act_summary(rec) if cat == "followers" else [],
         })
+        # ~200 follower names collide with a same-named monster/boss, which outranks the follower in resolution -
+        # so "what does follower X give / how often does it cast Y" landed on the boss, whose skills and rates are
+        # not the pet's (Gorynych the boss casts Darkblight II, the pet Darkblight). The follower comes along whole.
+        if cat != "followers":
+            for c, i, n in res.get("alternatives") or []:
+                if c == "followers" and n == res["name"]:
+                    frec = codex["followers"].get(i) or {}
+                    pairs = [(x[0], x[1]) for x in frec.get("skills") or [] if isinstance(x, (list, tuple)) and len(x) == 2]
+                    entities.append({
+                        "category": c, "id": i, "name": n, "facts": _entity_facts(frec), "alternatives": [],
+                        "relations": [{"field": "skills", "title": "Skills", "total": len(pairs), "partial": False,
+                                       "members": [_leaf(a, b) for a, b in pairs]}] if pairs else [],
+                        "bond": _bond_summary(frec), "acts": _act_summary(frec)})
+                    break
     return {"entities": entities, "unresolved": unresolved}
 
 
@@ -1336,6 +1395,12 @@ def _demo() -> None:
     amb = resolve_entity("aaru cobra")
     assert amb.get("category") == "monsters", amb          # monsters outranks followers
     assert any(c == "followers" for c, _i, _n in amb.get("alternatives", [])), amb
+    assert resolve_entity("Gorynych")["name"] == "Gorynych, Son of Mountains", resolve_entity("Gorynych")
+    g2 = build_supergraph("Gorynych")["entities"]
+    pet = [e for e in g2 if e["category"] == "followers"]
+    assert pet and any(a.startswith("Darkblight [debuff]: 6% of turns, then darkblight 40% to land = lands on about 2.4%")
+                       for a in pet[0]["acts"]), pet
+    assert _stats({"stats": {"element": list("dragon"), "magic": "235"}}) == {"element": "dragon", "magic": "235"}
     # nothing resolvable -> unresolved, no crash
     assert resolve_entity("zzzptqx no such entity").get("unresolved"), resolve_entity("zzzptqx no such entity")
 

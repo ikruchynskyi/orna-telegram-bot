@@ -97,7 +97,12 @@ Data sources (each = reader module + cache or committed file + scraper):
   (`data/orna_terms_uk.json` from `scrapers/orna_scrape_terms_uk.py`: Tier = Ранг, Followers = Компаньйони).
 - Every request gets a PLAN call (gemma4) and a REVIEW call before posting; REVIEW runs on `REVIEW_MODEL`,
   never the step model (it graded its own drafts). Each rewrite is logged with its draft in
-  `data/state/orna_reviews.jsonl` - judge from it whether rewrites help.
+  `data/state/orna_reviews.jsonl` - judge from it whether rewrites help. PLAN also gets the recipe rules
+  (`_STRATEGY_RULE`, `_CLASS_GUIDE_RULE`, `_OPTIMIZE_RULE`). `_swaps_a_number` rejects a rewrite only when it
+  is a near-identical text with a changed number, or brings a number the evidence lacks.
+- Build questions (`_OPTIMIZE_RULE`): every crucible side by side (`orna_bonuses.overview()`, on any crucible
+  query), the pet's per-skill act/landing estimate in `research` (`orna_aussies._act_summary`, the Beowulf
+  guide's act-rate formula), then cap / reliability / size before a per-slot pick.
 - Context: `_compact` sends the last `_KEEP_FULL_RESULTS` tool results whole and cuts older long ones (the
   repeat cache returns the full text); `_working_state` is appended to every step.
 - Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the

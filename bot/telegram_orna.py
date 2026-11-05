@@ -44,6 +44,7 @@ import ast
 import asyncio
 import httpx
 import datetime
+import difflib
 import hashlib
 import html
 import io
@@ -1537,6 +1538,9 @@ def _render_supergraph(bundle: dict) -> str:
         if ent.get("bond"):        # a follower's bestial_bond, per tier
             out.append("  Bestial Bond (what it grants when bonded):")
             out.extend("    " + t for t in ent["bond"])
+        if ent.get("acts"):        # how often the follower uses each skill (orna_aussies._act_summary)
+            out.append("  How often it acts:")
+            out.extend("    " + t for t in ent["acts"])
         if ent.get("alternatives"):
             alt = ", ".join(f"{n} [{c}]" for c, _i, n in ent["alternatives"][:5])
             out.append(f"  (note: this name also matches: {alt})")
@@ -3660,6 +3664,25 @@ _CLASS_GUIDE_RULE = (
     "  5. To show the guide's items with stats and buttons, do one search_codex for each named item."
 )
 
+# 2026-11-04: "optimal crucible bonuses for a Heretic weakness build with Gorynych" was answered from one crucible's
+# table: no pet numbers, no damage cap, no weighing of a chance-based source against a sure one.
+_OPTIMIZE_RULE = (
+    "BUILD OPTIMIZATION - for \"which bonuses, crucibles, amities or adornments are best for my build/gear\":\n"
+    "  1. Get the build's goal and gear: class_guide (its Priorities: and Notes: lines) or the user's items.\n"
+    "  2. Get ALL the options. knowledge_search(\"crucible bonuses\") gives every crucible, each bonus's range and "
+    "the slots where it can roll.\n"
+    "  3. If the build relies on a pet, call research(<pet>). It shows how often the pet uses each skill and the "
+    "chance that its status effect lands.\n"
+    "  4. Before you recommend an option, check three things and write them in the answer:\n"
+    "     a. CAP: if a source says the build reaches the damage cap, more damage of any kind is wasted. Then "
+    "Damage Limit Break comes first.\n"
+    "     b. RELIABILITY: name the source the build depends on. A bonus that improves a chance-based source (a "
+    "pet that casts a debuff on some turns) is worth less than one that improves a sure source.\n"
+    "     c. SIZE: compare the ranges side by side (a 2-5% roll against a 20% amity). Use calculate() for totals.\n"
+    "  5. Recommend one bonus for each gear slot, with the crucible and the range. Mark estimates as estimates. "
+    "If no source says how two bonuses interact, say so."
+)
+
 _STRATEGY_RULE = (
     "BOSS STRATEGY - for \"how do I beat/kill X\" or \"what is X weak to\" about a boss or monster:\n"
     "  1. Get its elemental resistances: use research(<name>), or knowledge_search. research gives the codex "
@@ -4537,6 +4560,7 @@ def _orna_system_prompt(user_text: str = "", allow_ask: bool = True) -> str:
         f"{_CONDITION_RULES}\n\n"
         f"{_MULTI_PART_EXAMPLE}\n\n"
         f"{_STRATEGY_RULE}\n\n"
+        f"{_OPTIMIZE_RULE}\n\n"
         f"{_CLASS_GUIDE_RULE}\n\n"
         f"{_AGGREGATE_RULE}\n\n"
         f"{_COMPLETENESS_RULE}\n\n"
@@ -5087,6 +5111,10 @@ async def _call_plan_model(user_text: str) -> list[str]:
            "the mechanics involved and so choose the RIGHT tools and lookups; they are not the answer, every "
            "fact in the final answer still has to come from a tool call):\n" + primer + "\n\n" if primer else "")
         + f"{_TOOLS_TEXT}\n"
+        # the recipes, so the plan's steps follow them (2026-11-04: the plan skipped research(<pet>), which
+        # _OPTIMIZE_RULE asks for, because only the loop's own prompt had the rule)
+        + "RECIPES - if the request is one of these kinds, plan its steps:\n"
+        f"{_STRATEGY_RULE}\n{_CLASS_GUIDE_RULE}\n{_OPTIMIZE_RULE}\n\n"
         'Reply with strict JSON only: {"intent": "<what the user most likely wants to know; every meaning if '
         'there is more than one>", "constraints": ["<every explicit constraint stated - items, quality, '
         'level, class, spec, Ascension Level, PVE/PVP, slots, quantities, language, ...>"], '
@@ -5139,14 +5167,22 @@ def _numbers(text: str) -> set:
     return {n.replace(",", "") for n in _NUMBER_RE.findall(text)}
 
 
-def _swaps_a_number(draft: str, revised: str) -> bool:
+def _swaps_a_number(draft: str, revised: str, evidence: str = "") -> bool:
     """A REVIEW rewrite that drops one of the draft's numbers AND brings in a new one changed a number - the
     draft's came from the step that read the evidence. The first week's log (data/state/orna_reviews.jsonl,
     2026-11-03): 9 of 32 rewrites did that and every one was wrong - a tier 7 dungeon's 13 floors became 20
     six times, 5,329 became 5,325, 0.455 (5/11) became 0.409. A rewrite that only DROPS numbers is kept:
     that is REVIEW removing stats a posted codex card already shows."""
     a, b = _numbers(draft), _numbers(revised)
-    return bool(a - b) and bool(b - a)
+    if not (a - b and b - a):
+        return False
+    # A rewrite that RESTRUCTURES the answer (recommends another option, so that option's range comes in and the
+    # old one's goes) is no swap when every new number is in the evidence: 2026-11-04 REVIEW replaced an invented
+    # "Status Effect Chance raises the pet's debuff" with the evidence's Pet Act 3-7%, and was thrown away for it.
+    # The measured swaps were near-identical texts (number-stripped similarity 0.45-0.98) or brought a number the
+    # evidence lacks (5,325). ponytail: 0.4 is fitted to 13 logged rewrites; re-check it as the log grows.
+    same = difflib.SequenceMatcher(None, _NUMBER_RE.sub("#", draft), _NUMBER_RE.sub("#", revised)).ratio()
+    return same >= 0.4 or not evidence or bool(b - a - _numbers(evidence))
 
 
 async def _call_review_model(original_request: str, transcript: str, draft_answer: str, card_note: str) -> dict:
@@ -5366,8 +5402,8 @@ async def _advance_inner(sid: str, message) -> None:
                              session.allow_ask and 0 < len(candidates_preview) <= _AUTO_CARD_MAX_ENTRIES else "")
                 card_note = "; ".join(x for x in (card_note, session.posted_note) if x)
                 session.review_rounds += 1
-                verdict = await _call_review_model(session.original_request, _review_evidence(session.messages),
-                                                   draft_answer, card_note)
+                evidence = _review_evidence(session.messages)
+                verdict = await _call_review_model(session.original_request, evidence, draft_answer, card_note)
                 kind = verdict.get("verdict")
                 if kind == "redo" and str(verdict.get("feedback") or "").strip():
                     logger.info("orna: review REDO sid=%s feedback=%s", sid, str(verdict["feedback"])[:300])
@@ -5381,7 +5417,7 @@ async def _advance_inner(sid: str, message) -> None:
                 if kind == "revise" and str(verdict.get("answer") or "").strip():
                     revised = str(verdict["answer"]).strip()
                     _log_review(session.original_request, draft_answer, revised)
-                    if _swaps_a_number(draft_answer, revised):
+                    if _swaps_a_number(draft_answer, revised, evidence):
                         logger.info("orna: review rewrite REJECTED (changed a number) sid=%s", sid)
                     else:
                         logger.info("orna: review REVISED sid=%s", sid)
@@ -6900,6 +6936,10 @@ def _demo() -> None:
     assert not _swaps_a_number("40 Magic, 188 Defense, -600 Foresight.", "Its -600 foresight matters for summoners.")
     assert not _swaps_a_number("Ward = 5,329 total.", "The total ward is 5329.")       # same number, other format
     assert not _swaps_a_number("Burning deals damage.", "Burning deals 50% per tick.")   # a fact added from evidence
+    ev = "Pet Act 3%-7% (Head); Status Effect Chance 5%-15%; Gorynych needs ~20% pet act"
+    assert not _swaps_a_number("Head: Status Effect Chance 5-15% makes the pet's debuff land; 2.4% of turns. Confidence 85.",
+                               "Pet Act is the reliable pick for the head slot: it rolls 3-7%, and the guide wants ~20%.", ev)
+    assert _swaps_a_number("Tier 7 has 13 floors.", "A tier 7 dungeon has 20 floors in total.", "tier 11: 20 floors")
 
     # --- the game's own Ukrainian terms reach the translator ---
     assert "Tier = Ранг" in _glossary("Tier 11 dungeons have 25 floors", "Ukrainian"), _glossary("Tier 11", "Ukrainian")

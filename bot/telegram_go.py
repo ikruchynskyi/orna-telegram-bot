@@ -155,6 +155,10 @@ _CITE_RE = re.compile(r"\s*【[^】]{0,40}】|\s*\(?\[(?:knowledge[ _]search|too
 _QUOTE_RE = re.compile(r"(?:^&gt;[ \t]?.*(?:\n|$))+", re.M)
 _QUOTE_COLLAPSE_LINES = 5
 _QUOTE_COLLAPSE_CHARS = 500
+# LaTeX symbols a model writes now and then ("$\\rightarrow$", 2026-11-04): Telegram has no math, so they showed raw.
+_LATEX = {"rightarrow": "→", "to": "→", "leftarrow": "←", "Rightarrow": "⇒", "times": "×", "approx": "≈",
+          "ge": "≥", "geq": "≥", "le": "≤", "leq": "≤", "pm": "±", "cdot": "·", "%": "%"}
+_LATEX_RE = re.compile(r"\$?\\(" + "|".join(sorted(map(re.escape, _LATEX), key=len, reverse=True)) + r")(?![A-Za-z])\$?")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _SPOILER_RE = re.compile(r"\|\|(.+?)\|\|")
 
@@ -233,6 +237,9 @@ def _markdown_to_html(text: str) -> str:
     the model wrote never gets mistaken for one of ours.
     """
     text = _CITE_RE.sub("", text)
+    text = _LATEX_RE.sub(lambda m: _LATEX[m.group(1)], text)
+    if "\n" not in text and text.count("\\n") >= 2:     # JSON escaped twice by the model: one line of "\n" (2026-11-04)
+        text = text.replace("\\n", "\n").replace('\\"', '"')
     stash: list[str] = []
 
     def _keep(snippet: str) -> str:
@@ -1335,6 +1342,9 @@ def _demo() -> None:
     original converter had no path for at all."""
     assert _markdown_to_html("# Heading\ntext") == "<b>Heading</b>\ntext"
     assert _markdown_to_html("**bold** and *italic*") == "<b>bold</b> and <i>italic</i>"
+    assert _markdown_to_html(r"A $\rightarrow$ B, 6% $\times$ 40%, $5, \topic") == r"A → B, 6% × 40%, $5, \topic"
+    assert _markdown_to_html(r"**Head**\nPet Act\n\"3-7%\"") == '<b>Head</b>\nPet Act\n&quot;3-7%&quot;'
+    assert _markdown_to_html("path C:\\new\nline") == "path C:\\new\nline"        # real newlines: left alone
     assert _markdown_to_html("- one\n- two") == "• one\n• two"
     # "*"-marked bullets must become bullets, not be paired into italic spans.
     assert _markdown_to_html("* one\n* two\n* three") == "• one\n• two\n• three"
