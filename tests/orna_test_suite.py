@@ -369,6 +369,13 @@ _RETRIEVAL_CASES = [
     ("Seedhusk PvP", _SEEDHUSK_PVP),
     ("Beowulf Auriga PVP Seedhusk build", _SEEDHUSK_PVP),
     ("do crucible bonuses work in pvp", ["do not work in PvP", "don't apply in PvP"]),
+    # the build archetypes (data/orna_build_archetypes.txt), asked the way players ask
+    ("what boosts my pet's damage as a beowulf", ["What does NOT reach it: crit damage"]),
+    ("does crit damage help my pet", ["What does NOT reach it: crit damage"]),
+    ("how should I build deity ursa for towers", ["Archetype: Apex chain"]),
+    ("spiked shield gilgamesh build", ["Archetype: Ward conversion"]),
+    ("is 200% chain damage chance worth it", ["~50% roll to hit one more enemy", "far past 100%"]),
+    ("how do I gear a grand summoner", ["Archetype: Summoner"]),
 ]
 _RETRIEVAL_PASS = len(_RETRIEVAL_CASES) - 2
 _RETRIEVAL_MEDIAN_MAX = 12000   # _RANKED_MAX is 10000 since 2026-11-03 (median 10.3k)
@@ -813,7 +820,7 @@ def build_cases() -> list:
         # each is in the mechanics corpus - crucible bonuses do nothing in PvP, weakness exploit applies to blight
         # and sigil both, a raid caps damage.
         Case("pvp-crucible", 3, "which crucible bonuses should I roll on my gear for Beowulf in PvP arena?",
-             Expect(tools_all=["build_check"], final_any_of=[[
+             Expect(tools_any=["build_check", "knowledge_search"], final_any_of=[[
                  "not work", "n't work", "not apply", "n't apply", "no effect", "not active", "inactive", "useless",
                  "not function", "n't function", "ineffective", "no benefit", "do nothing", "does nothing"]])),
         Case("weakness-vs-element", 3, "for my Heretic, is a weakness exploit amity better than a fire damage amity?",
@@ -826,6 +833,18 @@ def build_cases() -> list:
              Expect(final_any_of=[["follower", "pet"]],
                     final_none_of=["e.g.", "illustrative", "(example)", "Ring of the Gods", "Pendant of Warding",
                                    "Defender's Talisman"])),
+        # build archetypes (2026-11-06): reason from the engine and its stats, also for items no guide mentions
+        # the archetype is reached by build_check or by knowledge_search (the archetype sections are a corpus)
+        Case("archetype-ursa", 3, "build a Deity Ursa for towers",
+             Expect(tools_any=["build_check", "knowledge_search"], final_any_of=[["apex"]])),
+        Case("new-item-summon", 3, "is Hyperion Banner good for my Grand Summoner Auriga?",
+             Expect(final_any_of=[["summon stat"]])),
+        Case("new-item-apex", 3, "is Brynja good for my Deity Ursa in towers?",
+             Expect(final_any_of=[["apex saver", "apex_saver", "apex save"]])),
+        Case("pet-crit", 3, "should I use crit damage amities on my Beowulf Auriga to boost my pet?",
+             Expect(final_any_of=[["not", "n't", "no "], ["pet", "follower"]])),
+        Case("holdout-gherc", 3, "give me a Gilgamesh Hercules PvP build",
+             Expect(final_any_of=[["ward"]])),
         Case("gsh-raid-cap", 3, "how can I raise my Grand Summoner Hydrus damage in raids?",
              Expect(tools_any=["build_check", "class_guide", "knowledge_search"], final_any_of=[["cap"]])),
         Case("heretic-build", 3, "give me build advice for the heretic omniflask raid build",

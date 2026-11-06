@@ -24,6 +24,11 @@ import paths
 from typing import Optional
 
 DATA_PATH = paths.DATA / "orna_mechanics.txt"
+# The build archetypes mined from community builds (docs/superpowers/specs/2026-11-06-orna-build-archetypes-*):
+# same "=== section ===" format, indexed in the same namespace under their own source.
+ARCHETYPES_PATH = paths.DATA / "orna_build_archetypes.txt"
+ARCHETYPES_TITLE = "Build archetypes (mined from aussiescodex's Build Library, 2026-11)"
+ARCHETYPES_URL = "https://www.aussiescodex.com/orna-builds"
 # One curated source for the whole file, cited when any section is returned.
 SOURCE_TITLE = "Orna game mechanics (community-verified 2026)"
 SOURCE_URL = "https://www.ornalegends.com/home/the-ultimate-ornarpg-beginner-basics-guide"
@@ -40,17 +45,32 @@ _sections: Optional[list] = None   # list[(title, body)]
 _vocab: Optional[set] = None
 
 
+def _parse(path) -> list:
+    text = path.read_text(encoding="utf-8")
+    out = []
+    for chunk in text.split("\n=== ")[1:]:  # [0] is the leading comment header
+        title_line, _, body = chunk.partition("\n")
+        title = title_line[:-4] if title_line.endswith(" ===") else title_line
+        out.append((title.strip(), body.strip()))
+    return out
+
+
 def _load() -> list:
     global _sections
     if _sections is None:
-        text = DATA_PATH.read_text(encoding="utf-8")
-        out = []
-        for chunk in text.split("\n=== ")[1:]:  # [0] is the leading comment header
-            title_line, _, body = chunk.partition("\n")
-            title = title_line[:-4] if title_line.endswith(" ===") else title_line
-            out.append((title.strip(), body.strip()))
-        _sections = out
+        _sections = _parse(DATA_PATH)
     return _sections
+
+
+_archetypes: Optional[list] = None
+
+
+def load_archetypes() -> list:
+    """[(title, body)] of orna_build_archetypes.txt; [] when the file is missing."""
+    global _archetypes
+    if _archetypes is None:
+        _archetypes = _parse(ARCHETYPES_PATH) if ARCHETYPES_PATH.exists() else []
+    return _archetypes
 
 
 def _demo() -> None:
@@ -73,6 +93,12 @@ def _demo() -> None:
     assert "godforged" in adorn.lower() and "16" in adorn, adorn[:200]
     assert "Legendary" in secs["Item quality"]
     assert any(t in secs["Wild Towers of Olympia"] for t in ("Selene", "Eos", "Prometheus"))
+    arch = dict(load_archetypes())
+    if arch:
+        pet = arch["Build engine: the pet (follower) - what feeds pet damage, and what does not"]
+        assert "What does NOT reach it: crit damage" in pet, pet[:200]
+        assert "~50% roll" in arch["Build mechanic: chain damage chance - how it works and its limit"]
+        assert any(t.startswith("Archetype: Pet element") for t in arch) and len(arch) >= 12, list(arch)
     print("orna_mechanics: all checks passed")
 
 

@@ -107,6 +107,14 @@ Data sources (each = reader module + cache or committed file + scraper):
   dimension heads with the curated sentences of `orna_mechanics.txt` "Build math" (+ formula, stat bonuses),
   then focused search passages; CAPS lists where the cap can be raised (`orna_bonuses.where_rolls`). REVIEW
   sees a whole checklist and point 9 checks it. Spec/plan: `docs/superpowers/*/2026-11-04-orna-build-reasoning*`.
+- Build archetypes (`data/orna_build_archetypes.txt`, spec/plan `docs/superpowers/*/2026-11-06-orna-build-archetypes*`):
+  mined from aussiescodex's Build Library (`scrapers/aussie_builds.py` fetch -> `data/cache/aussie_builds/`, profiles
+  in `knowledge/orna_build_profiles.py`). Engines (what feeds player / pet / summon / apex / flask / ward / status
+  damage) and 12 archetypes, in stats not loadouts, evidence = build ids. Indexed in the `mechanics` namespace
+  under its own source (`orna_mechanics.load_archetypes`). `build_check` adds an ARCHETYPE block: the archetypes for
+  the class/mode asked, each with the codex's current best items for its key stats (`BP.ARCHETYPE_KEYS`,
+  `BP.top_items`) - a new item shows up there the day the codex has it. Rerun the scraper + mining when the
+  library grows; update the file by hand from the report, keep unknowns unknown.
 - Draft gate (`_invented_names_note`, at most twice per request): a multi-word name in the draft that no tool
   result holds and the codex lacks is sent back ("e.g., Ring of the Gods" 2026-11-05), and so is a build-table
   item in the wrong codex slot (`_slot_mismatches`: an adornment in a gear slot, an accessory on the head).

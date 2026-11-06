@@ -1,0 +1,204 @@
+# orna_build_archetypes.txt - how Orna builds are BUILT: the engines, the stats that feed each one, and the
+# recurring archetypes, mined from the 79 player builds in aussiescodex's Build Library (2026-11-06,
+# scrapers/aussie_builds.py + knowledge/orna_build_profiles.py) and checked against the guides and the Discord /
+# Reddit corpora. Written in STATS and EFFECTS, not item lists, so a new item or pet is placed by what it gives.
+# Totals below are medians over the library builds of an archetype (percent stats summed over items,
+# adornments, anguish bonuses and amities). Player builds vary in quality; the evidence lists build ids
+# (aussiescodex.com/orna-gear-simulator/<id>). Community knowledge, not official.
+
+=== How to build: engine first, then what feeds it ===
+1. ENGINE: decide what deals the damage or wins the fight - the player's own skills, Apex skills, the pet
+(follower), summons, flasks, ward turned into damage (Spiked Shield), or statuses that stop the enemy. The
+class's own effects say which engine it is made for: Follower Stats/Act/Valhalla Power -> pet; Summon Stats ->
+summons; Apex Rate/Start -> apex; flasks and Elemental Weakness -> flasks; Collateral/Bastille -> ward and
+collateral; Low HP -> Stats -> redline.
+2. FEED: stack only the stats that feed that engine (next section) - a stat that does not reach the engine is
+wasted, however big.
+3. ENABLE: keep the engine running - Apex Saver to recast apex, Follower Act up to acting every turn, flask
+charge, ward regeneration for Spiked Shield, low HP for redline builds, status chance for a status engine.
+4. PROTECT for the mode: ward, defense/resistance, status protection and immunities, enough to survive the
+content (higher anguish needs more).
+5. CAPS: per-hit damage cap (raise it with Damage Limit Break), a raid's per-player cap, 100% act/crit, chain
+reaching at most 3 enemies - past a cap a stat is wasted.
+6. MODE: PvP ignores anguish and crucible bonuses; raids cap damage per player; towers and dungeons reward AoE,
+chain and extra turns; farming swaps damage for view distance, horde, avidity and drop bonuses.
+7. A NEW ITEM OR PET: read its stats and effects (the codex), name the engine they feed, and compare it in its
+slot with the current pick on that engine's stats. Item-granted follower spells (+follower spell) also reach
+summons (players, 2026-02-05), so such an item can carry a pet or summon build.
+
+=== Build engine: the player's own skills - what feeds their damage ===
+PLAYER SKILLS: Attack or Magic against Defense/Resistance through the damage formula (penetration first),
+then crit chance and crit damage, element damage, elemental weakness exploit, faction damage, buffs,
+Two-Handed Power (the +10% two-handed amity is a 1.1x attack and magic modifier, so it also raises
+penetration - players, 2026-05-06), and Damage Limit Break at the per-hit cap.
+
+=== Build engine: the pet (follower) - what feeds pet damage, and what does not ===
+PET (follower) damage - what reaches it (Orna Legends #beowulf-bestla, pinned 2025-03-08): Follower Stats,
+Follower Protect, Follower Act, any basic element damage (amity +20%), any secondary element damage (amity +30%:
+dark, holy, dragon, arcane), more damage at full HP, faction damage. What does NOT reach it: crit damage, the
+"resistant enemy" and "exploiting weakness" amities, The Hybrid, simple-attack damage. Ascension multiplies
+follower and summon stats (100 AL = x2, 200 AL = x3, on gear, passive and class base stats - players,
+2026-08-12). Elemental damage was made additive within one element to weaken the BeoA Towerfall build
+(players, 2026-01).
+
+=== Build engine: summons - what feeds summon damage ===
+SUMMONS: Summon Stats, pact power (Summon Pact Power), AL as above, and item-granted follower spells (Sharpen
+III gives turn-1 T.Attack III to attack-based summons). Anguish summon stats are large: 5 pieces at 3% at
+anguish 20 add ~300% (players, 2026-02-05).
+
+=== Build engine: Apex skills - what feeds them ===
+APEX: Apex Power, Apex Rate, Apex Start, Apex Saver (lets Apex be cast back to back; ~80-86% reached with July
+2026 gear, up to 50% from Yggdrasil crucibles alone - players/ORN, 2026-07).
+
+=== Build engine: flasks (Heretic) - what feeds flask damage ===
+FLASKS (Heretic): manaflask power and charge, Flask Saver; hitting a weakness charges faster and a sigil counts
+as a weakness (double charge); weakness exploit applies to the blight and to the sigil (see orna_mechanics
+"Build math").
+
+=== Build engine: ward turned into damage (Gilgamesh Spiked Shield) ===
+WARD -> DAMAGE (Gilgamesh Spiked Shield): ward, Ward Power, ward recovery per turn; Spiked Greatshield adds a
+hidden +20% to shield-skill damage; Sturdy Feet of Prometheus on a celestial weapon regenerate ward every turn
+for near-permanent Spiked Shield III uptime (echo Gilgamesh guide).
+
+=== Build engine: statuses - what makes them land ===
+STATUSES: Status Effect Chance (rolled once, on the first successful hit), item-granted status spells, the
+pet's own status skills (its own chance - see research's act estimate).
+
+=== Build mechanic: chain damage chance - how it works and its limit ===
+CHAIN: Chain Damage Chance is an additive chance of a ~50% roll to hit one more enemy; 100% still gives only that
+roll, and an already-chaining skill reaches at most 3 enemies (a moderator's tests, 2026-06-02) - so stacking
+far past 100% (some library builds total 165-200%) is not confirmed to do more.
+
+=== Archetype: Apex chain (Deity Ursa, towers and dungeons) ===
+ENGINE: Apex skills cast again and again. Deity Ursa's meter charges 90% faster but Apex deals 50% less, and
+every Apex use gives an extra turn (echo Deity guide) - so the build is about Apex frequency, not Apex size.
+STACKS (7 library builds, all PvE): Apex 213 (power + saver + rate), Chain 165, Crit 82, Buff Duration 60.
+SLOTS: head, chest and legs carry Apex and Chain stats; their anguish bonuses are Chain Damage Chance (19 of 35
+slots) or Apex Saver (11); weapon and off-hand carry crit; accessories carry Apex (Ancient Essences: apex rate
+and power). Adornments: crit eyes; Rune of Uthr (horde bonus + chain) for dungeons.
+WHY: Apex Saver keeps Apex available, the extra turn after each Apex keeps the chain going, chain spreads each
+hit to more enemies in AoE content.
+MODE: PvE - towers (Deity Ursa is called the fastest tower class), dungeons, hordes.
+A NEW ITEM FITS IF it adds apex_saver_chance / apex_rate / apex_power or chain_damage_chance in an armor slot,
+or crit in the weapon slots.
+EVIDENCE: xXfBKD (Ymir Feathers Chain), U2ztxx, ce78xh, deQbff, plus 3 more; echo Deity guide; Discord "The Apex
+Scaling issue" (2026-07).
+
+=== Archetype: Apex crit (Deity Ara) ===
+ENGINE: Apex skills that hit hard. Deity Ara starts with 50% Apex, gains +50%/turn and +20% stats per Apex use
+(echo Deity guide); the raid line is "fill the Apex bar and spam 2000 Seals Eventualus".
+STACKS (4 builds, 2 PvP / 2 PvE): Crit 162, Apex 186, Chain 45, Buff Duration 30. Amities: 40% crit damage.
+SLOTS: weapon and off-hand full of crit adornments (Covyn's Eye, Ferocious Bull's Eye, Steady Hands of
+Prometheus on a celestial weapon: crit + crit damage); accessories Apex; anguish bonus Apex Saver.
+NOTE: 2000 Seals/Blades hit many times, which gets past the per-hit cap (players, 2026-07-06). Rainsong
+(instrument proficiency) appears in the buff-stacking variants.
+A NEW ITEM FITS IF it adds crit / crit_damage in a weapon slot or apex_* in an accessory.
+EVIDENCE: U6RQd4, Zk2zRs, L3FKke, ZaTfds.
+
+=== Archetype: Chain crit hybrid ("Whipper", any class with a chaining skill) ===
+ENGINE: a chaining attack that crits, in AoE content.
+STACKS (7 builds across Deity Ursa, Gilgamesh Ursa, Beowulf Hydrus and class-less ones): Chain 174, Crit 100,
+Apex 101 where the class has Apex. Anguish bonus Chain Damage Chance on nearly every armor slot (25 slots).
+The build's own note: "200% chain damage chance, 95% crit, hybrid ... max 15% chain damage chance anguish
+bonuses on all gear pieces".
+LIMIT: chain chance past 100% is not confirmed to do more (see CHAIN above) - say so when recommending it.
+A NEW ITEM FITS IF it adds chain_damage_chance, collateral_chance or crit.
+EVIDENCE: M95W7p (THE WHIPPER 2.0), deQbff, xXfBKD, U2ztxx.
+
+=== Archetype: Two-handed power ===
+ENGINE: the player's own two-handed weapon skills.
+STACKS (14 builds; Realmshifter Dorado, Deity, Gilgamesh Ursa, Beowulf Hydrus, Heretic Ara; mostly Blade of
+Finesse spec; 11 PvE): Two-Handed Power 34 (both accessories carry it in 13 builds), Crit 95, Ward 41.
+Anguish bonus Multi-Target Dmg (8) where the content is AoE.
+PET: Sharpen III from an item (6 builds) - a turn-1 T.Attack III for the pet; the Beastfelled Cuirass change
+gave Realmshifter Dorado about +20% damage (players, 2026-04-14).
+WHY: two-handed power multiplies attack and magic, so it raises penetration as well as damage.
+A NEW ITEM FITS IF it adds two-handed_power (accessories, legs anguish bonus) or crit on a two-handed weapon.
+EVIDENCE: 3twfQN, 7UzyeF, ce78xh and 11 more.
+
+=== Archetype: Pet element (Beowulf Auriga, the pet does the damage) ===
+ENGINE: the pet's spells; Beowulf Auriga has Follower Stats +130%, Follower Act +15%, Follower Turn Chance
++30% (the pet can act twice in a turn), Valhalla Power +120%, Low HP -> Stats +50% (class data). The player
+survives; the pet kills ("Pet Focused" in the Beowulf guide).
+STACKS (3 builds): Element 240 on the pet's elements (Finesse's Enchanted Epee: +20% dark/holy/dragon/arcane,
+-50% to the four basic elements; Soul of Achlys: dark + holy), Pet 80 (Eye of Osiris: follower stats/act/summon
+stats), Summon 124. Anguish bonus Low HP -> Stats (6 slots): the build starts at 1 HP (redline).
+SKILLS: Great Meditation (T.Mag up) given to the pet by the Aaru Robe.
+WHY: only follower stats/act/protect, element %, full-HP and faction damage reach pet damage (see above) - crit
+and weakness amities are wasted here; match the element % to the pet's own spell elements (Seedhusk's
+Yggdrasil's Fury II is dark + holy; a Towerfall pet's element for a Towerfall build).
+MODE: raids (Towerfall-style at 1 HP), towers; PvP with Seedhusk is a different, defensive build (orna
+mechanics/Discord: stall with Deific Channel, Defend Power, parapet, protect; nerfed in PvP 2026-07-28).
+A NEW PET FITS IF its spells are AoE or high-power and its elements match the stacked element %; a NEW ITEM
+fits if it adds follower_stats / follower_act / the pet's element damage, or gives the pet a buff spell.
+EVIDENCE: nX5Pmc (BeoA + Seedhusk), gVeNMp (Beo Tower fall), HB8V6U; pinned pet-damage list 2025-03-08.
+
+=== Archetype: Weakness flask (Heretic) ===
+ENGINE: flask nukes (Omniflask) on a weakness: Heretic has Elemental Weakness +12% and Elemental Immunity
+Damage +25% (class data); Heretic Ara raises the damage limit (+400%).
+STACKS (4 builds): Weakness 110, Flask 104 (Eye of Ptah: manaflask charge + power on every armor piece), Crit 64,
+dark/holy damage 28. Anguish bonus Low Mana -> Stats (6 slots): bluelining (Iconoclast: stats up as mana drops).
+Amities: manaflask power, weakness exploit.
+WHY: a sigil counts as a weakness, so weakness exploit applies twice and flasks charge twice as fast; the build
+reaches the damage cap (Heretic guide), so Damage Limit Break matters.
+A NEW ITEM FITS IF it adds manaflask_power / manaflask_charge / elemental weakness, or a sigil.
+EVIDENCE: cHADyJ, 88rM5C, BXbZpq, stWc5D; Heretic guide "Omniflask Weakness".
+
+=== Archetype: Summoner (Grand Summoner) ===
+ENGINE: summons. Grand Summoner Auriga: Summon Stats +220%, quick summons, Follower/Summon AI +20%; Hydrus:
+auto summon and sacrifice effects (Hydrus Pact, capped at 10M per hit and unable to crit - players).
+STACKS (10 builds): Summon 166 on every slot (head, chest, legs, weapon and accessories), Ward 50 (Jewel of
+Creation in 105 adornment slots), Pet 27 (Eye of Osiris). Anguish bonus Chain Damage Chance (Hydrus Pact has
+its own chain code).
+PvP NOTE (G.S.A. Summon PVP): keep ward up on yourself (Ward of Ortanite, Divine Bastion) while the summons
+fight.
+A NEW ITEM FITS IF it adds summon_stats / summon_pact_power / instant or double summon chance, or a follower
+spell (it reaches summons too).
+EVIDENCE: EqYJrA (GSH hydrus pact), KL7UhE (GSA PvP), LrhKkD, 6TXuGJ and 6 more.
+
+=== Archetype: Ward conversion (Gilgamesh Spiked Shield) ===
+ENGINE: Spiked Shield skills turn ward into damage; Gilgamesh Hercules has Bastille +120%, collateral chance
+and damage (class data).
+STACKS (3 builds): Ward 234 (Eye of Neith: ward + ward power; Jewel of Creation; Sturdy Feet of Prometheus for
+ward recovery), Turns 45. Anguish bonuses Ward Power (6) and Frenzy (4).
+WHY: more ward is more damage and more survival at once; ward recovery keeps Spiked Shield III up.
+A NEW ITEM FITS IF it adds ward / ward_power / ward_recovery, or a shield-skill bonus.
+EVIDENCE: RzUDjD (Hercules Build Spiked Shield, the library's most voted, 7), XcQAn3, uz4fLE; echo Gilgamesh
+guide.
+
+=== Archetype: Status support (raids: stasis or petrify + sigil) ===
+ENGINE: stop the boss (stasis acts like petrify - the boss cannot act) while a damage dealer hits; the pet adds
+a sigil (Dark Sigil). Chronomancer's Lacuna II has a 50% stasis chance; Naggeneen's Belt makes stasis land
+easier and last 3+ turns (Reddit, u/Widogeist).
+STACKS (3 builds): Status Effect Chance 166 (Poison Quill: status chance + status protection), Status
+Protection 88, Pet 58 (Severause's Cabochon: follower act + pact power).
+MODE: duo raids (a stasis user plus a damage dealer); a few raids are immune to stasis.
+A NEW ITEM FITS IF it adds status_effect_chance, a stasis/petrify skill, or a sigil for the pet.
+EVIDENCE: N8ftxT, pYg3a6, 9mDYmd; Discord "Stasis abuse" (2026-01).
+
+=== Archetype: Redline crit (Realmshifter Corvus) ===
+ENGINE: the player's crits at low HP. Realmshifter: Low HP -> Stats +100% (Resurgence), damage to ward +125%,
+dodge up to 60% at low HP (class data); Corvus adds Critical Chain and crit-status fade.
+STACKS (5 builds): Crit 136 (Eye of Sekhmet, Ferocious Bull's Eye, Steady Hands of Prometheus), Faction 25,
+Low HP 20, Bypass 15. Pet skill Riposte in 2.
+WHY: redlining doubles stats; Crit Poise keeps crit buffs up across long raid fights (Realmshifter thread
+2026-04).
+A NEW ITEM FITS IF it adds crit / crit_damage / low_hp_stats / ward bypass.
+EVIDENCE: GLfHwT, xPTFAJ, MxGngW, 6DapAt.
+
+=== Archetype: Farming loadout ===
+ENGINE: not damage - finding and finishing more content.
+STACKS (12 builds, any class): Farm 200 (view distance - Symbol of War adornments; dungeon horde bonus - Rune of
+Uthr; avidity; drop and material bonuses), with enough Chain and Crit to clear hordes. Each view-distance
+source adds a flat 20% (Reddit, u/Widogeist).
+NOTE: keep separate loadouts - the world loadout for view distance, raid/PvP loadouts for damage and survival.
+EVIDENCE: R9Ba5Z (Horde boss farming, 5 votes), MbeTsN, j7qyFq and 9 more.
+
+=== Archetype: Defensive PvP ===
+ENGINE: survive and win the long fight (counters, collateral, ward, a pet that stalls).
+STACKS (7 PvP builds: Gilgamesh, Deity Ursa, Grand Summoner Auriga): Ward 107 (Eye of Neith, Immortal's Jewel),
+little crit/apex/chain. NOTE: these builds still carry anguish bonuses (Ward Power, Frenzy), but anguish and
+crucible bonuses do not work in PvP (players, 2026-08) - do not count them for a PvP pick.
+A NEW ITEM FITS IF it adds ward, defense/resistance, status protection or a counter/collateral effect that
+works in PvP.
+EVIDENCE: RzUDjD, LbHypb, TmnB8P, bnVxMD and 3 more.

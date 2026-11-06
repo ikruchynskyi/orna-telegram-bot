@@ -2915,6 +2915,48 @@ def _compose_build_check(goal: str, mode: str, gear: str, hits_by_dim: list, ext
     return "\n".join(out)
 
 
+_ARCHETYPE_MAX = 2          # archetype sections shown per build_check
+_ARCHETYPE_CHARS = 1500     # of each (900 cut the Pet element section's PvP line)
+
+
+def _archetype_block(subject: str, hits: list, mode: str = "") -> str:
+    """The build ARCHETYPES (data/orna_build_archetypes.txt, mined from community builds) this question is about:
+    those whose title names the class asked about, else the best retrieved ones - each with the codex items that
+    give the most of its key stats NOW, so a new item is found the day the codex has it."""
+    from knowledge import orna_build_profiles as BP
+    secs = orna_mechanics.load_archetypes()
+    low = subject.lower()
+    words = {w for w in re.findall(r"[a-z]{4,}", low)
+             if w not in ("build", "builds", "with", "pets", "gear", "best", "this", "that", "crucible", "damage")}
+    # most of the question's words in the title first: "Grand Summoner Auriga" -> Summoner (2), not Pet element (1)
+    score = {t: sum(w in t.lower() for w in words) for t, _b in secs if t.startswith("Archetype:")}
+    chosen = sorted((t for t, n in score.items() if n), key=lambda t: -score[t])
+    for h in hits:
+        title = (h.get("text") or "").split("\n", 1)[0].strip("= ").strip()
+        if h.get("title") == orna_mechanics.ARCHETYPES_TITLE and title not in chosen and title.startswith(
+                ("Archetype:", "Build engine:")):
+            chosen.append(title)
+    if "pvp" in f"{mode} {low}":   # a PvP question: the defensive PvP archetype beside the class's own
+        pvp = next((t for t, _b in secs if t.startswith("Archetype: Defensive PvP")), None)
+        if pvp and pvp not in chosen:
+            chosen.insert(1 if chosen else 0, pvp)
+    chosen = chosen[:_ARCHETYPE_MAX]
+    if not chosen:
+        return ""
+    body = dict(secs)
+    out = ["ARCHETYPE - what community builds of this kind are made of (mined from 79 player builds; stats and "
+           "effects, not a loadout to copy). Build from its ENGINE and the stats that feed it; the items below "
+           "are the codex's current best carriers of those stats - check each one's slot, useable_by and mode:"]
+    for t in chosen:
+        out.append(f"\n[{t}]\n" + _truncate_lines(body.get(t, ""), _ARCHETYPE_CHARS, " […]"))
+        for key in BP.keys_for(t):
+            best = BP.top_items(key, 2)[:6]
+            if best:
+                out.append(f"  best {key}: " + "; ".join(f"{n} ({place}, {use.replace('_classes', '')}) {v:g}"
+                                                         for n, place, use, v in best))
+    return "\n".join(out)
+
+
 async def _run_build_check_tool(args: dict, sources: Optional[list] = None) -> str:
     goal = " ".join(str(args.get("goal") or "").split())
     mode = " ".join(str(args.get("mode") or "").split())
@@ -2926,6 +2968,15 @@ async def _run_build_check_tool(args: dict, sources: Optional[list] = None) -> s
                                  return_exceptions=True)
     hits_by_dim = [r[:6] if isinstance(r, list) else [] for r in found]
     extras = []
+    try:
+        arch_hits = await _retrieve(f"{subject} build archetype engine")
+        block = await asyncio.to_thread(_archetype_block, subject, arch_hits, mode)
+        if block:
+            extras.append(block)
+            if sources is not None:
+                _add_source(sources, "Build archetypes (aussiescodex Build Library)", orna_mechanics.ARCHETYPES_URL)
+    except Exception:
+        logger.warning("orna: build_check archetypes failed", exc_info=True)
     if re.search(r"crucible|anguish", subject, re.I):
         try:
             extras.append(await asyncio.to_thread(orna_bonuses.overview))
@@ -4048,7 +4099,10 @@ _NAME_GENERIC = {"pet", "build", "set", "focus", "gear", "strategy", "strategies
                  # sentence and heading openers ("Key Spells", "Consider Titan Crucible", "Each Coward's")
                  "key", "core", "total", "consider", "each", "other", "main", "best", "top", "your", "our", "this",
                  "these", "those", "use", "using", "add", "keep", "roll", "pick", "choose", "goal", "spells", "skills",
-                 "stats", "stat", "priorities", "priority", "rules", "optimization", "bonus", "bonuses", "damage"}
+                 "stats", "stat", "priorities", "priority", "rules", "optimization", "bonus", "bonuses", "damage",
+                 "maximize", "maximise", "prioritize", "prioritise", "boost", "boosts", "increase", "increases",
+                 "stack", "avoid", "aim", "target", "get", "look", "swap", "replace", "equip",
+                 "specific", "general", "important", "common", "mechanics", "mechanic", "strategy"}
 
 
 def _invented_names(draft: str, evidence: str, known: set) -> list:
@@ -4060,12 +4114,21 @@ def _invented_names(draft: str, evidence: str, known: set) -> list:
     # headings ("# ...", a line that is all bold) are titles, not item names
     body = "\n".join(ln for ln in draft.splitlines()
                      if not ln.lstrip().startswith("#") and not re.fullmatch(r"\s*\*\*[^*]+\*\*:?\s*", ln))
+    pieces = []
     for m in _ITEM_NAME_RE.finditer(body):
-        words = m.group(0).split()
-        while words and words[-1].lower() in _NAME_GENERIC:
+        # split at generic words and "and": "Maximize Apex and Prioritize Crit" is two phrases, not one name
+        # ("Crook and Flail" then goes unchecked - the safe direction)
+        cur = []
+        for w in m.group(0).split() + ["and"]:
+            if w.lower() in _NAME_GENERIC or w == "and":
+                if cur:
+                    pieces.append(cur)
+                cur = []
+            else:
+                cur.append(w)
+    for words in pieces:
+        while words and words[-1].lower() in ("of", "the"):
             words.pop()
-        while words and words[0].lower() in _NAME_GENERIC:
-            words.pop(0)
         if len(words) < 2:
             continue
         # any run of 2+ words may be the real name: "Titan Crucibles" (plural), "Spam Summon Dead" (a verb first)
@@ -4094,7 +4157,7 @@ def _slot_mismatches(draft: str, items: dict) -> list:
     out = []
     for line in draft.splitlines():
         m = _SLOT_RE.match(line)
-        if not m:
+        if not m or re.match(r"[\s*:]*adornments?\b", line[m.end():], re.I):   # "Weapon Adornments: ..." is no slot
             continue
         slot = m.group(1).lower().replace("offhand", "off-hand")
         for c in _ITEM_NAME_RE.finditer(line[m.end():]):
@@ -4139,11 +4202,14 @@ def _invented_names_note(session, draft: str) -> Optional[str]:
     except Exception:
         return None
     bad = _invented_names(draft, evidence, known)
+    # placeholder wording for items ("Item (example):", "e.g., ...", "illustrative") - 2026-11-06 auriga-pvp
+    # (not "e.g.": explanations use it too, and an invented "e.g." item is caught by the name check above)
+    placeholder = re.search(r"\(\s*examples?\s*\)|\billustrative\b", draft, re.I)
     try:
         slots = _slot_mismatches(draft, _item_places())
     except Exception:
         slots = []
-    if not bad and not slots:
+    if not bad and not slots and not placeholder:
         return None
     session.pushed_for_names = getattr(session, "pushed_for_names", 0) + 1
     parts = []
@@ -4152,16 +4218,40 @@ def _invented_names_note(session, draft: str) -> Optional[str]:
                      "the codex does not know. Do not invent names, and never use \"e.g.\" names as placeholders. "
                      "Look each one up (search_codex or query) and keep it only if it exists and has the stat you "
                      "claim; otherwise remove it, or name the stat to look for instead.")
+    if placeholder:
+        parts.append(f"Your draft uses placeholder wording ({placeholder.group(0)!r}). Name an item only when a tool "
+                     "returned it for that slot; otherwise name the stat to look for. No examples.")
     if slots:
         parts.append("Wrong slot (codex): " + "; ".join(slots[:6]) + ". Put each item in the slot the codex gives it; "
                      "an adornment goes INTO a weapon or armor piece, it is not a slot of its own.")
     return " ".join(parts) + " Then finish again."
 
 
+_KNOWN_TERMS: Optional[set] = None
+
+
 def _name_index_lower() -> set:
+    """Every name the draft gate accepts without evidence: codex names (with and without an epithet), and game
+    TERMS - classes and specializations, crucible and amity bonus names, the glossary, the mechanics section
+    titles (2026-11-06: "Ascension Level" was sent back as an invented name)."""
+    global _KNOWN_TERMS
     from orna.orna_aussies import _name_index
     idx = _name_index()
-    return set(idx) | {n.split(",")[0] for n in idx} | {n.split(" / ")[0] for n in idx}
+    if _KNOWN_TERMS is None:
+        terms = set()
+        try:
+            d = json.loads((paths.DATA / "orna_classes.json").read_text(encoding="utf-8"))
+            terms |= {k.lower() for k in list(d.get("classes") or {}) + list(d.get("spec_extras") or {})}
+            terms |= {k.lower() for k in json.loads((paths.DATA / "orna_terms_uk.json").read_text(encoding="utf-8"))}
+            bon = orna_bonuses.all_bonuses()
+            terms |= {r.split(" | ")[0].lower() for r in bon.get("crucibles") or []}
+            terms |= {re.sub(r"^[%#+ ]+", "", a.get("name", "")).lower() for a in bon.get("amity_cards") or []}
+            for title, _b in orna_mechanics._load() + orna_mechanics.load_archetypes():
+                terms |= {p.strip().lower() for p in re.split(r"[(:,\-]| and ", title) if len(p.strip()) > 3}
+        except Exception:
+            logger.warning("orna: known-terms list incomplete", exc_info=True)
+        _KNOWN_TERMS = {t for t in terms if t}
+    return set(idx) | {n.split(",")[0] for n in idx} | {n.split(" / ")[0] for n in idx} | _KNOWN_TERMS
 
 
 def _forced_evidence_note(session) -> Optional[str]:
@@ -6893,6 +6983,8 @@ def _demo() -> None:
     draft = ("**Beowulf Auriga PVP Build with Yggdrasil Seedhusk Pet**\n| Head | Fey Gerd’s Headdress |\n"
              "| Accessory 1 | e.g., Ring of the Gods, Band of Gods |\n| Accessory 2 | Pendant of Warding, Defender’s Talisman |")
     assert _invented_names("Spam Summon Dead every turn", "", {"summon dead"}) == []
+    if orna_mechanics.load_archetypes():
+        assert _invented_names("Your Ascension Level and Damage Limit Break matter.", "", _name_index_lower()) == []
     assert _invented_names("Assumes PvE. Increases Gorynych’s act. Beowulf Auriga's pet.", "",
                            {"gorynych", "beowulf auriga"}) == []
     assert _invented_names(draft, "Yggdrasil Seedhusk [followers]", known) == [
@@ -6905,6 +6997,8 @@ def _demo() -> None:
     table = ("| Weapon | Celestial Axe |\n| Off-hand | Soul of Achlys |\n• **Head** — Item: Carl’s Ring\n"
              "| Off-hand | Celestial Axe |\n| Accessory 1 | Carl's Ring |\n| Accessory 2 | Achlys Souls |\n"
              "| Weapon | Celestial Lute (adorned with Soul of Achlys) |")
+    assert _slot_mismatches("Weapon Adornments: Soul of Achlys", places) == []
+    assert _invented_names("Maximize Apex and Prioritize Crit.", "", set()) == []
     assert _slot_mismatches(table, places) == ["Soul of Achlys is an adornment, not an off-hand item",
                                                "Carl's Ring is an accessory item, not a head item",
                                                "Achlys Souls is an adornment, not an accessory item"], _slot_mismatches(table, places)
@@ -7297,6 +7391,11 @@ def _demo() -> None:
     assert "capped at 9,999,999" in box.split("CAPS")[1].split("STACKING")[0], box
     assert "Goat's Hood is the exact name" in _exact_note("goat's hood", [{"name": "Goat's Hood"}, {"name": "Forest Goat's Hood"}])
     assert _exact_note("goat hood", [{"name": "Goat's Hood"}, {"name": "Forest Goat's Hood"}]) == ""
+    if orna_mechanics.load_archetypes():
+        arch = _archetype_block("Gilgamesh Hercules", [], "pvp")
+        assert "[Archetype: Ward conversion (Gilgamesh Spiked Shield)]" in arch and "best ward_power:" in arch, arch[:300]
+        assert "[Archetype: Defensive PvP]" in arch, arch[:400]
+        assert _archetype_block("Grand Summoner Auriga", []).split("\n[")[1].startswith("Archetype: Summoner")
     box = _compose_build_check("x", "", "", [[]] * len(_BUILD_DIMENSIONS), [], "", {"CAPS": "Where: Titan 40%"})
     assert "  Where: Titan 40%" in box.split("\nCAPS")[1].split("\nSTACKING")[0], box
     assert _focus("=== T ===\nA ward line. The cap is 10M. Mana here.", ("cap",)) == "The cap is 10M."

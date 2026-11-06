@@ -111,8 +111,10 @@ def _units(namespace: str) -> list:
                 for s in orna_knowledge._load()]
     if namespace == "mechanics":
         from knowledge import orna_mechanics
-        return [(f"=== {t} ===", b.split("\n"), orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
-                for t, b in orna_mechanics._load()]
+        return ([(f"=== {t} ===", b.split("\n"), orna_mechanics.SOURCE_TITLE, orna_mechanics.SOURCE_URL)
+                 for t, b in orna_mechanics._load()]
+                + [(f"=== {t} ===", b.split("\n"), orna_mechanics.ARCHETYPES_TITLE, orna_mechanics.ARCHETYPES_URL)
+                   for t, b in orna_mechanics.load_archetypes()])
     if namespace in ("echo", "ornabook", "questline"):
         from knowledge import orna_echo
         path = orna_echo.CORPUS_PATH if namespace == "echo" else \
