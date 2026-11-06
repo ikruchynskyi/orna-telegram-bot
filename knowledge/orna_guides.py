@@ -158,6 +158,12 @@ def read_guide(topic_key: str) -> Optional[str]:
     return text
 
 
+# The guides' own short names for the Celestial class variants: "auriga pvp" found nothing on "auriga" because the
+# Beowulf guide says BeoA (2026-11-05: class_guide returned one BeoH section, 1k of a 6k budget).
+_VARIANT_ALIASES = {"auriga": ("beoa", "gsa"), "hydrus": ("beoh", "gsh"), "ursa": ("dursa", "gursa"),
+                    "hercules": ("herc",), "corvus": ("rsc", "hc"), "dorado": ("rsd",), "ara": ("hara", "dara")}
+
+
 def guide_excerpt(text: str, query: str, max_chars: int) -> str:
     """A query-focused slice of a guide's full `text` (or its opening when
     `query` is empty / matches nothing) - the ReAct loop's class_guide tool
@@ -196,7 +202,19 @@ def guide_excerpt(text: str, query: str, max_chars: int) -> str:
     # Short words (<=2 chars - "of", "in", "an", ...) dropped so they don't
     # inflate every line's score meaninglessly.
     words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+    words += [a for w in list(words) for a in _VARIANT_ALIASES.get(w, ()) if a not in words]
     lines = text.split("\n")
+
+    def _scan(budget: int, skip: str = "") -> str:
+        return _guide_scan(lines, words, budget, skip)
+
+    def _fill(found: str) -> str:
+        """A header match that used under a third of the budget is topped up with the best-matching lines
+        elsewhere in the guide (gear rows tagged "Raids / PvP" sit in tables, not under a build header)."""
+        if len(found) >= max_chars // 3:
+            return found
+        more = _guide_scan(lines, words, max_chars - len(found) - 40, found, ctx=0)   # more distinct lines
+        return found + ("\n\nMORE LINES FROM THIS GUIDE that match the query:\n" + more if more else "")
     tab_re = re.compile(r"^-{3,}\s*(.+?)\s*-{3,}$")       # --- Tab ---
     build_re = re.compile(r"^={3,}\s*(.+?)\s*={3,}$")     # === Build ===
     header_re = re.compile(r"^(?:-{3,}|={3,})\s*(.+?)\s*(?:-{3,}|={3,})$")
@@ -236,11 +254,16 @@ def guide_excerpt(text: str, query: str, max_chars: int) -> str:
             top = max((sc for _, sc in name_hits), default=0)
             if top > 0:
                 out = [_emit(bl, tab_line) for bl, sc in name_hits if sc == top]
-                return "\n\n".join(out)[:max_chars]
+                return _fill("\n\n".join(out)[:max_chars])
             # Tab matched but no build inside it did - return the whole tab.
             end = next((j for j in range(tab_line + 1, len(lines))
                         if tab_re.match(lines[j].strip())), len(lines))
-            return "\n".join(lines[tab_line:end])[:max_chars]
+            whole = "\n".join(lines[tab_line:end])
+            named = lambda w: w in tabs[ti][1] or any(a in tabs[ti][1] for a in _VARIANT_ALIASES.get(w, ()))
+            rest = [w for w in words if not named(w) and w in query.lower()]
+            if rest:   # "auriga pvp": the BeoA tab has no PvP build - its opening, then the guide's PvP lines
+                return _fill(whole[:800] + f"\n[...this tab has no build named {' '.join(rest)}]")
+            return _fill(whole[:max_chars])
 
         # No tab named by the query - score every build by its own name and
         # return all top scorers, each with its tab header.
@@ -248,22 +271,26 @@ def guide_excerpt(text: str, query: str, max_chars: int) -> str:
         top = max((sc for _, sc, _ in builds), default=0)
         if top > 0:
             out = [_emit(bl, tl) for bl, sc, tl in builds if sc == top]
-            return "\n\n".join(out)[:max_chars]
+            return _fill("\n\n".join(out)[:max_chars])
 
+    return _scan(max_chars) or text[:max_chars]
+
+
+def _guide_scan(lines: list, words: list, budget: int, skip: str = "", ctx: int = 3) -> str:
+    """TIER 2 of guide_excerpt: the lines with the most distinct query words, each with a little context."""
+    if budget <= 0:
+        return ""
     # TIER 2: word-level OR match, ranked by how many distinct query words a
     # line contains - broader fallback when no header matched.
     scores = [sum(1 for w in words if w in line.lower()) for line in lines]
     hit_indices = sorted((i for i, s in enumerate(scores) if s > 0), key=lambda i: -scores[i])
-    if not hit_indices:
-        # No word match at all - the guide's own opening beats nothing, since
-        # it may answer this in wording that shares no words with the query.
-        return text[:max_chars]
-
     seen: set = set()
     out_lines: list = []
     total = 0
     for idx in hit_indices:
-        start, end = max(0, idx - 3), min(len(lines), idx + 4)
+        if lines[idx] and lines[idx] in skip:
+            continue
+        start, end = max(0, idx - ctx), min(len(lines), idx + ctx + 1)
         for i in range(start, end):
             if i in seen:
                 continue
@@ -271,9 +298,9 @@ def guide_excerpt(text: str, query: str, max_chars: int) -> str:
             out_lines.append(lines[i])
             total += len(lines[i])
         out_lines.append("...")
-        if total >= max_chars:
+        if total >= budget:
             break
-    return "\n".join(out_lines)[:max_chars]
+    return "\n".join(out_lines)[:budget]
 
 
 def _demo() -> None:
@@ -312,6 +339,10 @@ def _demo() -> None:
     assert "Arisen Kaladanda" not in guide_excerpt(heretic, "omniflask weakness", 6000)
     assert guide_excerpt(heretic, "", 40) == heretic[:40]
     assert "--- Dungeon ---" in guide_excerpt(heretic, "dungeon", 6000)
+    beo = read_guide("beowulf")
+    if beo:
+        ex = guide_excerpt(beo, "auriga pvp", 6000)
+        assert "BeoA Builds" in ex and "no build named pvp" in ex and "Arisen Rift Helmet" in ex, ex[:300]
 
     print(f"orna_guides._demo: all checks passed ({len(GUIDES)} guides)")
 

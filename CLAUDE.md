@@ -107,6 +107,13 @@ Data sources (each = reader module + cache or committed file + scraper):
   dimension heads with the curated sentences of `orna_mechanics.txt` "Build math" (+ formula, stat bonuses),
   then focused search passages; CAPS lists where the cap can be raised (`orna_bonuses.where_rolls`). REVIEW
   sees a whole checklist and point 9 checks it. Spec/plan: `docs/superpowers/*/2026-11-04-orna-build-reasoning*`.
+- Draft gate (`_invented_names_note`, at most twice per request): a multi-word name in the draft that no tool
+  result holds and the codex lacks is sent back ("e.g., Ring of the Gods" 2026-11-05), and so is a build-table
+  item in the wrong codex slot (`_slot_mismatches`: an adornment in a gear slot, an accessory on the head).
+- Retrieval: `_retrieve` puts up to 4 `orna_textindex.covering` chunks after the best vector hit - lines where two
+  of the query's topic words meet, one of them name-like (<2% of chunks). "Seedhusk PvP" went from 1 to 7 PvP facts.
+- `class_guide`: variant names map to the guides' abbreviations (auriga -> BeoA/GSA, hydrus -> BeoH/GSH); a small
+  header match is topped up with the guide's best-matching lines (gear rows tagged "Raids / PvP").
 - Context: `_compact` sends the last `_KEEP_FULL_RESULTS` tool results whole and cuts older long ones (the
   repeat cache returns the full text); `_working_state` is appended to every step.
 - Freshness: `knowledge_search`/`research` append `orna_releases.search_strict` patch notes; they win over the

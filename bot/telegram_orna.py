@@ -2479,6 +2479,23 @@ def _recency(text: str) -> float:
     return _RECENCY_BONUS * (1 - 2 * min(max(age - 3, 0), 33) / 33)
 
 
+_COVER_K = 4     # chunks that name several of the query's topics, put right after the best vector hit
+
+
+async def _with_covering(query: str, ranked: list) -> list:
+    """`ranked` with up to _COVER_K keyword chunks in which two of the query's topic words meet in one line
+    (orna_textindex.covering), after its first hit. 2026-11-05 "Beowulf Auriga PvP Seedhusk": the vector list held
+    the Seedhusk-in-PvE chunks and 1 of the 12 PvP facts; BM25 lines naming both found 7."""
+    try:
+        extra = await asyncio.to_thread(orna_textindex.covering, query, _COVER_K)
+    except Exception:
+        logger.warning("orna: covering search failed for %r", query[:60], exc_info=True)
+        return ranked
+    have = {h.get("_id") for h in ranked} | {(h.get("text") or "")[:200] for h in ranked}
+    extra = [h for h in extra if h["_id"] not in have and h["text"][:200] not in have]
+    return ranked[:1] + extra + ranked[1:]
+
+
 async def _retrieve(query: str) -> list:
     """Every text corpus, best first: [{"_id","ns","title","url","text"}, ...].
     Pinecone when it answers (ranked by score plus _recency), else the keyword
@@ -2487,7 +2504,8 @@ async def _retrieve(query: str) -> list:
     query = " ".join(_CORPUS_WIDE_WORDS.sub(" ", query).split()) or query
     vec = await _vector_knowledge(query)
     if vec is not None:
-        return sorted((h for hits in vec.values() for h in hits), key=lambda h: -(h["score"] + _recency(h["text"])))
+        ranked = sorted((h for hits in vec.values() for h in hits), key=lambda h: -(h["score"] + _recency(h["text"])))
+        return await _with_covering(query, ranked)
     try:
         return await asyncio.to_thread(orna_textindex.search, query, _KEYWORD_K)
     except Exception:
@@ -3700,6 +3718,9 @@ _TOOLS_TEXT = (
     "  A line \"[image #<id>: ...]\" is a chart or screenshot: the lines after it are its text. To show "
     "that picture to the user, put its id in finish()'s \"images\".\n"
     "  Try it BEFORE web_search for all that it can contain. Nothing relevant: use web_search.\n"
+    "  QUERY SHAPE: 2-4 words, the thing plus the aspect (\"Seedhusk PvP\", \"Beowulf Auriga gear\"), not the "
+    "question as a sentence. A question about two things is two short queries in one parallel step. Do not "
+    "search again with the same words reordered: the results will be the same.\n"
     "- parallel(calls=[<up to 4 independent lookups>]): run several lookups in ONE step - see PARALLEL "
     "under OUTPUT.\n"
     "- releases(action_input=<item, class or mechanic name, English - or empty for the latest notes>): The "
@@ -3813,9 +3834,13 @@ _CLASS_GUIDE_RULE = (
 # 2026-11-04: "optimal crucible bonuses for a Heretic weakness build with Gorynych" was answered from one crucible's
 # table: no pet numbers, no damage cap, no weighing of a chance-based source against a sure one.
 _OPTIMIZE_RULE = (
-    "BUILD OPTIMIZATION - for \"which bonuses, crucibles, amities, adornments, pets or gear are best for my "
-    "build\", or \"is X or Y better for my build\":\n"
-    "  1. Get the build's goal and gear: class_guide (its Priorities: and Notes: lines) or the user's items.\n"
+    "BUILD OPTIMIZATION - for any build or gear question: \"which bonuses, crucibles, amities, adornments, pets "
+    "or gear are best\", \"is X or Y better\", \"build (strategies) for <class>\", \"what gear for <class> in "
+    "PvP/raids\", \"how do I raise my damage\":\n"
+    "  1. Get the build's goal and gear: class_guide (its Priorities: and Notes: lines) or the user's items. "
+    "Open the CLASS's codex entry (search_codex <class>) and read its effects: they say what the class scales. A "
+    "class with Follower Stats / Follower Act / Valhalla Power builds for its PET; do not pick crit or damage "
+    "gear for the player of such a class unless a source says so.\n"
     "  2. If the build relies on a pet, call research(<pet>). It shows how often the pet uses each skill and the "
     "chance that its status effect lands.\n"
     "  3. Call build_check(args={goal, mode, gear}) once. Put \"crucible\" in goal or gear for a crucible "
@@ -3828,7 +3853,12 @@ _OPTIMIZE_RULE = (
     "more damage), SOURCE & RELIABILITY (a bonus to a pet's chance-based debuff is worth less than one to a sure "
     "source), STACKING (what adds, what multiplies, what replaces), SIZE (compare ranges side by side; use "
     "calculate() for totals).\n"
-    "  6. A point the checklist marks UNKNOWN stays unknown in the answer. Mark estimates as estimates."
+    "  6. A point the checklist marks UNKNOWN stays unknown in the answer. Mark estimates as estimates.\n"
+    "  7. Name only items that a tool returned. No \"e.g.\", \"example\" or \"illustrative\" item names: if no item "
+    "for a slot is known, name the stat to look for, or leave the slot open.\n"
+    "  8. MODE MATCH: pick items that a source recommends for the mode asked (PvP, raid, tower, farming). An item "
+    "from a farming or raid build is not a PvP pick unless a source says it works in PvP. If no source gives a "
+    "build for this class and mode, say so FIRST, then build only from items the sources tag for that mode."
 )
 
 _STRATEGY_RULE = (
@@ -4004,6 +4034,134 @@ def _counted_a_capped_list(session) -> bool:
     A listing's row count is the CAP, never a total."""
     return (not _has_aggregate_evidence(session)
             and any("partial" in str(obs or "").lower() for obs in session.seen_calls.values()))
+
+
+# Item-like names a draft may use: two or more Capitalised words, "of"/"the" between them ("Ring of the Gods").
+_NAME_WORD = r"[A-Z][a-z]+(?:['’][a-z]+)?(?![A-Za-z])"     # whole words only: "PvE" is not "Pv"
+_ITEM_NAME_RE = re.compile(rf"\b{_NAME_WORD}(?:\s+(?:(?:of|the|and)\s+)*{_NAME_WORD})+")
+# A heading's generic words, not part of a name ("Yggdrasil Seedhusk Pet", "Cowards Set Focus").
+_NAME_GENERIC = {"pet", "build", "set", "focus", "gear", "strategy", "strategies", "notes", "note", "guide", "option",
+                 "options", "tips", "slot", "item", "items", "accessory", "accessories", "amity", "amities", "pvp", "pve",
+                 "raid", "raids", "tower", "towers", "community", "discord", "reddit", "players", "confidence", "why",
+                 "how", "what", "when", "based", "recommended", "optimal", "primary", "secondary", "weapon", "head",
+                 "torso", "chest", "legs", "off", "hand", "summary", "source", "sources", "follow", "up",
+                 # sentence and heading openers ("Key Spells", "Consider Titan Crucible", "Each Coward's")
+                 "key", "core", "total", "consider", "each", "other", "main", "best", "top", "your", "our", "this",
+                 "these", "those", "use", "using", "add", "keep", "roll", "pick", "choose", "goal", "spells", "skills",
+                 "stats", "stat", "priorities", "priority", "rules", "optimization", "bonus", "bonuses", "damage"}
+
+
+def _invented_names(draft: str, evidence: str, known: set) -> list:
+    """Names in `draft` that no tool result in `evidence` holds and the codex does not know - what the model made
+    up. A name counts as known when it, or the start of it (two words at least), is in either."""
+    norm = lambda x: " ".join(x.replace("’", "'").lower().split())
+    ev = norm(evidence)
+    out = []
+    # headings ("# ...", a line that is all bold) are titles, not item names
+    body = "\n".join(ln for ln in draft.splitlines()
+                     if not ln.lstrip().startswith("#") and not re.fullmatch(r"\s*\*\*[^*]+\*\*:?\s*", ln))
+    for m in _ITEM_NAME_RE.finditer(body):
+        words = m.group(0).split()
+        while words and words[-1].lower() in _NAME_GENERIC:
+            words.pop()
+        while words and words[0].lower() in _NAME_GENERIC:
+            words.pop(0)
+        if len(words) < 2:
+            continue
+        # any run of 2+ words may be the real name: "Titan Crucibles" (plural), "Spam Summon Dead" (a verb first)
+        bare = [re.sub(r"['’]s$", "", w) for w in words]        # "Beowulf Auriga's" is Beowulf Auriga
+        spans = {" ".join(ws[a:b]) for ws in (words, bare) for a in range(len(ws)) for b in range(a + 2, len(ws) + 1)}
+        ok = (any(f in known or f in ev for sp in spans for f in (norm(sp), norm(sp).rstrip("s")))
+              # one word that is itself a codex name ("Increases Gorynych": a verb before the pet's name)
+              or any(len(w) >= 5 and norm(w) in known for w in bare))
+        name = " ".join(words)
+        if not ok and name not in out:
+            out.append(name)
+    return out
+
+
+# A build table's slot words -> the codex places an item there may have (a one-handed weapon can sit in the off-hand)
+_SLOT_PLACES = {"head": {"head"}, "helmet": {"head"}, "weapon": {"weapon"}, "off-hand": {"off-hand", "weapon"},
+                "offhand": {"off-hand", "weapon"}, "torso": {"torso"}, "chest": {"torso"},
+                "legs": {"legs"}, "accessory": {"accessory"}}
+# not "armor": in Orna that is head, torso AND legs (the Heretic guide's "Armor Adornments:" line, 2026-11-05)
+_SLOT_RE = re.compile(r"^[\s|*•-]*(head|helmet|weapon|off-?hand|torso|chest|legs|accessory)\b", re.I)
+
+
+def _slot_mismatches(draft: str, items: dict) -> list:
+    """"<item> is a <what>, not a <slot> item" for each build-table line whose slot word and codex item disagree.
+    2026-11-05: "Off-hand: Soul of Achlys" - an adornment in a gear slot. `items`: name.lower() -> (place, type)."""
+    out = []
+    for line in draft.splitlines():
+        m = _SLOT_RE.match(line)
+        if not m:
+            continue
+        slot = m.group(1).lower().replace("offhand", "off-hand")
+        for c in _ITEM_NAME_RE.finditer(line[m.end():]):
+            name = c.group(0).replace("’", "'")
+            place, kind = items.get(name.lower()) or items.get(_item_key(name)) or (None, None)
+            if place is None:
+                break   # the slot's item is the line's FIRST name; one we do not know is not checked (nor what follows)
+            if kind == "adornment" or (place not in _SLOT_PLACES.get(slot, {place})):
+                an = lambda w: ("an " if w[:1] in "aeiou" else "a ") + w
+                what = "an adornment" if kind == "adornment" else an(f"{place} item")
+                out.append(f"{name} is {what}, not {an(slot)} item")
+            break       # the slot's first codex item is the one the line recommends
+    return out
+
+
+def _item_key(name: str) -> str:
+    """Word order and plural free: "Achlys Souls" and "Soul of Achlys" are one item (guides write both)."""
+    words = re.findall(r"[a-z]+", name.lower().replace("’", "'").replace("'s", ""))
+    return " ".join(sorted(w.rstrip("s") for w in words if w not in ("of", "the")))
+
+
+def _item_places() -> dict:
+    from orna.orna_aussies import _codex, display_name
+    out = {}
+    for i, r in _codex()["main"]["items"].items():
+        name = display_name("items", i)
+        if name:
+            out.setdefault(name.lower(), (r.get("place"), r.get("item_type")))
+            out.setdefault(_item_key(name), (r.get("place"), r.get("item_type")))
+    return out
+
+
+def _invented_names_note(session, draft: str) -> Optional[str]:
+    """Send a finish back ONCE when it names things no tool returned and the codex lacks. 2026-11-05: a Beowulf
+    Auriga PvP build listed "Ring of the Gods", "Pendant of Warding", "Defender's Talisman" ("exact accessory names
+    are illustrative") - none exists; nothing checked a name before it went out."""
+    if getattr(session, "pushed_for_names", 0) >= 2:     # twice: a fixed draft can bring a new wrong name or slot
+        return None
+    evidence = "\n".join(str(m.get("content") or "") for m in session.messages if m.get("role") == "user")
+    try:
+        known = set(_name_index_lower())
+    except Exception:
+        return None
+    bad = _invented_names(draft, evidence, known)
+    try:
+        slots = _slot_mismatches(draft, _item_places())
+    except Exception:
+        slots = []
+    if not bad and not slots:
+        return None
+    session.pushed_for_names = getattr(session, "pushed_for_names", 0) + 1
+    parts = []
+    if bad:
+        parts.append("Your draft names " + ", ".join(repr(b) for b in bad[:8]) + ", which no tool result contains and "
+                     "the codex does not know. Do not invent names, and never use \"e.g.\" names as placeholders. "
+                     "Look each one up (search_codex or query) and keep it only if it exists and has the stat you "
+                     "claim; otherwise remove it, or name the stat to look for instead.")
+    if slots:
+        parts.append("Wrong slot (codex): " + "; ".join(slots[:6]) + ". Put each item in the slot the codex gives it; "
+                     "an adornment goes INTO a weapon or armor piece, it is not a slot of its own.")
+    return " ".join(parts) + " Then finish again."
+
+
+def _name_index_lower() -> set:
+    from orna.orna_aussies import _name_index
+    idx = _name_index()
+    return set(idx) | {n.split(",")[0] for n in idx} | {n.split(" / ")[0] for n in idx}
 
 
 def _forced_evidence_note(session) -> Optional[str]:
@@ -4817,6 +4975,7 @@ class OrnaSession:
     # call at all has been sent back once already. See _forced_evidence_note.
     pushed_for_evidence: bool = False
     pushed_for_assess: bool = False
+    pushed_for_names: int = 0     # how often _invented_names_note sent a draft back (at most 2)
     # Set by a tool that POSTED its own deliverable to the chat (the monuments
     # chart). REVIEW is told, or it demands the list the user already has -
     # live 2026-10-05 that made the model paste the raw observation as its answer.
@@ -5536,7 +5695,8 @@ async def _advance_inner(sid: str, message) -> None:
                                 if session.posted_note else ""))})
                 continue
 
-            evidence_note = _forced_evidence_note(session) or _quality_needs_assess(session)
+            evidence_note = (_forced_evidence_note(session) or _quality_needs_assess(session)
+                             or _invented_names_note(session, action_input))
             if evidence_note:
                 logger.info("orna: forcing evidence for aggregation ask sid=%s", sid)
                 session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
@@ -6726,6 +6886,28 @@ def _demo() -> None:
     assert _parse_confidence({"confidence": "not a number"}) is None
     assert _parse_confidence({}) is None
     assert _parse_confidence({"confidence": 140}) == 100 and _parse_confidence({"confidence": -5}) == 0
+
+    # _invented_names: the made-up accessories of 2026-11-05 are caught; real codex items, names from the evidence
+    # and a heading's generic words are not
+    known = {"band of gods", "fey gerd's headdress", "beowulf auriga"}
+    draft = ("**Beowulf Auriga PVP Build with Yggdrasil Seedhusk Pet**\n| Head | Fey Gerd’s Headdress |\n"
+             "| Accessory 1 | e.g., Ring of the Gods, Band of Gods |\n| Accessory 2 | Pendant of Warding, Defender’s Talisman |")
+    assert _invented_names("Spam Summon Dead every turn", "", {"summon dead"}) == []
+    assert _invented_names("Assumes PvE. Increases Gorynych’s act. Beowulf Auriga's pet.", "",
+                           {"gorynych", "beowulf auriga"}) == []
+    assert _invented_names(draft, "Yggdrasil Seedhusk [followers]", known) == [
+        "Ring of the Gods", "Pendant of Warding", "Defender’s Talisman"], _invented_names(draft, "Yggdrasil Seedhusk", known)
+
+    assert _item_key("Achlys Souls") == _item_key("Soul of Achlys") == "achly soul"
+    places = {"soul of achlys": ("weapon", "adornment"), _item_key("Soul of Achlys"): ("weapon", "adornment"),
+              "celestial axe": ("weapon", "weapon"),
+              "carl's ring": ("accessory", "armor"), "arisen askr helmet": ("head", "armor")}
+    table = ("| Weapon | Celestial Axe |\n| Off-hand | Soul of Achlys |\n• **Head** — Item: Carl’s Ring\n"
+             "| Off-hand | Celestial Axe |\n| Accessory 1 | Carl's Ring |\n| Accessory 2 | Achlys Souls |\n"
+             "| Weapon | Celestial Lute (adorned with Soul of Achlys) |")
+    assert _slot_mismatches(table, places) == ["Soul of Achlys is an adornment, not an off-hand item",
+                                               "Carl's Ring is an accessory item, not a head item",
+                                               "Achlys Souls is an adornment, not an accessory item"], _slot_mismatches(table, places)
 
     class _S:
         def __init__(self, calls, request="", pushed=False):

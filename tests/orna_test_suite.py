@@ -346,6 +346,11 @@ def _check_research_supergraph() -> None:
 # (question, any-of: strings only the answering passage contains). Measured
 # 2026-10-06 when Pinecone replaced grep: 11/12 (grep 8/12). The known miss is
 # "pet keeps dying" (scores too flat to clear the floor) - hence the pass mark.
+# any one of the Seedhusk-in-PvP facts (threads_knowledge.txt, 12 lines over 2 threads) answers a Seedhusk PvP question
+_SEEDHUSK_PVP = ["stall for dozens", "PvP patch (2026-07-28)", "Seedhusk after the PvP nerf", "Jord + Seedhusk",
+                 "can negate Seedhusk in PvP", "PvP AL-gap testing", "Proposed Seedhusk/SoU PvP fixes",
+                 "Seedhusk's Deific Channel can no longer", "Seedhusk in PvP (2026-07-27)", "(PvP: 5% each)",
+                 "dominated PvP", "PvE bond stats in PvP"]
 _RETRIEVAL_CASES = [
     ("ward capacity formula", ["Ward Capacity: The Base Formula"]),
     ("dual wield bonus formula", ["(1 + 0.65 * B)^2"]),
@@ -360,6 +365,10 @@ _RETRIEVAL_CASES = [
     ("does gear quality matter more than its level", ["=== Item quality", "Does gear quality really matter"]),
     ("how much stronger does a weapon get when I upgrade it", ["=== Upgrading and forging"]),
     ("how do I finish the Samson goblin lord quest", ["Goblin Fortress"]),
+    # two topics in one question (2026-11-05): the vector list held one topic's chunks, not the facts on both
+    ("Seedhusk PvP", _SEEDHUSK_PVP),
+    ("Beowulf Auriga PVP Seedhusk build", _SEEDHUSK_PVP),
+    ("do crucible bonuses work in pvp", ["do not work in PvP", "don't apply in PvP"]),
 ]
 _RETRIEVAL_PASS = len(_RETRIEVAL_CASES) - 2
 _RETRIEVAL_MEDIAN_MAX = 12000   # _RANKED_MAX is 10000 since 2026-11-03 (median 10.3k)
@@ -798,7 +807,8 @@ def build_cases() -> list:
              "optimal bonuces from crucibles for items from Heretic's element weakness build. I'm planing to use "
              "Gorynych pet for elemental weakness debufs",
              Expect(tools_all=["research", "build_check"], final_any_of=[["limit break"], ["titan"]],
-                    final_none_of=["accessor"])),
+                    # a crucible pick FOR an accessory slot; "accessories take no crucible" is right
+                    final_none_of=["accessory 1", "accessory 2", "accessories:", "accessory:", "accessory slot:"])),
         # build_check's CONTEXT / STACKING / CAPS points (spec 2026-11-04-orna-build-reasoning): the fact that decides
         # each is in the mechanics corpus - crucible bonuses do nothing in PvP, weakness exploit applies to blight
         # and sigil both, a raid caps damage.
@@ -810,6 +820,12 @@ def build_cases() -> list:
              Expect(tools_any=["build_check", "knowledge_search", "class_guide"], final_any_of=[[
                  "twice", "applies to both", "both the blight", "blight and the sigil", "blight and a sigil",
                  "sigil and a blight", "sigil and blight", "blight and sigil", "each count", "doubl", "two weakness"]])),
+        # 2026-11-05 live: invented accessories ("e.g., Ring of the Gods"), crit gear for a pet class
+        Case("auriga-pvp", 3, "what are the build strategies for Beowulf auriga with Yggdrasil Seedhusk pet for PVP? "
+             "Return a table with items and placement",
+             Expect(final_any_of=[["follower", "pet"]],
+                    final_none_of=["e.g.", "illustrative", "(example)", "Ring of the Gods", "Pendant of Warding",
+                                   "Defender's Talisman"])),
         Case("gsh-raid-cap", 3, "how can I raise my Grand Summoner Hydrus damage in raids?",
              Expect(tools_any=["build_check", "class_guide", "knowledge_search"], final_any_of=[["cap"]])),
         Case("heretic-build", 3, "give me build advice for the heretic omniflask raid build",

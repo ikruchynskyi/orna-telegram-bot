@@ -109,6 +109,56 @@ def search(query: str, limit: int = 20) -> list:
     return [{"_id": i, "ns": ns, "title": t, "url": u, "text": x, "rank": r} for i, ns, t, u, x, r in rows]
 
 
+GENERIC_SHARE = 0.10   # a word in more than this share of chunks ("build", "gear") names no topic
+RARE_SHARE = 0.02      # a NAME-like word (Seedhusk, Auriga, Gorynych): every pair must hold one, else no pass
+COVER_POOL = 200
+
+
+def covering(query: str, limit: int = 4) -> list:
+    """Chunks that name SEVERAL of the query's topic words, most words first, then BM25: the pieces a query about
+    two things is really after ("Seedhusk PvP" -> the PvP lines among 59 Seedhusk chunks). 2026-11-05: the vector
+    search returned the "Seedhusk in PVE" chunks, their title alone close enough, and 1 of 12 PvP facts."""
+    words = [w for w in dict.fromkeys(_WORD_RE.findall(query.lower())) if len(w) > 2 and w not in _STOP]
+    if len(words) < 2:
+        return []
+    _ensure()
+    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
+        total = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
+        df = {w: con.execute("SELECT count(*) FROM chunks WHERE chunks MATCH ?", (f'"{w}"',)).fetchone()[0]
+              for w in words}
+        topic = [w for w in words if 0 < df[w] <= GENERIC_SHARE * total]
+        if len(topic) < 2:
+            return []
+        rows = con.execute("SELECT id, ns, title, url, text, bm25(chunks, 1.0, 1.0) AS r FROM chunks WHERE chunks "
+                           "MATCH ? ORDER BY r LIMIT ?", (" OR ".join(f'"{w}"' for w in topic), COVER_POOL)).fetchall()
+    finally:
+        con.close()
+    import itertools
+    import math
+    idf = {w: math.log(total / df[w]) for w in topic}
+    lines = {row[0]: [ln for ln in row[4].lower().splitlines() if ln.strip()] for row in rows}
+    has = lambda ln, w: re.search(rf"\b{re.escape(w)}", ln) is not None
+    # every PAIR of topic words gets its own turn: a fact rarely names more than two of them, and with one shared
+    # ranking the rarest pair took every slot (seedhusk+beowulf), never seedhusk+pvp. Rarest pairs first.
+    rare = {w for w in topic if df[w] <= RARE_SHARE * total}
+    pairs = sorted((p for p in itertools.combinations(topic, 2) if rare & set(p)), key=lambda p: -(idf[p[0]] + idf[p[1]]))
+    if not pairs:
+        return []
+    queues = [[(i, ns, t, u, x, r) for i, ns, t, u, x, r in rows if any(has(ln, a) and has(ln, b) for ln in lines[i])]
+              for a, b in pairs]
+    out, seen = [], set()
+    while len(out) < limit and any(queues):
+        for q in queues:
+            while q and q[0][0] in seen:
+                q.pop(0)
+            if q and len(out) < limit:
+                i, ns, t, u, x, r = q.pop(0)
+                seen.add(i)
+                out.append({"_id": i, "ns": ns, "title": t, "url": u, "text": x, "rank": r})
+    return out
+
+
 def _demo() -> None:
     assert match_query("How do I keep my pet alive?") == '"keep" OR "pet" OR "alive"'
     assert match_query('ward AND "capacity" -x') == '"ward" OR "capacity"'
@@ -116,6 +166,10 @@ def _demo() -> None:
     hits = search("pet keeps dying keep it alive")
     assert hits and any("Follower" in h["text"] or "pet" in h["text"].lower() for h in hits[:5]), hits[:2]
     assert search("xyzzy plugh frobnicate") == []
+    cov = covering("Beowulf Auriga PVP Seedhusk build")
+    assert cov and any("pvp" in ln.lower() and "seedhusk" in ln.lower() for h in cov for ln in h["text"].splitlines()), cov[:1]
+    assert covering("best build gear") == [] and covering("seedhusk") == []
+    assert covering("how long until I can run a dungeon again") == []          # no name-like word: no pass
     print("orna_textindex: _demo ok")
 
 
