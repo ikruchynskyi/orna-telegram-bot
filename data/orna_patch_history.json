@@ -1,5 +1,55 @@
 [
  {
+  "version": "1.344.0",
+  "title": "Server version 1.344",
+  "url": "https://playorna.com/releases/1.344.0/",
+  "date": "2026-11-06",
+  "kind": "Server update",
+  "items": [
+   "Changes: Hunting Sites of your tier are now more likely to be found",
+   "Changes: (Hero of Aethric) Fixed an issue spawning the Tier 3 Utgard Hunting Site"
+  ]
+ },
+ {
+  "version": "1.343.0",
+  "title": "Server version 1.343",
+  "url": "https://playorna.com/releases/1.343.0/",
+  "date": "2026-11-04",
+  "kind": "Server update",
+  "items": [
+   "Changes: (Orna) Fixed an issue where using each Waxlight would reset Hunting Site locations",
+   "Changes: (Hero of Aethric) Fixed an issue where stacking Waxlights resulted in more Hunting Sites than expected",
+   "Changes: (Hero of Aethric) Fixed an issue where Hunting Sites at lesser tiers were not spawning"
+  ]
+ },
+ {
+  "version": "1.342.0",
+  "title": "Server version 1.342",
+  "url": "https://playorna.com/releases/1.342.0/",
+  "date": "2026-11-03",
+  "kind": "Server update",
+  "items": [
+   "Changes: Due to popular demand, the Titan Crucible has been returned to Titan Mnemosyne's drop pool",
+   "Changes: Reduced the cost of the Titan Crucible in the Event Hub crafting section"
+  ]
+ },
+ {
+  "version": "1.341.0",
+  "title": "Server version 1.341",
+  "url": "https://playorna.com/releases/1.341.0/",
+  "date": "2026-11-03",
+  "kind": "Server update",
+  "items": [
+   "Changes: The Giants & Titans monsters can now be found in the world too",
+   "Changes: Hunting Site visibility is no longer bound to player view distance",
+   "Changes: Decreased the rarity of the Celestial Moondrop",
+   "Changes: Added a Tower Shard bonus to each of Hyperion's weapons",
+   "Changes: Added an additional Hunting Sites bonus to each of the Waxlights",
+   "Changes: Improved the tiering of Hunting Sites, improving the number of Hunting Sites available to lower tiers",
+   "Changes: Added the Titan Crucible to the Event Hub crafting section"
+  ]
+ },
+ {
   "version": "3.27.4",
   "title": "App update v3.27.4",
   "url": "https://playorna.com/releases/3.27.4/",
