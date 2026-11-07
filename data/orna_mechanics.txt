@@ -162,6 +162,11 @@ independently, and it agrees with the guild's 0.65, not with that document's
 MULTIPLY - (1 + 0.65*B)^2 against (1 + B) for one weapon. Worked example from
 that page: one godforged Questing Staff gives +57.5% orns; two dual-wielded give
 1.37375^2 = +88.7%, so dual-wielding bonus weapons always beats wielding one.
+Two weapon effects are NOT cut by dual wielding. View Distance counts in full on
+both weapons (r/OrnaRPG). Elemental Weaknesses counts in full and ADDS: measured
+by a guild member 2026-11-07 (Heretic Ara, Omniflask, no debuff, 3 hits each), a
+second Beheaded Scholar's Chargeblade (+50%) raised damage x1.325. Full +50%
+added predicts x1.31; the 0.65 cut predicts x1.09; multiplying per item x1.5.
 
 === Character stat calculation (Rubenir's stat calculator v0.7) ===
 How a character's displayed stats are built, read from the FORMULAS of Rubenir's

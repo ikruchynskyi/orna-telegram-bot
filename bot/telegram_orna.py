@@ -48,6 +48,7 @@ import difflib
 import hashlib
 import html
 import io
+import itertools
 import json
 import logging
 import os
@@ -151,7 +152,7 @@ ORNA_CLOUD_MODEL = os.environ.get("ORNA_CLOUD_MODEL", GO_MODEL)
 # The loop's action names, in ONE place - both the system prompt's action
 # enum and the `tools` array below are built from this.
 _ACTIONS = ("today", "next", "need", "search_codex", "query", "sql", "events", "open_entry", "research", "build_check",
-            "calculate", "assess", "compare", "build_optimize", "estimate_stats", "towers", "class_guide",
+            "calculate", "assess", "compare", "build_optimize", "estimate_stats", "build_effects", "towers", "class_guide",
             "knowledge_search", "monuments", "releases", "web_search", "community_search", "ask", "finish",
             "parallel")
 # What "parallel" may run together: read-only lookups, plus assess (one card per item, order irrelevant -
@@ -3178,6 +3179,216 @@ def _reassign_class_pools(spec: str, klass: str) -> tuple:
     return spec, klass
 
 
+# Class/spec bonusStats and item stats spell a few effects differently.
+_EFFECT_ALIASES = {"elemental_weakness": "elemental_weaknesses",
+                   "settlement_area_defence": "settlement_area_defense"}
+# Combat stats belong to estimate_stats; view_distance is both, so it stays here.
+# Dual wield does NOT reduce these: view distance (r/OrnaRPG), elemental weaknesses (measured
+# 2026-11-07, Heretic Ara Omniflask, no debuff: 2nd Chargeblade x1.325; full +50% predicts
+# x1.309, x0.65 predicts x1.093, per-source multiplying x1.5 - so it ADDS at full value).
+_DUAL_WIELD_FULL = {"view_distance", "elemental_weaknesses"}
+_NOT_EFFECTS = (set(_ESTIMATE_STATS) - {"view_distance"}) | {"adornment_slots"}
+
+
+def _effect_key(key: str) -> str:
+    k = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+    return _EFFECT_ALIASES.get(k, k)
+
+
+def _accumulate_effects(sources: list) -> dict:
+    """sources: [(label, {effect: value})] -> {effect: {"total", "parts", "mult"}}.
+    World bonuses (QUALITY_CODE_BONUS_KEYS) MULTIPLY across slots, as in
+    build_optimize; every other effect is summed. Insertion order is kept."""
+    mult_keys = {_effect_key(k) for k in QUALITY_CODE_BONUS_KEYS}
+    out: dict = {}
+    for label, effects in sources:
+        for raw, value in effects.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not value:
+                continue
+            row = out.setdefault(_effect_key(raw), {"parts": [], "mult": _effect_key(raw) in mult_keys})
+            row["parts"].append((label, value))
+    for row in out.values():
+        if row["mult"]:
+            m = 1.0
+            for _, v in row["parts"]:
+                m *= 1 + v / 100
+            row["total"] = round((m - 1) * 100, 2)
+        else:
+            row["total"] = round(sum(v for _, v in row["parts"]), 2)
+    return out
+
+
+async def _run_build_effects_tool(message, args: dict) -> str:
+    """Accumulate the EFFECTS (bonusStats: elemental weaknesses, flask power,
+    crit damage, ...) of a build: tier-10 class + specialization + items. The
+    combat stats are estimate_stats' job; this needs no Ascension Level.
+    Items count at their quality (get_quality_bonus); dual-wielded weapons at
+    _DUAL_WIELD_FACTOR, except _DUAL_WIELD_FULL."""
+    items = args.get("items") or []
+    if isinstance(items, (str, dict)):
+        items = [items]
+    if not isinstance(items, (list, tuple)):
+        items = []
+    spec = str(args.get("class") or "").strip()
+    klass = str(args.get("specialization") or "").strip()
+    spec, klass = _reassign_class_pools(spec, klass)
+    spec = "" if spec.lower() in _NO_VALUE_WORDS else spec
+    klass = "" if klass.lower() in _NO_VALUE_WORDS else klass
+    # Pools are inverted (see _reassign_class_pools): "specialization" = tier-10 class.
+    spec_entry = orna_classes.find_class(spec, kind="specialization") if spec else None
+    class_entry = orna_classes.find_class(klass, kind="class") if klass else None
+
+    need = []
+    if spec and spec_entry is None:
+        need.append(f"class: {spec!r} is not a tier-10 class - use one of {_class_names_text('specialization')}")
+    if klass and class_entry is None:
+        need.append(f"specialization: {klass!r} is not a specialization - use one of {_class_names_text('class')}")
+    if not (spec or klass or items):
+        need.append("a tier-10 class, a specialization and/or items - at least one")
+    if need:
+        return (_NEEDS_INPUT + " build_effects did NOT run, and showed the user NOTHING:\n- " + "\n- ".join(need)
+                + "\nDo NOT guess. Fix the names, or call ask() ONCE for exactly these.")
+
+    worn, skipped = await _worn_items(list(items), 12)
+    conflicts, dual_wield = _check_loadout(worn)
+    if conflicts:
+        return ("build_effects did NOT run and showed the user NOTHING - that loadout cannot be worn:\n"
+                + "\n".join(f"- {c}" for c in conflicts) + "\nPick a legal loadout and call build_effects again.")
+
+    sources = []
+    for entry in (spec_entry, class_entry):
+        if entry:
+            sources.append((_class_display(entry["name"]), entry.get("bonus_stats") or {}))
+    for item in worn:
+        e = item["entry"]
+        code = get_quality_code(item["q"], item["level"])
+        dual = dual_wield and item["place"] == "weapon"
+        effects = {}
+        for key, base in (e.stats or {}).items():
+            if key in _NOT_EFFECTS or not isinstance(base, (int, float)) or isinstance(base, bool):
+                continue
+            v = get_quality_bonus(base, item["q"], code, e.is_adornment, key)
+            effects[key] = round(v * (_DUAL_WIELD_FACTOR if dual and key not in _DUAL_WIELD_FULL else 1), 2)
+        sources.append((item["name"], effects))
+    rows = _accumulate_effects(sources)
+    if not rows:
+        return ("build_effects found NO effects, so the user was shown NOTHING"
+                + (f" (not counted: {'; '.join(skipped)})" if skipped else "")
+                + ". Check the names with search_codex.")
+
+    # Effects with several sources first - the stacking is what the user asked about.
+    order = sorted(rows, key=lambda k: (-len(rows[k]["parts"]), -abs(rows[k]["total"])))
+
+    def _line(k: str) -> str:
+        r = rows[k]
+        groups = [(lbl, v, len(list(g))) for (lbl, v), g in itertools.groupby(r["parts"])]
+        parts = ", ".join(f"{html.escape(lbl)} {v:+g}" + (f" ×{n}" if n > 1 else "") for lbl, v, n in groups)
+        how = " (множення)" if r["mult"] and len(r["parts"]) > 1 else ""
+        return f"• <b>{html.escape(k.replace('_', ' ').title())}: {r['total']:+g}</b>{how}" + (
+            f" — {parts}" if len(groups) > 1 or groups[0][2] > 1 else f" — {html.escape(groups[0][0])}")
+
+    who = [_class_display(e["name"]) for e in (spec_entry, class_entry) if e]
+    head = ["🧾 <b>Ефекти білду</b>" + (f" · {html.escape(' · '.join(who))}" if who else "")]
+    if worn:
+        head.append(html.escape(", ".join(f"{i['name']} {i['q']}% lv{i['level']}" for i in worn)))
+    head += ["", "\n".join(_line(k) for k in order),
+             "", "<i>значення як у кодексі (здебільшого %); сума — додаванням, світові бонуси — множенням</i>"]
+    if dual_wield:
+        head.append(f"<i>дві одноручні зброї: їхні ефекти ×{_DUAL_WIELD_FACTOR} "
+                    "(крім view distance і elemental weaknesses — вони повні)</i>")
+    passives = [str(x) for e in (spec_entry, class_entry) if e for x in (e.get("passives") or [])]
+    if passives:
+        head += ["", "<b>Пасивки</b> (умовні, не додані): " + html.escape("; ".join(passives))]
+    if skipped:
+        head += ["", "⚠️ не враховано: " + html.escape("; ".join(skipped))]
+    await send_report_blocks(message, ["\n".join(head)])   # chunks a long table
+
+    obs = "; ".join(f"{k}={rows[k]['total']:g} [" + ", ".join(f"{l} {v:g}" for l, v in rows[k]["parts"]) + "]"
+                    for k in order)
+    return (f"posted build effects table ({len(sources)} source(s), {len(rows)} effect(s)). Totals: {obs}."
+            + (" Dual wield: weapon effects counted x0.65, except view distance and elemental weaknesses (full)."
+               if dual_wield else "")
+            + (f" Conditional passives NOT added: {'; '.join(passives)}." if passives else "")
+            + (f" NOT counted: {'; '.join(skipped)} - say so." if skipped else ""))
+
+
+async def _worn_items(items: list, max_items: int) -> tuple:
+    """Resolve a loadout's item args (name, quality, level - each may be written
+    into the name) to {name, place, two_handed, celestial, got, q, level, entry}.
+    `got` is the projected combat stats at that quality/level. Shared by
+    estimate_stats and build_effects. Returns (worn, skipped notes)."""
+    skipped: list = []
+    if len(items) > max_items:
+        skipped.append(f"передано {len(items)} предметів — враховано перші {max_items}")
+    worn: list = []
+    for raw in items[:max_items]:
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or raw.get("item") or "").strip()
+            quality = str(raw.get("quality") or "").strip()
+            level_raw = next((raw[k] for k in ("level", "upgrade_level", "lvl")
+                              if raw.get(k) is not None and str(raw[k]).strip() != ""), None)
+        else:
+            name, quality, level_raw = str(raw).strip(), "", None
+        if not name:
+            continue
+        # Quality and LEVEL are two independent axes and both default here:
+        # quality to 100% and level to 1 (per the game's own 13 levels - 1-10
+        # plus masterforged/demonforged/godforged, which ARE levels 11/12/13).
+        # The old default was 200%/level 13, a fully forged item, so anything
+        # the user didn't spell out came back silently inflated.
+        # Either may also be written into the NAME itself, which is how people
+        # actually type a loadout ("Godforged Fallen Sky Shoes 195%") - read
+        # them out rather than making the model split the phrase, which it
+        # answered by asking the user for both all over again.
+        name, phrase_q, phrase_level = _split_item_phrase(name)
+        parsed = _parse_quality_spec(quality) if quality else None
+        if quality and parsed is None:
+            skipped.append(f"{name}: якість {quality[:15]!r} не розібрано — рахую 100%")
+        if parsed is not None:
+            q, spec_level = parsed
+            # _parse_quality_spec always returns a level, defaulting to 1, so
+            # only a level it really found beats one written in the name.
+            level = spec_level if spec_level != 1 else (phrase_level or 1)
+        else:
+            q = phrase_q if phrase_q is not None else 100
+            level = phrase_level or 1
+        if level_raw is not None:
+            try:
+                level = min(max(int(float(str(level_raw).strip())), 1), 20)
+            except (TypeError, ValueError):
+                skipped.append(f"{name}: рівень {str(level_raw)[:10]!r} не розібрано — рахую {level}")
+        entry, err = await _resolve_aussies_entry(name)
+        if entry is None:
+            skipped.append(f"{name} ({err})")
+            continue
+        inp = AssessInput(entry=entry, level=level if entry.is_upgradable else 1,
+                          boss_scaling=entry.boss_scaling, quality=q, stats={})
+        result = get_assess_result(inp, is_quality_calc=True)
+        # AssessResult.stats is {stat: StatRow}, and StatRow.values holds one
+        # projected value PER upgrade level. Take the requested level (or the
+        # top one), NOT entry.stats - those are the item's unupgraded base,
+        # which is what a first version silently summed: a godforged Lost
+        # Helmet came out at its base 172 defense instead of 472.
+        got = {}
+        for stat, row in ((result.stats if result is not None else None) or {}).items():
+            values = getattr(row, "values", None) or []
+            if not values:
+                continue
+            idx = min(max(level, 1), len(values)) - 1
+            if isinstance(values[idx], (int, float)):
+                got[stat] = values[idx]
+        if not got:
+            # A non-scaling item (material, flat accessory) has no projection -
+            # fall back to its raw stats rather than contributing nothing.
+            got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
+        worn.append({"name": entry.name, "place": entry.place, "two_handed": entry.is_two_handed,
+                     "celestial": entry.is_celestial_weapon,
+                     "got": {k: v for k, v in got.items()
+                             if k in _ESTIMATE_STATS and isinstance(v, (int, float))},
+                     "q": q, "level": level, "entry": entry})
+    return worn, skipped
+
+
 async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] = None) -> str:
     """Estimate a character's stats. BASE stats (from the specialization + AL,
     optionally the class's modifiers) and ITEM stats (from worn gear) are
@@ -3288,75 +3499,8 @@ async def _run_estimate_stats_tool(message, args: dict, sources: Optional[list] 
                 "Reminder: BASE stats need only class + specialization + AL; items and pvp are OPTIONAL (pvp "
                 "defaults to PVE). If you cannot ask (inline mode), say plainly which of these you still need.")
 
-    gear_raw, lines, skipped = {}, [], []
-    if len(items) > max_items:
-        skipped.append(f"передано {len(items)} предметів — враховано перші {max_items}")
-    worn: list = []
-    for raw in items[:max_items]:
-        if isinstance(raw, dict):
-            name = str(raw.get("name") or raw.get("item") or "").strip()
-            quality = str(raw.get("quality") or "").strip()
-            level_raw = next((raw[k] for k in ("level", "upgrade_level", "lvl")
-                              if raw.get(k) is not None and str(raw[k]).strip() != ""), None)
-        else:
-            name, quality, level_raw = str(raw).strip(), "", None
-        if not name:
-            continue
-        # Quality and LEVEL are two independent axes and both default here:
-        # quality to 100% and level to 1 (per the game's own 13 levels - 1-10
-        # plus masterforged/demonforged/godforged, which ARE levels 11/12/13).
-        # The old default was 200%/level 13, a fully forged item, so anything
-        # the user didn't spell out came back silently inflated.
-        # Either may also be written into the NAME itself, which is how people
-        # actually type a loadout ("Godforged Fallen Sky Shoes 195%") - read
-        # them out rather than making the model split the phrase, which it
-        # answered by asking the user for both all over again.
-        name, phrase_q, phrase_level = _split_item_phrase(name)
-        parsed = _parse_quality_spec(quality) if quality else None
-        if quality and parsed is None:
-            skipped.append(f"{name}: якість {quality[:15]!r} не розібрано — рахую 100%")
-        if parsed is not None:
-            q, spec_level = parsed
-            # _parse_quality_spec always returns a level, defaulting to 1, so
-            # only a level it really found beats one written in the name.
-            level = spec_level if spec_level != 1 else (phrase_level or 1)
-        else:
-            q = phrase_q if phrase_q is not None else 100
-            level = phrase_level or 1
-        if level_raw is not None:
-            try:
-                level = min(max(int(float(str(level_raw).strip())), 1), 20)
-            except (TypeError, ValueError):
-                skipped.append(f"{name}: рівень {str(level_raw)[:10]!r} не розібрано — рахую {level}")
-        entry, err = await _resolve_aussies_entry(name)
-        if entry is None:
-            skipped.append(f"{name} ({err})")
-            continue
-        inp = AssessInput(entry=entry, level=level if entry.is_upgradable else 1,
-                          boss_scaling=entry.boss_scaling, quality=q, stats={})
-        result = get_assess_result(inp, is_quality_calc=True)
-        # AssessResult.stats is {stat: StatRow}, and StatRow.values holds one
-        # projected value PER upgrade level. Take the requested level (or the
-        # top one), NOT entry.stats - those are the item's unupgraded base,
-        # which is what a first version silently summed: a godforged Lost
-        # Helmet came out at its base 172 defense instead of 472.
-        got = {}
-        for stat, row in ((result.stats if result is not None else None) or {}).items():
-            values = getattr(row, "values", None) or []
-            if not values:
-                continue
-            idx = min(max(level, 1), len(values)) - 1
-            if isinstance(values[idx], (int, float)):
-                got[stat] = values[idx]
-        if not got:
-            # A non-scaling item (material, flat accessory) has no projection -
-            # fall back to its raw stats rather than contributing nothing.
-            got = {k: v for k, v in (entry.stats or {}).items() if isinstance(v, (int, float))}
-        worn.append({"name": entry.name, "place": entry.place, "two_handed": entry.is_two_handed,
-                     "celestial": entry.is_celestial_weapon,
-                     "got": {k: v for k, v in got.items()
-                             if k in _ESTIMATE_STATS and isinstance(v, (int, float))},
-                     "q": q, "level": level})
+    gear_raw, lines = {}, []
+    worn, skipped = await _worn_items(items, max_items)
 
     # An impossible loadout must not be totalled up: a two-handed weapon with
     # an off-hand is not a character anyone can build, and a stat block for one
@@ -3726,6 +3870,12 @@ _TOOLS_TEXT = (
     "  Use only the class and specialization names in the two lists above. Do not translate or invent a name, "
     "and do not offer another name as an ask() option. \"Heretic Ara Sequencer\" is class \"Heretic Ara\" plus "
     "specialization \"Sequencer\" (see CLASS, SPECIALIZATION, CLASS LINE).\n"
+    "- build_effects(args={\"class\":\"<tier-10 class, same list as estimate_stats>\",\"specialization\":"
+    "\"<specialization, same list>\",\"items\":[<same form as estimate_stats>]}): Adds up the EFFECTS of a build "
+    "(elemental weaknesses, flask power, crit damage, world bonuses...) from the class, the specialization and "
+    "each item, at the item's quality. It shows each source and the total. It needs no AL. Use it for the effects "
+    "of a build; use estimate_stats for its combat stats. All three fields are optional. Pass only the names that "
+    "the user or a tool gave. Do not ask for a missing specialization. POSTS the table.\n"
     "- towers(): No input. Shows the current floor (15-50; 50 = at the top, waiting for the reset) of the 5 Wild "
     "Towers of Olympia (Selene, Eos, Oceanus, Themis, Prometheus). It uses the game's own formula. It is always "
     "available, and it is the authority for tower floors, cycles and reset times: a guide never overrides it. "
@@ -3904,10 +4054,11 @@ _OPTIMIZE_RULE = (
     "more damage), SOURCE & RELIABILITY (a bonus to a pet's chance-based debuff is worth less than one to a sure "
     "source), STACKING (what adds, what multiplies, what replaces), SIZE (compare ranges side by side; use "
     "calculate() for totals).\n"
-    "  6. A point the checklist marks UNKNOWN stays unknown in the answer. Mark estimates as estimates.\n"
-    "  7. Name only items that a tool returned. No \"e.g.\", \"example\" or \"illustrative\" item names: if no item "
+    "  6. When your build names a class and items, call build_effects with them before finish().\n"
+    "  7. A point the checklist marks UNKNOWN stays unknown in the answer. Mark estimates as estimates.\n"
+    "  8. Name only items that a tool returned. No \"e.g.\", \"example\" or \"illustrative\" item names: if no item "
     "for a slot is known, name the stat to look for, or leave the slot open.\n"
-    "  8. MODE MATCH: pick items that a source recommends for the mode asked (PvP, raid, tower, farming). An item "
+    "  9. MODE MATCH: pick items that a source recommends for the mode asked (PvP, raid, tower, farming). An item "
     "from a farming or raid build is not a PvP pick unless a source says it works in PvP. If no source gives a "
     "build for this class and mode, say so FIRST, then build only from items the sources tag for that mode."
 )
@@ -4305,12 +4456,33 @@ def _quality_needs_assess(session) -> Optional[str]:
     if getattr(session, "pushed_for_assess", False) or not _QUALITY_RE.search(session.original_request or ""):
         return None
     called = {json.loads(k)[0] for k in session.seen_calls}
-    if "assess" in called or "compare" in called or "build_optimize" in called or "estimate_stats" in called:
+    if called & {"assess", "compare", "build_optimize", "estimate_stats", "build_effects"}:
         return None
     session.pushed_for_assess = True
     return ("The user named an item QUALITY, and no assess call was made. A codex value is the UNSCALED base; "
             "at that quality it is different. Call assess for each named item at that quality (several items: "
             "one parallel step), then finish from its numbers.")
+
+
+# A build for a named tier-10 class: its effects are summed by build_effects, not by hand.
+# Measured 2026-11-06: "Heretic build ... what effects in total" skipped the tool in 1 of 2
+# runs and added the items by hand - without the class's 12% and the dual-wield 0.65.
+_BUILD_WORD_RE = re.compile(r"\b(build|loadout|effects?|білд\w*|ефект\w*)\b", re.I)
+
+
+def _build_needs_effects(session) -> Optional[str]:
+    """Sent back ONCE: a build question for a tier-10 class, and no build_effects call."""
+    req = session.original_request or ""
+    if getattr(session, "pushed_for_effects", False) or not _BUILD_WORD_RE.search(req):
+        return None
+    names = [n for n in orna_classes.all_names("specialization") if n != "None"] + ["Deity"]
+    if not re.search(r"\b(" + "|".join(map(re.escape, names)) + r")\b", req, re.I):
+        return None
+    if "build_effects" in {json.loads(k)[0] for k in session.seen_calls}:
+        return None
+    session.pushed_for_effects = True
+    return ("The user asked about a build for a class, and no build_effects call was made. Call build_effects "
+            "with the class, the specialization and the items of the build. Then finish from its totals.")
 
 
 # Tools whose posted output IS the whole answer to a "show me" question: the
@@ -5065,6 +5237,7 @@ class OrnaSession:
     # call at all has been sent back once already. See _forced_evidence_note.
     pushed_for_evidence: bool = False
     pushed_for_assess: bool = False
+    pushed_for_effects: bool = False
     pushed_for_names: int = 0     # how often _invented_names_note sent a draft back (at most 2)
     # Set by a tool that POSTED its own deliverable to the chat (the monuments
     # chart). REVIEW is told, or it demands the list the user already has -
@@ -5162,6 +5335,8 @@ async def _run_tool(message, action: str, action_input: str, args: dict, sources
                                       lambda m: _run_monuments_tool(m, action_input, args, sources, session=session))
         if action == "estimate_stats":
             return await _run_estimate_stats_tool(message, args, sources)
+        if action == "build_effects":
+            return await _run_build_effects_tool(message, args)
         if action == "releases":
             return await _run_releases_tool(message, action_input, sources)
         if action == "web_search":
@@ -5261,6 +5436,7 @@ _ACTION_LABELS = {
     "research": "🔗 Збираю дані з кодексу…",
     "build_check": "🧭 Перевіряю механіки білду…",
     "estimate_stats": "📊 Рахую характеристики…",
+    "build_effects": "🧾 Складаю ефекти білду…",
 }
 _THINKING_LABEL = "🤔 Думаю…"
 
@@ -5291,6 +5467,8 @@ def _status_detail(action: str, action_input: str, args: dict) -> str:
         return clip(", ".join(map(str, items)) if isinstance(items, list) else items)
     if action == "build_optimize":
         return clip(args.get("stat", ""))
+    if action == "build_effects":
+        return clip(" ".join(str(args.get(k)) for k in ("class", "specialization") if args.get(k)))
     if action == "estimate_stats":
         return clip(" ".join(str(args.get(k)) for k in ("specialization", "class", "ascension_level")
                              if args.get(k) not in (None, "")))
@@ -5786,7 +5964,7 @@ async def _advance_inner(sid: str, message) -> None:
                 continue
 
             evidence_note = (_forced_evidence_note(session) or _quality_needs_assess(session)
-                             or _invented_names_note(session, action_input))
+                             or _build_needs_effects(session) or _invented_names_note(session, action_input))
             if evidence_note:
                 logger.info("orna: forcing evidence for aggregation ask sid=%s", sid)
                 session.messages.append({"role": "assistant", "content": json.dumps(step, ensure_ascii=False)})
@@ -6967,6 +7145,27 @@ def _demo() -> None:
         "one celestial + one ordinary weapon is a legal dual wield"
     assert _check_loadout([cel("Celestial Archistaff")]) == ([], False)
     assert _DUAL_WIELD_FACTOR == 0.65
+
+    # build_effects: class and item spellings of one effect meet in one row;
+    # combat effects add, world bonuses multiply (as in build_optimize).
+    assert _effect_key("elemental_weakness") == _effect_key("elemental_weaknesses") == "elemental_weaknesses"
+    assert _effect_key("Two-Handed Power") == _effect_key("two_handed_power")
+    fx = _accumulate_effects([("Heretic", {"elemental_weakness": 12, "bloodflasks": 2}),
+                              ("Robes", {"elemental_weaknesses": 10.0, "orn_bonus": 10}),
+                              ("Staff", {"orn_bonus": 10, "crit_damage": 0})])
+    assert fx["elemental_weaknesses"]["total"] == 22 and len(fx["elemental_weaknesses"]["parts"]) == 2, fx
+    assert fx["orn_bonus"]["mult"] and fx["orn_bonus"]["total"] == 21, fx["orn_bonus"]
+    assert "crit_damage" not in fx and fx["bloodflasks"]["total"] == 2
+    _s = OrnaSession(messages=[], steps_left=1)
+    _s.original_request = "Heretic build with Yelmogus Robes - total effects?"
+    assert _build_needs_effects(_s) and _build_needs_effects(_s) is None   # once only
+    _s = OrnaSession(messages=[], steps_left=1)
+    _s.original_request = "Heretic build"
+    _s.seen_calls[json.dumps(["build_effects", "", {}])] = "posted"
+    assert _build_needs_effects(_s) is None
+    _s.original_request = "best orn build"      # no class named
+    _s.seen_calls.clear()
+    assert _build_needs_effects(_s) is None
 
     # Confidence gate: the model's number is clamped by what the loop verified,
     # so a confident answer built on nothing cannot present itself as one.
