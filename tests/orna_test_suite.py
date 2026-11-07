@@ -160,6 +160,63 @@ def _check_ocr_name_candidates() -> None:
     assert not ta._name_matches("We Eee ee", "Weeping Willow Staff")
 
 
+def _check_anguish_level() -> None:
+    """Anguished screenshots: the level comes from "Anguished N" OR from the red
+    block's numbers alone (the game's Ukrainian wording is unknown), and a normal
+    screenshot never gets an anguish table."""
+    from bot import telegram_assess as ta
+    # real OCR, Ornate Last Martyr's Sword 176% A20 (2026-11-07)
+    en = ("Ornate Last Martyr's Sword\nAnguished 20\nWeapon forged of the trials...\n"
+          "HP: 176 (+176) Att: 546 (+546) Mag: 0 (-819) Res: 0 (-299)\n"
+          "Ward: 15% (+15) Stat Bonus: +1%/Anguish Level\nHP: 236 Att: 732 Stat Bonus: +1%/Anguish Level\n"
+          "+Damage Limit Break: +66%\nThis item receives alternate stats when equipped in its\n")
+    normal = ta._extract_stats(ta._strip_anguish_alternate_block(en))
+    assert normal["attack"] == 546 and normal["hp"] == 176, normal
+    assert ta._anguish_level(en, normal, 176) == (20, {"attack": 732.0, "hp": 236.0})
+    # Ukrainian labels, an unknown word for "Anguished", no English sentence: numbers decide
+    uk = "Меч Мученика\nЗамучений 20\nОЗ: 176 (+176) Атк: 546 (+546)\nВард: 15%\nОЗ: 236 Атк: 732\n"
+    assert ta._anguish_level(uk, ta._extract_stats(uk), 176)[0] == 20
+    # Last Martyr's Legwraps 170% A20 (Gemini's worked example): small stats round fine
+    legs = "Def: 476 Res: 238 Att: 34 Mag: 34\nDef: 644 Res: 322 Att: 46 Mag: 46\n"
+    assert ta._anguish_level(legs, ta._extract_stats(legs), 170)[0] == 20
+    # real UK OCR (Haunted Dullahan boots, lv4, adorned): "Муки 8" wins over the
+    # adornment-skewed ratio; "PiBeHb 4" is the level; "97.5/195%" the quality
+    uk_real = ("Зловісні клинкові чоботи Дуллахана ЇОрнатне)\n97.5/195%\nPiBeHb 4\nМуки 8\n"
+               "Здоров'я: о (-89) Мана: 0 (-89) Атк:0 (-40) Маг: 20 (-20)\n"
+               "Ф. зах: 511(-226) М. опір: 511 (-849) Спр: 46 (+46)\nВард: 26% (-17)\n"
+               "Mar: 22 Ф.зах: 551 М.опір: 551 Спр: 46\nПошкодження варду: +10% «Початковий вард: +3 turns\n"
+               "Цей предмет отримає харакретистики, за умови\nвикористання на доречному рівні мук.\n")
+    n = ta._extract_stats(ta._strip_anguish_alternate_block(uk_real))
+    assert n["defense"] == 511 and n["magic"] == 20, n
+    lvl, red = ta._anguish_level(uk_real, n, 195)
+    assert lvl == 8 and red["defense"] == 551 and red["magic"] == 22 and "ward" not in red, (lvl, red)
+    assert ta._extract_level(uk_real) == 4 and ta._screen_quality(uk_real) == 195
+    assert ta._ANGUISH_ALT_MARKER.search(uk_real)
+    # real UK OCR, no adornments (Змієпір'єва Баліста DF 192% Муки 3): the red
+    # "Атк:1 501" has a space thousands separator; "(192%) (1)" is "(192%) (L)"
+    bal = ("Змієпір'єва Banicta ЇДемонгартований)\n(192%) (1)\nРівень 12\nМуки 3\n"
+           "Мана: 540 (+319) Атк: 1434 (529) Маг: 734 (-171)\nСпр: 200 (+67) Вард: 28% (+28) Крит: 0% (-3)\n"
+           "Мана: 565 Атк:1 501 Маг: 768 Cnp: 200\n")
+    n = ta._extract_stats(ta._strip_anguish_alternate_block(bal))
+    assert ta._anguish_level(bal, n, 192) == (3, {"attack": 1501.0, "magic": 768.0, "mana": 565.0,
+                                                  "dexterity": 200.0})
+    assert ta._screen_quality(bal) == 192 and ta._extract_level(bal) == 12
+    assert ta._extract_stats("Атк: 0 (-40) Маг: 20 (-20)") == {"attack": 0.0, "magic": 20.0}
+    # a name OCR'd half into Latin look-alikes: search the Cyrillic part, and only
+    # accept a hit that carries every stat the screenshot shows
+    assert ta._drop_latin_words("Змієпір'єва Banicta ЇДемонгартований)") == "Змієпір'єва"
+    assert ta._drop_latin_words("Balor Sword") is None and ta._drop_latin_words("Меч Балора") is None
+    bow = ta.CodexEntry(name="b", stats={"attack": 295.0, "magic": 150.0, "mana": 110.0})
+    assert ta._stats_fit({"attack": 1434.0, "magic": 734.0, "crit": 0.0}, bow)
+    assert not ta._stats_fit({"attack": 1434.0, "defense": 50.0}, bow)
+    # a normal item: no second block, no line -> nothing
+    plain = "Balor Sword\nAtt: 120 Def: 30\n"
+    assert ta._anguish_level(plain, ta._extract_stats(plain), 100) == (None, {})
+    # one repeated stat and no anguish line: not enough to call it anguished
+    one = "Att: 120\nAtt: 150\n"
+    assert ta._anguish_level(one, {"attack": 120.0}, 100) == (None, {})
+
+
 def _check_observation_is_honest() -> None:
     """The name list handed to the MODEL must never be silently shorter than
     the count it states - that is how a 13-item set got answered from 5."""
@@ -607,6 +664,7 @@ TIER0 = [
     ("ban-guard", _check_ban_guard),
     ("channel-error-guard", _check_channel_error_guard),
     ("ocr-name-candidates", _check_ocr_name_candidates),
+    ("anguish-level", _check_anguish_level),
 ]
 
 

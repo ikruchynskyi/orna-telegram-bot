@@ -55,6 +55,7 @@ from telegram.ext import (
 
 from orna.orna_assess import (
     AssessInput,
+    ANGUISHED_SKIP_KEYS,
     AssessResult,
     CodexEntry,
     get_assess_result,
@@ -107,32 +108,32 @@ _PENDING_KEY = "pending_assessment"
 # stats.
 _STAT_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
     # attack
-    ("attack",     re.compile(r"\b(?:attack|atk|att|атака|атк)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("attack",     re.compile(r"\b(?:attack|atk|att|атака|атк)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # magic — "Mar" is a common OCR misread of "Маг"
-    ("magic",      re.compile(r"\b(?:magic|mag|магія|маг|mar)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("magic",      re.compile(r"\b(?:magic|mag|магія|маг|mar)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # defense — also matches "Ф. Зах" / "Ф.Зах" / "Ф Зах" (Physical Defense in-game)
-    ("defense",    re.compile(r"(?:\b(?:ф|f)\b\.?\s*)?\b(?:defense|defence|def|захист|зах)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("defense",    re.compile(r"(?:\b(?:ф|f)\b\.?\s*)?\b(?:defense|defence|def|захист|зах)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # resistance — also matches "М. Опір" / "M Opir" (Magical Resistance in-game)
-    ("resistance", re.compile(r"(?:\b(?:м|m)\b\.?\s*)?\b(?:resistance|res|опір|оп)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("resistance", re.compile(r"(?:\b(?:м|m)\b\.?\s*)?\b(?:resistance|res|опір|оп)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # hp
-    ("hp",         re.compile(r"\b(?:hp|health|оз|хр)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("hp",         re.compile(r"\b(?:hp|health|оз|хр)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # mana — "Мапа" is a common OCR misread of "Mana" with eng+ukr (M→М, a→а, n→п)
-    ("mana",       re.compile(r"\b(?:mana|mp|мана|мр|мапа)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("mana",       re.compile(r"\b(?:mana|mp|мана|мр|мапа)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # crit
-    ("crit",       re.compile(r"\b(?:crit|critical|крит)\b\.?\s*:?\s*([+\-]?[\d,]+)\s*%?", re.I)),
+    ("crit",       re.compile(r"\b(?:crit|critical|крит)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)\s*%?", re.I)),
     # dexterity — "Cnp" / "Cпp" are common OCR misreads of "Спр"
-    ("dexterity",  re.compile(r"\b(?:dexterity|dex|спритність|спр|cnp|cпp)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("dexterity",  re.compile(r"\b(?:dexterity|dex|спритність|спр|cnp|cпp)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
     # ward
-    ("ward",       re.compile(r"\b(?:ward|вард)\b\.?\s*:?\s*([+\-]?[\d,]+)\s*%?", re.I)),
+    ("ward",       re.compile(r"\b(?:ward|вард)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)\s*%?", re.I)),
     # foresight
-    ("foresight",  re.compile(r"\b(?:foresight|fore|ініціатива|ініц)\b\.?\s*:?\s*([+\-]?[\d,]+)", re.I)),
+    ("foresight",  re.compile(r"\b(?:foresight|fore|ініціатива|ініц)\b\.?\s*:?\s*([+\-]?\d{1,3}(?:[ , ]\d{3})+(?!\d)|[+\-]?\d+)", re.I)),
 ]
 
 # Recognises "Lv 5", "Lvl. 5", "Level 5", and Ukrainian "Рівень 5" / "Рів 5".
 # Deliberately does NOT match a bare "+5" — that would clash with parenthetical
 # stat-deltas like "Mana: 12 (+4)".
 _LEVEL_PATTERN = re.compile(
-    r"\b(?:lv|lvl|level|рівень|рів)\.?\s*[:#]?\s*(\d{1,2})\b", re.I
+    r"\b(?:lv|lvl|level|рівень|рів|pibehb)\.?\s*[:#]?\s*(\d{1,2})\b", re.I
 )
 
 # Words that indicate a line is a stat / metadata, not the item name.
@@ -175,7 +176,8 @@ _ANGUISH_ALT_MARKER = re.compile(
     # "знижен" (downgraded). Extend if the real localised phrasing differs.
     r"|альтернативн"
     r"|анг\.?\s*рівень|рівень\s+анг"
-    r"|знижен",
+    r"|знижен"
+    r"|рівн\w*\s+мук",          # real UK: "...на доречному рівні мук. ..."
     re.IGNORECASE,
 )
 
@@ -263,6 +265,11 @@ def _strip_anguish_alternate_block(text: str) -> str:
     return "".join(lines[:cut]) + rest
 
 
+def _num(raw: str) -> float:
+    """"1,501" / "1 501" (Ukrainian thousands) -> 1501."""
+    return float(re.sub(r"[ ,\u00a0]", "", raw))
+
+
 def _extract_stats(text: str) -> Dict[str, float]:
     """Pull every recognised stat → numeric value from the OCR text."""
     out: Dict[str, float] = {}
@@ -270,7 +277,7 @@ def _extract_stats(text: str) -> Dict[str, float]:
         m = pat.search(text)
         if m:
             try:
-                out[key] = float(m.group(1).replace(",", ""))
+                out[key] = _num(m.group(1))
             except ValueError:
                 pass
     return out
@@ -417,6 +424,24 @@ def _extract_name_candidates(text: str, limit: int = 4) -> List[str]:
         if len(name) >= 3 and name not in out:
             out.append(name)
     return out[:limit]
+
+
+def _drop_latin_words(name: str) -> Optional[str]:
+    """OCR turns some Ukrainian letters into look-alike Latin ones ("Баліста"
+    -> "Banicta"); no spelling of that finds the item. Keep the Cyrillic words
+    before the first all-Latin word, or None when there is nothing to drop."""
+    words = name.split()
+    first = next((i for i, w in enumerate(words) if re.fullmatch(r"[A-Za-z]{2,}", w)), None)
+    if first is None or not any(re.search(r"[\u0400-\u04FF]", w) for w in words):
+        return None
+    head = " ".join(words[:first]).strip()
+    return head if len(head) >= 4 else None
+
+
+def _stats_fit(observed: Dict[str, float], entry: CodexEntry) -> bool:
+    """Every non-zero stat on the screenshot is on the codex item too - the
+    check for a hit found from a partial name, which may be a sibling item."""
+    return all(entry.stats.get(k) for k, v in observed.items() if v and k in _QUALITY_PRIORITY_STATS)
 
 
 def _name_matches(query: str, found: str) -> bool:
@@ -727,7 +752,13 @@ def _format_response(
         lines.append("Type: " + ", ".join(flags))
     lines.append(f"Level detected: {detected_level} · Upgrades to lv {result.levels}")
     lines.append("")
+    lines.append(_projection_table(result, detected_stats))
+    lines.append(f'<a href="{html.escape(source_url)}">codex page</a>')
+    return "\n".join(lines)
 
+
+def _projection_table(result: AssessResult, detected_stats: Dict[str, float]) -> str:
+    """The <pre> table: observed value, then the projection at the top upgrade levels."""
     # Show only the upgrade ceiling - that's what players are aiming for.
     # For 13-level items: L10 (last regular) + the three forged tiers.
     # For celestials (20 levels): the top 4.
@@ -792,9 +823,61 @@ def _format_response(
         rows.append(cells)
 
     table = "\n".join("  ".join(r) for r in rows)
-    lines.append(f"<pre>{html.escape(table)}</pre>")
-    lines.append(f'<a href="{html.escape(source_url)}">codex page</a>')
-    return "\n".join(lines)
+    return f"<pre>{html.escape(table)}</pre>"
+
+
+# Anguished items show a second, RED stat block: the stats at the item's own
+# Anguish Level. Anguish adds +3% per level to the QUALITY (orna_assess
+# ANGUISHED_SKIP_KEYS: not ward/foresight) - checked 2026-11-07 on two real
+# screenshots: Ornate Last Martyr's Sword 176% A20 (Att 546 -> 732 = 310 x 2.36)
+# and Last Martyr's Legwraps 170% A20 (Def 476 -> 644 = 280 x 2.30).
+# The game's Ukrainian wording is not known, so the level is read from the
+# NUMBERS too: red / white = (q + 3N) / q, whatever the language and upgrade level.
+_ANGUISHED_LINE_RE = re.compile(r"^\s*(?:anguished|муки|анг(?:уст|у|\.)?|анґуст)\w*\s*(\d{1,2})\s*$", re.I | re.M)
+# The quality the game prints under the name: "97.5/195%", "(192%) (L)" (UK screenshots).
+_SCREEN_QUALITY_RE = re.compile(
+    r"^\s*\(?\s*(?:\d{1,3}(?:[.,]\d+)?\s*/\s*)?(\d{2,3})\s*%\s*\)?(?:\s*\(\w{1,2}\))?\s*$", re.M)
+
+
+def _screen_quality(ocr_text: str) -> Optional[int]:
+    m = _SCREEN_QUALITY_RE.search(ocr_text)
+    return int(m.group(1)) if m and 50 <= int(m.group(1)) <= 250 else None
+
+
+def _second_stats(text: str) -> Dict[str, float]:
+    """The SECOND value of each stat label: the red block comes after the normal one."""
+    out: Dict[str, float] = {}
+    for key, pat in _STAT_PATTERNS:
+        found = list(pat.finditer(text))
+        if len(found) >= 2:
+            try:
+                out[key] = _num(found[1].group(1))
+            except ValueError:
+                pass
+    return out
+
+
+def _anguish_level(ocr_text: str, normal: Dict[str, float], quality: int) -> Tuple[Optional[int], Dict[str, float]]:
+    """(Anguish Level, red-block stats) or (None, {}). The printed level
+    ("Anguished 20" / "Муки 8") wins. Without it, each stat the red block
+    repeats gives N = (red / white - 1) * q / 3, and they must agree."""
+    m = _ANGUISHED_LINE_RE.search(ocr_text)
+    text_level = int(m.group(1)) if m and 1 <= int(m.group(1)) <= 99 else None
+    red = _second_stats(ocr_text)
+    if text_level:
+        # The printed level wins: adornments add flat stats that anguish does
+        # not scale, so the ratio under-reads (UK Dullahan boots: ~5 for 8).
+        return text_level, {k: v for k, v in red.items() if k not in ANGUISHED_SKIP_KEYS}
+    estimates = [(red[k] / normal[k] - 1) * quality / 3 for k in red
+                 if k not in ANGUISHED_SKIP_KEYS and normal.get(k, 0) > 0 and red[k] > normal[k]]
+    if estimates:
+        level = round(sorted(estimates)[len(estimates) // 2])
+        agree = 1 <= level <= 99 and all(abs(e - level) <= 1.5 for e in estimates)
+        # Two stats agreeing on one integer is the signal on its own; one stat
+        # needs the "Anguished N" line (or the explanation sentence) to back it.
+        if agree and (len(estimates) >= 2 or _ANGUISH_ALT_MARKER.search(ocr_text)):
+            return level, {k: v for k, v in red.items() if k not in ANGUISHED_SKIP_KEYS}
+    return None, {}
 
 
 # =============================================================================
@@ -807,6 +890,7 @@ async def _run_assessment_and_reply(
     source_url: str,
     observed_stats: Dict[str, float],
     item_level: int,
+    ocr_text: str = "",
 ) -> None:
     """Compute quality (simple ratio strategy), project stats, send the reply.
 
@@ -818,6 +902,11 @@ async def _run_assessment_and_reply(
     quality, picked_key, picked_obs, picked_base = _calculate_quality_simple(
         observed_stats, entry.stats,
     )
+    # The quality printed on screen beats stat / base: that ratio ignores the
+    # upgrade level and adornments (UK Dullahan boots lv4: 20 / 6 -> "333%", screen 195%).
+    shown_quality = _screen_quality(ocr_text)
+    if shown_quality is not None:
+        quality, picked_key = shown_quality, None
     if quality is None:
         obs_summary = ", ".join(
             f"{k}={int(v)}" for k, v in observed_stats.items()
@@ -857,8 +946,27 @@ async def _run_assessment_and_reply(
 
     reply = _format_response(
         entry, result, source_url, observed_stats, item_level,
-        quality_signal=(picked_key, picked_obs, picked_base),
+        quality_signal=(picked_key, picked_obs, picked_base) if picked_key else None,
     )
+    if picked_key is None:
+        reply = reply.replace("Quality: <b>", "Quality (from screen): <b>", 1)
+    # Adornments add flat stats that the codex projection does not include.
+    above = [k for k, v in observed_stats.items() if k in result.stats and k != "adornment_slots"
+             and 0 < item_level <= len(result.stats[k].values)
+             and v > result.stats[k].values[item_level - 1] * 1.02 + 1]
+    if above:
+        reply += ("\n<i>Obs is above the projection for " + ", ".join(above)
+                  + ": adornments add flat stats, and the projected columns do not include them.</i>")
+    ang_level, red_stats = _anguish_level(ocr_text, observed_stats, quality)
+    if ang_level:
+        inp.ang_level = ang_level
+        ang = get_assess_result(inp, is_quality_calc=True)
+        if ang is not None and ang.levels:
+            logger.info("anguish: level %s, red block %s", ang_level, red_stats)
+            reply += (f"\n\n🩸 <b>Anguished {ang_level}</b>: +{3 * ang_level}% to quality "
+                      f"→ {quality + 3 * ang_level}% (ward, foresight unchanged)\n"
+                      + _projection_table(ang, red_stats)
+                      + ("" if red_stats else "\n<i>red stats not read from the screenshot - Obs is empty</i>"))
     await msg.reply_text(reply, parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -877,7 +985,7 @@ def _stash_pending(
         "level": level,
         "lang": lang,
         "ocr_name": ocr_name,
-        "ocr_text": ocr_text[:600],
+        "ocr_text": ocr_text[:4000],   # the red anguish block sits low on the screen
     }
 
 
@@ -1050,6 +1158,15 @@ async def assess_item_screenshot(
                     entry, source_url, item_name = hit, url, candidate
                     break
                 logger.info("CODEX REJECT: %r -> %r", candidate, hit.name if hit else None)
+            for candidate in ([] if entry is not None else name_candidates):
+                short = _drop_latin_words(candidate)
+                if not short:
+                    continue
+                hit, url = await asyncio.to_thread(lookup_by_name, short, lang)
+                if hit is not None and _name_matches(short, hit.name) and _stats_fit(observed_stats, hit):
+                    logger.info("CODEX HIT from partial name %r -> %r", short, hit.name)
+                    entry, source_url, item_name = hit, url, hit.name
+                    break
         except Exception as e:
             logger.exception("codex lookup failed")
             await msg.reply_text(
@@ -1105,7 +1222,7 @@ async def assess_item_screenshot(
 
     # ---- 6. Got a codex hit — run the assessment and end --------------------
     await _run_assessment_and_reply(
-        msg, entry, source_url, observed_stats, item_level
+        msg, entry, source_url, observed_stats, item_level, ocr_text
     )
     return ConversationHandler.END
 
@@ -1193,7 +1310,7 @@ async def receive_item_name(
     # Got it — clear the saved state and finish the assessment.
     context.user_data.pop(_PENDING_KEY, None)
     await _run_assessment_and_reply(
-        msg, entry, source_url, pending["stats"], pending["level"]
+        msg, entry, source_url, pending["stats"], pending["level"], pending.get("ocr_text", "")
     )
     return ConversationHandler.END
 

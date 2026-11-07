@@ -21,6 +21,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import dataclasses
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
@@ -729,6 +730,11 @@ def lookup_by_name(
         if url is None:
             continue
         entry = fetch_codex_entry(url, lang=lang)
+        if lang and lang != "en":
+            # Stats and flags come from the English page of the same URL: the
+            # Ukrainian parse dropped Resistance, the Place (so: not upgradable,
+            # no boss scaling) - Haunted Dullahan Bladed Boots, 2026-11-07.
+            entry = dataclasses.replace(fetch_codex_entry(url, lang="en"), name=entry.name)
         return entry, url
     return None, None
 
