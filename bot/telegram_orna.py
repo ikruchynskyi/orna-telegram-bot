@@ -1639,7 +1639,7 @@ async def _run_research_tool(message, action_input: str, args: Optional[dict] = 
 
 _QUALITY_NAME_TO_PERCENT = {
     "broken": 50, "poor": 90, "regular": 100, "normal": 100,
-    "superior": 101, "famed": 120, "legendary": 140, "ornate": 171,
+    "superior": 101, "famed": 120, "legendary": 140, "ornate": 170,
 }
 _FORGED_LEVELS = {"masterforged": 11, "demonforged": 12, "godforged": 13}
 

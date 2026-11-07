@@ -64,9 +64,10 @@ confirm from a primary source this pass.
   90-99%, Common/Regular 100%, Superior 110-119%, Famed 120-130%, Legendary
   140-170%, Ornate 170-200% (170% is a Legendary/Ornate crossover).
   **In this repo `orna_assess.get_quality_code` uses contiguous bands
-  (Superior 101-119, Famed 120-139, Legendary 140-170, Ornate >170)** that
-  fill the gaps guides leave — treat the repo as authoritative for code; verify
-  a live assess page if an exact boundary % ever matters.
+  (Superior 101-119, Famed 120-139, Legendary 140-169, Ornate 170+)** that
+  fill the gaps guides leave — treat the repo as authoritative for code. The
+  170 crossover is settled: the game labels a 169.7-170.0% item "Ornate"
+  (Last Martyr's Legwraps screenshot, 2026-11-07).
 - **Upgrade path** (still true): Blacksmith levels 1-10 (time+materials+gold);
   **Masterforge = level 11** (instant; materials ≈ quality-fraction × 333, e.g.
   200%→666), **Demonforge = level 12** (× 666), **Godforge = level 13** (RNG

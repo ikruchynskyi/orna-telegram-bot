@@ -201,14 +201,12 @@ def get_additional_slots(quality: int, level: Optional[int] = None) -> int:
 def get_quality_code(quality: int, level: int) -> int:
     if level > 10:
         return level - 4
-    if quality > 170:
+    # Ornate starts AT 170: the game labels an item "Ornate" whose stats pin its
+    # quality to 169.7-170.0% (Last Martyr's Legwraps, Att 34 / base 20, Def
+    # 476 / 280; screenshot 2026-11-07). Guides only called 170 a crossover.
+    if quality >= 170:
         return 6
-    # 140-170 inclusive is Legendary; Ornate's floor is 171 (see
-    # _QUALITY_NAME_TO_PERCENT). in_range is [lo, hi), so the upper bound
-    # must be 171, not 170 - otherwise exactly 170 fell through every branch
-    # to the final `return 0` (Broken), mislabeling the item AND scaling its
-    # bonus stats at -90% instead of ~+20%.
-    if in_range(quality, 140, 171):
+    if in_range(quality, 140, 170):
         return 5
     if in_range(quality, 120, 140):
         return 4
@@ -347,16 +345,13 @@ def get_assess_result(inp: AssessInput, is_quality_calc: bool = False) -> Option
 
 def _demo() -> None:
     """`python3 -m orna.orna_assess` - pins get_quality_code's tier boundaries,
-    the densest math in this module and the site of a fixed off-by-one at
-    exactly 170. in_range is [lo, hi): 140-170 is Legendary (code 5) and
-    Ornate's floor is 171 (code 6), so the Legendary upper bound must be 171.
-    An edit that drops it back to an exclusive 170 re-opens the gap where 170
-    fell through to Broken(0); this check fails loudly if that happens."""
+    the densest math in this module. Exactly 170 once fell through every
+    branch to Broken (0); it is Ornate (6) - the game's own label at 170%."""
     assert get_quality_code(100, 1) == 2
     assert get_quality_code(139, 1) == 4
     assert get_quality_code(140, 1) == 5
     assert get_quality_code(169, 1) == 5
-    assert get_quality_code(170, 1) == 5   # regression guard: was 0 (Broken) before the fix
+    assert get_quality_code(170, 1) == 6   # in-game label; once fell through to Broken (0)
     assert get_quality_code(171, 1) == 6
     assert get_quality_code(200, 1) == 6
     # level > 10 ignores quality (masterforged/demonforged/godforged = 11/12/13)

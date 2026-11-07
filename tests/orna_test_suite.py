@@ -279,9 +279,10 @@ def _check_two_handed_comes_from_data() -> None:
 
 
 def _check_quality_boundaries() -> None:
-    """get_quality_code's boundaries, incl. the exactly-170 case that used to
-    return Broken because in_range was [lo, hi)."""
-    assert orna_assess.get_quality_code(170, 1) == orna_assess.get_quality_code(169, 1)
+    """get_quality_code's boundaries: exactly 170 is Ornate (the game's own
+    label at 170%) - it once fell through to Broken because in_range is [lo, hi)."""
+    assert orna_assess.get_quality_code(170, 1) == orna_assess.get_quality_code(171, 1) == 6
+    assert orna_assess.get_quality_code(169, 1) == 5
     for level, code in ((11, 7), (12, 8), (13, 9)):
         assert orna_assess.get_quality_code(100, level) == code, level
 
